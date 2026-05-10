@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { featureLabels } from '~/logic/defaults'
+import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, parseDomainList } from '~/logic/siteRules'
-import { lexiSettings, vocabularyRecords } from '~/logic/storage'
+import { aiCallLogs, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
+import { summarizeByDay } from '~/logic/analytics'
 import type { FeatureScene } from '~/logic/types'
 
 const scenes: FeatureScene[] = ['replacement', 'selection', 'daily']
@@ -11,6 +13,37 @@ const domainText = computed({
   get: () => formatDomainList(lexiSettings.value.siteRules.domains),
   set: value => lexiSettings.value.siteRules.domains = parseDomainList(value),
 })
+
+const visitTrend = computed(() => summarizeByDay(pageVisitLogs.value))
+const aiTrend = computed(() => summarizeByDay(aiCallLogs.value))
+const recentAiLogs = computed(() => aiCallLogs.value.slice(0, 8))
+const recentPageVisits = computed(() => pageVisitLogs.value.slice(0, 8))
+const testingScenes = ref<Partial<Record<FeatureScene, boolean>>>({})
+const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
+
+function formatTime(value: number) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(new Date(value))
+}
+
+async function testScene(scene: FeatureScene) {
+  testingScenes.value[scene] = true
+  sceneTestResults.value[scene] = ''
+
+  try {
+    const ok = await testAiScene(lexiSettings.value, scene)
+    sceneTestResults.value[scene] = ok ? '测试成功' : '响应为空'
+  }
+  catch (error) {
+    sceneTestResults.value[scene] = error instanceof Error ? error.message : '测试失败'
+  }
+  finally {
+    testingScenes.value[scene] = false
+  }
+}
 </script>
 
 <template>
@@ -97,6 +130,13 @@ const domainText = computed({
             <span class="text-14px font-500">划词自动翻译</span>
             <input v-model="lexiSettings.selection.autoTranslate" type="checkbox" class="h-5 w-5">
           </label>
+          <label class="mt-4 flex items-center justify-between">
+            <span>
+              <span class="block text-14px font-500">右下角状态浮标</span>
+              <span class="text-12px text-neutral-500">关闭后不显示“Lexi 已启用”。</span>
+            </span>
+            <input v-model="lexiSettings.ui.showFloatingStatus" type="checkbox" class="h-5 w-5">
+          </label>
           <label class="mt-4 block">
             <span class="text-13px font-500">每日推荐数量</span>
             <input v-model.number="lexiSettings.study.dailyGoal" type="number" min="1" max="30" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
@@ -126,6 +166,70 @@ const domainText = computed({
               <span class="text-12px font-500 text-neutral-600">API Key</span>
               <input v-model="lexiSettings.ai[scene].apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
             </label>
+            <div class="mt-4 flex items-center gap-3">
+              <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="testingScenes[scene]" @click="testScene(scene)">
+                {{ testingScenes[scene] ? '测试中' : '测试' }}
+              </button>
+              <span v-if="sceneTestResults[scene]" class="truncate text-12px" :class="sceneTestResults[scene] === '测试成功' ? 'text-emerald-600' : 'text-red-600'">
+                {{ sceneTestResults[scene] }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="mt-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
+        <div class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <h2 class="text-16px font-600">
+            最近 AI 调用
+          </h2>
+          <div class="mt-4 flex items-end gap-2 border-b border-neutral-100 pb-3">
+            <div v-for="item in aiTrend" :key="item.label" class="flex flex-1 flex-col items-center gap-2">
+              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: `${Math.max(4, item.value * 8)}px` }" />
+              <span class="text-10px text-neutral-500">{{ item.label }}</span>
+            </div>
+          </div>
+          <div class="mt-3 space-y-3">
+            <div v-for="log in recentAiLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
+              <div class="flex items-center justify-between gap-3">
+                <span class="text-13px font-600">{{ featureLabels[log.scene] }}</span>
+                <span class="text-12px" :class="log.ok ? 'text-emerald-600' : 'text-red-600'">{{ log.ok ? '成功' : '失败' }}</span>
+              </div>
+              <div class="mt-1 truncate text-12px text-neutral-500">
+                {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.durationMs }}ms
+              </div>
+              <div v-if="log.error" class="mt-1 truncate text-12px text-red-600">
+                {{ log.error }}
+              </div>
+            </div>
+            <p v-if="!recentAiLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+              暂无 AI 调用记录。
+            </p>
+          </div>
+        </div>
+
+        <div class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <h2 class="text-16px font-600">
+            最近访问网页
+          </h2>
+          <div class="mt-4 flex items-end gap-2 border-b border-neutral-100 pb-3">
+            <div v-for="item in visitTrend" :key="item.label" class="flex flex-1 flex-col items-center gap-2">
+              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: `${Math.max(4, item.value * 8)}px` }" />
+              <span class="text-10px text-neutral-500">{{ item.label }}</span>
+            </div>
+          </div>
+          <div class="mt-3 space-y-3">
+            <div v-for="visit in recentPageVisits" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
+              <div class="truncate text-13px font-600">
+                {{ visit.title || visit.host }}
+              </div>
+              <div class="mt-1 truncate text-12px text-neutral-500">
+                {{ formatTime(visit.createdAt) }} · {{ visit.host }} · 替换 {{ visit.replacements }}
+              </div>
+            </div>
+            <p v-if="!recentPageVisits.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+              暂无网页访问记录。
+            </p>
           </div>
         </div>
       </section>

@@ -24,6 +24,22 @@ if (USE_SIDE_PANEL) {
 browser.runtime.onInstalled.addListener((): void => {
   // eslint-disable-next-line no-console
   console.log('Extension installed')
+  browser.contextMenus.create({
+    id: 'lexi-translate-selection',
+    title: '使用 Lexi 翻译',
+    contexts: ['selection'],
+  })
+})
+
+browser.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== 'lexi-translate-selection' || !tab?.id || !info.selectionText)
+    return
+
+  sendMessage('lexi-context-translate', {
+    text: info.selectionText,
+    pageUrl: tab.url,
+    pageTitle: tab.title,
+  }, { context: 'content-script', tabId: tab.id }).catch((error: unknown) => console.error(error))
 })
 
 let previousTabId = 0

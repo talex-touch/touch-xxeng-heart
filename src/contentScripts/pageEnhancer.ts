@@ -1,5 +1,7 @@
 import browser from 'webextension-polyfill'
+import { onMessage } from 'webext-bridge/content-script'
 import { localTranslateSelection, requestReplacementCandidates, requestSelectionTranslation } from '~/logic/aiClient'
+import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { isPageEnabled } from '~/logic/siteRules'
 import { settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
@@ -16,6 +18,7 @@ export interface PageStats {
   replacements: number
   records: number
   enabled: boolean
+  showFloatingStatus: boolean
 }
 
 const ignoredSelectors = [
@@ -198,6 +201,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     replacements: 0,
     records: 0,
     enabled: false,
+    showFloatingStatus: true,
   }
 
   async function run() {
@@ -207,6 +211,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       replacements: 0,
       records: records.length,
       enabled,
+      showFloatingStatus: settings.ui.showFloatingStatus,
     }
 
     if (!enabled) {
@@ -272,24 +277,21 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     stats.records = nextRecords.length
     events.onStats(stats)
+    await recordPageVisit({
+      url: location.href,
+      title: document.title,
+      host: location.hostname,
+      enabled,
+      replacements: stats.replacements,
+      records: stats.records,
+    })
   }
 
-  async function handleSelection() {
-    if (disposed)
-      return
-
-    const selection = window.getSelection()
-    const selected = selection?.toString().trim()
-    if (!selection || !selected || selected.length < 2 || selected.length > 160)
-      return
-
+  async function translateAndRecord(selected: string, context: string, position: { x: number, y: number }) {
     const { settings, records } = await getStoredState()
-    if (!isPageEnabled(settings) || !settings.selection.enabled || !settings.selection.autoTranslate)
+    if (!isPageEnabled(settings) || !settings.selection.enabled)
       return
 
-    const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
-    const rect = range?.getBoundingClientRect()
-    const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
     const translation = await translateSelection(settings, selected, context)
 
     const nextRecords = upsertVocabularyRecord(records, {
@@ -301,9 +303,28 @@ export function startPageEnhancer(events: EnhancerEvents) {
     })
     await saveRecords(nextRecords)
     stats.records = nextRecords.length
+    stats.showFloatingStatus = settings.ui.showFloatingStatus
     events.onStats(stats)
+    events.onSelection(translation, position)
+  }
 
-    events.onSelection(translation, {
+  async function handleSelection() {
+    if (disposed)
+      return
+
+    const selection = window.getSelection()
+    const selected = selection?.toString().trim()
+    if (!selection || !selected || selected.length < 2 || selected.length > 160)
+      return
+
+    const { settings } = await getStoredState()
+    if (!isPageEnabled(settings) || !settings.selection.enabled || !settings.selection.autoTranslate)
+      return
+
+    const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
+    const rect = range?.getBoundingClientRect()
+    const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
+    await translateAndRecord(selected, context, {
       x: rect ? rect.left + rect.width / 2 : window.innerWidth / 2,
       y: rect ? rect.bottom + 12 : window.innerHeight / 2,
     })
@@ -312,6 +333,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const onMouseUp = () => {
     window.setTimeout(handleSelection, 120)
   }
+
+  const removeContextTranslateListener = onMessage('lexi-context-translate', async ({ data }) => {
+    const selected = data.text.trim()
+    if (!selected)
+      return
+
+    await translateAndRecord(selected, selected, data.position ?? {
+      x: window.innerWidth / 2,
+      y: Math.min(window.innerHeight - 180, window.innerHeight / 2),
+    })
+  })
 
   browser.storage.local.get(settingsStorageKey).then((stored) => {
     if (!stored[settingsStorageKey])
@@ -323,6 +355,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   return () => {
     disposed = true
+    removeContextTranslateListener()
     document.removeEventListener('mouseup', onMouseUp)
   }
 }

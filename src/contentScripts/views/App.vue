@@ -9,6 +9,7 @@ const stats = ref<PageStats>({
   replacements: 0,
   records: 0,
   enabled: false,
+  showFloatingStatus: true,
 })
 const translation = ref<SelectionTranslation>()
 const translationPosition = ref({ x: 0, y: 0 })
@@ -60,6 +61,7 @@ onUnmounted(() => {
 <template>
   <div class="lexi-root fixed right-5 bottom-5 z-2147483647 font-sans select-none">
     <div
+      v-if="stats.showFloatingStatus"
       class="rounded-2 border border-neutral-200 bg-white/95 px-3 py-2 text-12px text-neutral-700 shadow-lg backdrop-blur"
       :class="stats.enabled ? 'opacity-100' : 'opacity-70'"
     >

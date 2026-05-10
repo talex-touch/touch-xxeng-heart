@@ -34,6 +34,9 @@ export const defaultSettings: LexiSettings = {
     dailyGoal: 8,
     programmerMode: true,
   },
+  ui: {
+    showFloatingStatus: true,
+  },
   ai: {
     replacement: { ...disabledAi },
     selection: { ...disabledAi },
@@ -61,6 +64,10 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
     study: {
       ...defaultSettings.study,
       ...value?.study,
+    },
+    ui: {
+      ...defaultSettings.ui,
+      ...value?.ui,
     },
     ai: {
       replacement: {

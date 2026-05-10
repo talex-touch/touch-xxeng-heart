@@ -7,6 +7,30 @@ export interface AiSceneConfig {
   model: string
 }
 
+export interface AiCallLog {
+  id: string
+  scene: FeatureScene
+  endpoint: string
+  model: string
+  ok: boolean
+  status?: number
+  error?: string
+  durationMs: number
+  pageUrl?: string
+  createdAt: number
+}
+
+export interface PageVisitLog {
+  id: string
+  url: string
+  title: string
+  host: string
+  enabled: boolean
+  replacements: number
+  records: number
+  createdAt: number
+}
+
 export interface SiteRules {
   enabled: boolean
   mode: 'all' | 'allowlist' | 'blocklist'
@@ -31,11 +55,16 @@ export interface StudySettings {
   programmerMode: boolean
 }
 
+export interface UiSettings {
+  showFloatingStatus: boolean
+}
+
 export interface LexiSettings {
   siteRules: SiteRules
   replacement: ReplacementSettings
   selection: SelectionSettings
   study: StudySettings
+  ui: UiSettings
   ai: Record<FeatureScene, AiSceneConfig>
 }
 

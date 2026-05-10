@@ -1,4 +1,5 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
+import { recordAiCall } from './analytics'
 import type { FeatureScene, LexiSettings, SelectionTranslation, VocabularyCandidate } from './types'
 
 interface AiReplacementResponse {
@@ -11,12 +12,42 @@ interface AiTranslationResponse {
   candidate?: VocabularyCandidate
 }
 
+interface OpenAiChatResponse {
+  choices?: Array<{
+    message?: {
+      content?: string
+    }
+  }>
+}
+
 function getAiConfig(settings: LexiSettings, scene: FeatureScene) {
   const config = settings.ai[scene]
   if (!config.enabled || !config.endpoint.trim())
     return undefined
 
   return config
+}
+
+function resolveEndpoint(endpoint: string) {
+  const trimmed = endpoint.trim().replace(/\/$/, '')
+  return trimmed.endsWith('/chat/completions') ? trimmed : `${trimmed}/v1/chat/completions`
+}
+
+function extractJsonObject<T>(value: unknown): T {
+  if (typeof value !== 'object' || value == null)
+    throw new Error('AI response is not an object')
+
+  const direct = value as T
+  const content = (value as OpenAiChatResponse).choices?.[0]?.message?.content
+  if (!content)
+    return direct
+
+  const fenceStart = content.indexOf('```')
+  const fenceEnd = fenceStart >= 0 ? content.indexOf('```', fenceStart + 3) : -1
+  const fenced = fenceStart >= 0 && fenceEnd > fenceStart
+    ? content.slice(fenceStart + 3, fenceEnd).replace(/^json\s*/i, '')
+    : content
+  return JSON.parse(fenced.trim()) as T
 }
 
 async function postAiJson<T>(
@@ -35,20 +66,70 @@ async function postAiJson<T>(
   if (config.apiKey)
     headers.authorization = `Bearer ${config.apiKey}`
 
-  const response = await fetch(config.endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: config.model,
+  const startedAt = performance.now()
+  const endpoint = resolveEndpoint(config.endpoint)
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: config.model,
+        messages: [
+          {
+            role: 'system',
+            content: 'You are Lexi. Return only valid compact JSON matching the user requested schema. Do not wrap in markdown unless unavoidable.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({ scene, ...payload }),
+          },
+        ],
+        temperature: 0.2,
+      }),
+    })
+
+    const durationMs = Math.round(performance.now() - startedAt)
+    const json = await response.json()
+
+    if (!response.ok) {
+      await recordAiCall({
+        scene,
+        endpoint,
+        model: config.model,
+        ok: false,
+        status: response.status,
+        error: JSON.stringify(json).slice(0, 240),
+        durationMs,
+      })
+      throw new Error(`AI request failed: ${response.status}`)
+    }
+
+    await recordAiCall({
       scene,
-      ...payload,
-    }),
-  })
+      endpoint,
+      model: config.model,
+      ok: true,
+      status: response.status,
+      durationMs,
+    })
 
-  if (!response.ok)
-    throw new Error(`AI request failed: ${response.status}`)
+    return extractJsonObject<T>(json)
+  }
+  catch (error) {
+    if (error instanceof Error && !error.message.startsWith('AI request failed')) {
+      await recordAiCall({
+        scene,
+        endpoint,
+        model: config.model,
+        ok: false,
+        error: error.message,
+        durationMs: Math.round(performance.now() - startedAt),
+      })
+    }
 
-  return await response.json() as T
+    throw error
+  }
 }
 
 export async function requestReplacementCandidates(
@@ -86,6 +167,24 @@ export async function requestSelectionTranslation(
     source: 'ai',
     candidate: data.candidate,
   }
+}
+
+export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
+  if (scene === 'selection') {
+    const result = await requestSelectionTranslation(
+      settings,
+      '上下文配置',
+      '这个页面需要根据上下文配置模型并缓存结果。',
+    )
+    return Boolean(result?.translation)
+  }
+
+  const result = await requestReplacementCandidates(
+    settings,
+    '这个页面需要根据上下文配置模型，并在缓存命中后降低依赖。',
+    'Lexi AI scene test',
+  )
+  return result.length > 0
 }
 
 export function localTranslateSelection(text: string): SelectionTranslation {

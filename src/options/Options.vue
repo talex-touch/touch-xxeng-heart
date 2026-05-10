@@ -16,6 +16,8 @@ const domainText = computed({
 
 const visitTrend = computed(() => summarizeByDay(pageVisitLogs.value))
 const aiTrend = computed(() => summarizeByDay(aiCallLogs.value))
+const maxVisitTrend = computed(() => Math.max(1, ...visitTrend.value.map(item => item.value)))
+const maxAiTrend = computed(() => Math.max(1, ...aiTrend.value.map(item => item.value)))
 const recentAiLogs = computed(() => aiCallLogs.value.slice(0, 8))
 const recentPageVisits = computed(() => pageVisitLogs.value.slice(0, 8))
 const testingScenes = ref<Partial<Record<FeatureScene, boolean>>>({})
@@ -43,6 +45,10 @@ async function testScene(scene: FeatureScene) {
   finally {
     testingScenes.value[scene] = false
   }
+}
+
+function barHeight(value: number, max: number) {
+  return `${Math.max(4, Math.round((value / max) * 96))}px`
 }
 </script>
 
@@ -185,11 +191,11 @@ async function testScene(scene: FeatureScene) {
           </h2>
           <div class="mt-4 flex items-end gap-2 border-b border-neutral-100 pb-3">
             <div v-for="item in aiTrend" :key="item.label" class="flex flex-1 flex-col items-center gap-2">
-              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: `${Math.max(4, item.value * 8)}px` }" />
+              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxAiTrend) }" />
               <span class="text-10px text-neutral-500">{{ item.label }}</span>
             </div>
           </div>
-          <div class="mt-3 space-y-3">
+          <div class="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
             <div v-for="log in recentAiLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-13px font-600">{{ featureLabels[log.scene] }}</span>
@@ -198,7 +204,7 @@ async function testScene(scene: FeatureScene) {
               <div class="mt-1 truncate text-12px text-neutral-500">
                 {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.authSent ? `Key ${log.keyHint || '已发送'}` : '未发送 Key' }} · {{ log.durationMs }}ms
               </div>
-              <div v-if="log.error" class="mt-1 truncate text-12px text-red-600">
+              <div v-if="log.error" class="mt-1 break-words text-12px leading-5 text-red-600">
                 {{ log.error }}
               </div>
             </div>
@@ -214,11 +220,11 @@ async function testScene(scene: FeatureScene) {
           </h2>
           <div class="mt-4 flex items-end gap-2 border-b border-neutral-100 pb-3">
             <div v-for="item in visitTrend" :key="item.label" class="flex flex-1 flex-col items-center gap-2">
-              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: `${Math.max(4, item.value * 8)}px` }" />
+              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxVisitTrend) }" />
               <span class="text-10px text-neutral-500">{{ item.label }}</span>
             </div>
           </div>
-          <div class="mt-3 space-y-3">
+          <div class="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
             <div v-for="visit in recentPageVisits" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
               <div class="truncate text-13px font-600">
                 {{ visit.title || visit.host }}

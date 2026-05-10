@@ -23,4 +23,16 @@ describe('site rules', () => {
   it('normalizes textarea domain input', () => {
     expect(parseDomainList('https://a.com/path\nb.com, c.com ')).toEqual(['a.com', 'b.com', 'c.com'])
   })
+
+  it('keeps merged settings valid from plain objects', () => {
+    const settings = mergeSettings({
+      replacement: {
+        ...defaultSettings.replacement,
+        difficulty: 4,
+      },
+    })
+
+    expect(settings.replacement.difficulty).toBe(4)
+    expect(settings.ai.selection.enabled).toBe(false)
+  })
 })

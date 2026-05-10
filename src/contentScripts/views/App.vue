@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import 'uno.css'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { startPageEnhancer } from '../pageEnhancer'
 import type { PageStats } from '../pageEnhancer'
 import type { SelectionTranslation } from '~/logic/types'
@@ -12,8 +12,21 @@ const stats = ref<PageStats>({
 })
 const translation = ref<SelectionTranslation>()
 const translationPosition = ref({ x: 0, y: 0 })
+const viewport = ref({ width: 1024, height: 768 })
 let stopEnhancer: (() => void) | undefined
 let hideTimer: number | undefined
+
+const translationStyle = computed(() => ({
+  left: `${Math.min(Math.max(12, translationPosition.value.x - 160), viewport.value.width - 332)}px`,
+  top: `${Math.min(Math.max(12, translationPosition.value.y), viewport.value.height - 180)}px`,
+}))
+
+function updateViewport() {
+  viewport.value = {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }
+}
 
 function showTranslation(value: SelectionTranslation, position: { x: number, y: number }) {
   translation.value = value
@@ -28,6 +41,8 @@ function showTranslation(value: SelectionTranslation, position: { x: number, y: 
 }
 
 onMounted(() => {
+  updateViewport()
+  window.addEventListener('resize', updateViewport)
   stopEnhancer = startPageEnhancer({
     onSelection: showTranslation,
     onStats: value => stats.value = value,
@@ -36,6 +51,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopEnhancer?.()
+  window.removeEventListener('resize', updateViewport)
   if (hideTimer)
     window.clearTimeout(hideTimer)
 })
@@ -59,10 +75,7 @@ onUnmounted(() => {
     <div
       v-if="translation"
       class="fixed max-w-80 rounded-2 border border-neutral-200 bg-white px-4 py-3 text-left text-13px text-neutral-800 shadow-xl"
-      :style="{
-        left: `${Math.min(Math.max(12, translationPosition.x - 160), window.innerWidth - 332)}px`,
-        top: `${Math.min(Math.max(12, translationPosition.y), window.innerHeight - 180)}px`,
-      }"
+      :style="translationStyle"
     >
       <div class="text-12px text-neutral-500">
         划词翻译 · {{ translation.source === 'ai' ? 'AI' : '本地' }}

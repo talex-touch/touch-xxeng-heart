@@ -46,7 +46,12 @@ const storageInterface: StorageLikeAsync = {
   async getItem(key: string) {
     const storedData = await storage.local.get(key)
 
-    return storedData[key] as string
+    const value = storedData[key]
+    return typeof value === 'string'
+      ? value
+      : value == null
+        ? null
+        : JSON.stringify(value)
   },
 }
 
@@ -81,12 +86,18 @@ export function useWebExtensionStorage<T>(
   const data = (shallow ? shallowRef : ref)(initialValue) as Ref<T>
   const serializer = options.serializer ?? StorageSerializers[type]
 
-  async function read(event?: { key: string, newValue: string | null }) {
+  async function read(event?: { key: string, newValue: unknown }) {
     if (event && event.key !== key)
       return
 
     try {
-      const rawValue = event ? event.newValue : await storageInterface.getItem(key)
+      const rawValue = event
+        ? typeof event.newValue === 'string'
+          ? event.newValue
+          : event.newValue == null
+            ? event.newValue
+            : JSON.stringify(event.newValue)
+        : await storageInterface.getItem(key)
       if (rawValue == null) {
         data.value = rawInit
         if (writeDefaults && rawInit !== null)
@@ -143,7 +154,7 @@ export function useWebExtensionStorage<T>(
         for (const [key, change] of Object.entries(changes)) {
           await read({
             key,
-            newValue: change.newValue as string | null,
+            newValue: change.newValue,
           })
         }
       }

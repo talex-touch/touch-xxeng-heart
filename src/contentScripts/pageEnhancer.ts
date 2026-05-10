@@ -147,18 +147,31 @@ function replaceTextNode(node: Text, candidates: VocabularyCandidate[]) {
   return count
 }
 
+function readJsonValue<T>(value: unknown, fallback: T): T {
+  if (value == null)
+    return fallback
+
+  if (typeof value !== 'string')
+    return value as T
+
+  try {
+    return JSON.parse(value) as T
+  }
+  catch {
+    return fallback
+  }
+}
+
 async function getStoredState() {
   const stored = await browser.storage.local.get([settingsStorageKey, vocabularyStorageKey])
-  const settings = mergeSettings(stored[settingsStorageKey] as Partial<LexiSettings> | undefined)
-  const records = Array.isArray(stored[vocabularyStorageKey])
-    ? stored[vocabularyStorageKey] as VocabularyRecord[]
-    : []
+  const settings = mergeSettings(readJsonValue<Partial<LexiSettings> | undefined>(stored[settingsStorageKey], undefined))
+  const records = readJsonValue<VocabularyRecord[]>(stored[vocabularyStorageKey], [])
 
   return { settings, records }
 }
 
 async function saveRecords(records: VocabularyRecord[]) {
-  await browser.storage.local.set({ [vocabularyStorageKey]: records })
+  await browser.storage.local.set({ [vocabularyStorageKey]: JSON.stringify(records) })
 }
 
 function getContextText(node: Text) {
@@ -302,7 +315,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   browser.storage.local.get(settingsStorageKey).then((stored) => {
     if (!stored[settingsStorageKey])
-      browser.storage.local.set({ [settingsStorageKey]: defaultSettings })
+      browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
   })
 
   run()

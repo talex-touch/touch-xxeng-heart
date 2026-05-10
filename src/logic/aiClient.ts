@@ -30,7 +30,22 @@ function getAiConfig(settings: LexiSettings, scene: FeatureScene) {
 
 function resolveEndpoint(endpoint: string) {
   const trimmed = endpoint.trim().replace(/\/$/, '')
-  return trimmed.endsWith('/chat/completions') ? trimmed : `${trimmed}/v1/chat/completions`
+  if (trimmed.endsWith('/chat/completions'))
+    return trimmed
+
+  if (trimmed.endsWith('/v1'))
+    return `${trimmed}/chat/completions`
+
+  return `${trimmed}/v1/chat/completions`
+}
+
+function normalizeApiKey(value: string) {
+  return value.trim().replace(/^Bearer\s+/i, '').trim()
+}
+
+function getKeyHint(apiKey: string) {
+  const normalized = normalizeApiKey(apiKey)
+  return normalized ? `...${normalized.slice(-4)}` : undefined
 }
 
 function extractJsonObject<T>(value: unknown): T {
@@ -63,8 +78,9 @@ async function postAiJson<T>(
     'content-type': 'application/json',
   }
 
-  if (config.apiKey)
-    headers.authorization = `Bearer ${config.apiKey}`
+  const apiKey = normalizeApiKey(config.apiKey)
+  if (apiKey)
+    headers.authorization = `Bearer ${apiKey}`
 
   const startedAt = performance.now()
   const endpoint = resolveEndpoint(config.endpoint)
@@ -97,6 +113,8 @@ async function postAiJson<T>(
         scene,
         endpoint,
         model: config.model,
+        authSent: Boolean(apiKey),
+        keyHint: getKeyHint(apiKey),
         ok: false,
         status: response.status,
         error: JSON.stringify(json).slice(0, 240),
@@ -109,6 +127,8 @@ async function postAiJson<T>(
       scene,
       endpoint,
       model: config.model,
+      authSent: Boolean(apiKey),
+      keyHint: getKeyHint(apiKey),
       ok: true,
       status: response.status,
       durationMs,
@@ -122,6 +142,8 @@ async function postAiJson<T>(
         scene,
         endpoint,
         model: config.model,
+        authSent: Boolean(apiKey),
+        keyHint: getKeyHint(apiKey),
         ok: false,
         error: error.message,
         durationMs: Math.round(performance.now() - startedAt),
@@ -170,21 +192,11 @@ export async function requestSelectionTranslation(
 }
 
 export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
-  if (scene === 'selection') {
-    const result = await requestSelectionTranslation(
-      settings,
-      '上下文配置',
-      '这个页面需要根据上下文配置模型并缓存结果。',
-    )
-    return Boolean(result?.translation)
-  }
+  const data = await postAiJson<OpenAiChatResponse>(settings, scene, {
+    instruction: 'Connection test. Reply with {"ok":true}.',
+  })
 
-  const result = await requestReplacementCandidates(
-    settings,
-    '这个页面需要根据上下文配置模型，并在缓存命中后降低依赖。',
-    'Lexi AI scene test',
-  )
-  return result.length > 0
+  return Boolean(data)
 }
 
 export function localTranslateSelection(text: string): SelectionTranslation {

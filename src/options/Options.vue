@@ -196,7 +196,7 @@ async function testScene(scene: FeatureScene) {
                 <span class="text-12px" :class="log.ok ? 'text-emerald-600' : 'text-red-600'">{{ log.ok ? '成功' : '失败' }}</span>
               </div>
               <div class="mt-1 truncate text-12px text-neutral-500">
-                {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.durationMs }}ms
+                {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.authSent ? `Key ${log.keyHint || '已发送'}` : '未发送 Key' }} · {{ log.durationMs }}ms
               </div>
               <div v-if="log.error" class="mt-1 truncate text-12px text-red-600">
                 {{ log.error }}

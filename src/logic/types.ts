@@ -12,6 +12,8 @@ export interface AiCallLog {
   scene: FeatureScene
   endpoint: string
   model: string
+  authSent: boolean
+  keyHint?: string
   ok: boolean
   status?: number
   error?: string

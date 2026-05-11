@@ -1,4 +1,4 @@
-import type { LexiSettings } from './types'
+import type { FeatureScene, LexiSettings, SiteSceneRule } from './types'
 
 function normalizeDomain(domain: string) {
   return domain
@@ -6,6 +6,10 @@ function normalizeDomain(domain: string) {
     .toLowerCase()
     .replace(/^https?:\/\//, '')
     .replace(/\/.*$/, '')
+}
+
+export function normalizeSiteRuleDomain(domain: string) {
+  return normalizeDomain(domain)
 }
 
 export function parseDomainList(value: string) {
@@ -45,4 +49,17 @@ export function isPageEnabled(settings: LexiSettings, url = location.href) {
   const matched = rules.domains.some(domain => domainMatches(hostname, domain))
 
   return rules.mode === 'allowlist' ? matched : !matched
+}
+
+function findSceneRule(rules: SiteSceneRule[], url = location.href) {
+  const hostname = getHostname(url)
+  return rules.find(rule => rule.domain && domainMatches(hostname, rule.domain))
+}
+
+export function isSceneEnabled(settings: LexiSettings, scene: FeatureScene, url = location.href) {
+  if (!isPageEnabled(settings, url))
+    return false
+
+  const rule = findSceneRule(settings.siteRules.sceneRules, url)
+  return rule ? rule[scene] : true
 }

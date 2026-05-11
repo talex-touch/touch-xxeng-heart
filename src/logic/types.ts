@@ -1,10 +1,35 @@
 export type FeatureScene = 'replacement' | 'selection' | 'daily'
+export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
 
-export interface AiSceneConfig {
-  enabled: boolean
+export interface AiConnectionConfig {
   endpoint: string
   apiKey: string
   model: string
+}
+
+export interface AiSceneConfig extends AiConnectionConfig {
+  enabled: boolean
+  prompt: string
+}
+
+export type AiSettings = Record<FeatureScene, AiSceneConfig> & {
+  global: AiConnectionConfig
+}
+
+export interface AiTestResult {
+  ok: boolean
+  request: {
+    endpoint: string
+    model: string
+    system: string
+    user: string
+    stream: boolean
+    authSent: boolean
+    keyHint?: string
+  }
+  response?: string
+  status?: number
+  durationMs: number
 }
 
 export interface AiCallLog {
@@ -14,9 +39,14 @@ export interface AiCallLog {
   model: string
   authSent: boolean
   keyHint?: string
+  streamed?: boolean
   ok: boolean
   status?: number
   error?: string
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  tokenEstimate?: boolean
   durationMs: number
   pageUrl?: string
   createdAt: number
@@ -37,6 +67,14 @@ export interface SiteRules {
   enabled: boolean
   mode: 'all' | 'allowlist' | 'blocklist'
   domains: string[]
+  sceneRules: SiteSceneRule[]
+}
+
+export interface SiteSceneRule {
+  domain: string
+  replacement: boolean
+  selection: boolean
+  daily: boolean
 }
 
 export interface ReplacementSettings {
@@ -50,6 +88,7 @@ export interface ReplacementSettings {
 export interface SelectionSettings {
   enabled: boolean
   autoTranslate: boolean
+  translationDirection: TranslationDirection
 }
 
 export interface StudySettings {
@@ -57,8 +96,14 @@ export interface StudySettings {
   programmerMode: boolean
 }
 
+export interface HistorySettings {
+  enabled: boolean
+  maxRecords: number
+}
+
 export interface UiSettings {
   showFloatingStatus: boolean
+  customCss: string
 }
 
 export interface LexiSettings {
@@ -66,8 +111,9 @@ export interface LexiSettings {
   replacement: ReplacementSettings
   selection: SelectionSettings
   study: StudySettings
+  history: HistorySettings
   ui: UiSettings
-  ai: Record<FeatureScene, AiSceneConfig>
+  ai: AiSettings
 }
 
 export interface VocabularyCandidate {

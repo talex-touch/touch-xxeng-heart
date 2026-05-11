@@ -1,10 +1,33 @@
 import type { FeatureScene, LexiSettings } from './types'
 
-const disabledAi = {
-  enabled: false,
+const emptyAiConnection = {
   endpoint: '',
   apiKey: '',
   model: '',
+}
+
+const promptDefaults: Record<FeatureScene, string> = {
+  replacement: [
+    '从网页文本中挑少量适合程序员英语学习的中文技术词，给出英文替换词。',
+    '只返回 JSON：{"items":[{"original":"","replacement":"","meaning":"","example":"","tags":[],"difficulty":2}]}。',
+    '不要解释，不要输出 Markdown。',
+  ].join(' '),
+  selection: [
+    '把用户选中的文本翻译成目标语言，表达自然、简洁。',
+    '只输出译文，不要 JSON、标题、解释、备选项或思考过程。',
+  ].join(' '),
+  daily: [
+    '生成适合程序员日常学习的英语词汇建议。',
+    '优先选择真实开发场景常见表达，保持简洁。',
+  ].join(' '),
+}
+
+function createAiSceneConfig(scene: FeatureScene) {
+  return {
+    enabled: false,
+    ...emptyAiConnection,
+    prompt: promptDefaults[scene],
+  }
 }
 
 export const featureLabels: Record<FeatureScene, string> = {
@@ -18,6 +41,7 @@ export const defaultSettings: LexiSettings = {
     enabled: true,
     mode: 'all',
     domains: [],
+    sceneRules: [],
   },
   replacement: {
     enabled: true,
@@ -29,18 +53,25 @@ export const defaultSettings: LexiSettings = {
   selection: {
     enabled: true,
     autoTranslate: true,
+    translationDirection: 'auto',
   },
   study: {
     dailyGoal: 8,
     programmerMode: true,
   },
+  history: {
+    enabled: true,
+    maxRecords: 500,
+  },
   ui: {
-    showFloatingStatus: true,
+    showFloatingStatus: false,
+    customCss: '',
   },
   ai: {
-    replacement: { ...disabledAi },
-    selection: { ...disabledAi },
-    daily: { ...disabledAi },
+    global: { ...emptyAiConnection },
+    replacement: createAiSceneConfig('replacement'),
+    selection: createAiSceneConfig('selection'),
+    daily: createAiSceneConfig('daily'),
   },
 }
 
@@ -52,6 +83,7 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       ...defaultSettings.siteRules,
       ...value?.siteRules,
       domains: value?.siteRules?.domains ?? defaultSettings.siteRules.domains,
+      sceneRules: value?.siteRules?.sceneRules ?? defaultSettings.siteRules.sceneRules,
     },
     replacement: {
       ...defaultSettings.replacement,
@@ -65,11 +97,19 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       ...defaultSettings.study,
       ...value?.study,
     },
+    history: {
+      ...defaultSettings.history,
+      ...value?.history,
+    },
     ui: {
       ...defaultSettings.ui,
       ...value?.ui,
     },
     ai: {
+      global: {
+        ...defaultSettings.ai.global,
+        ...value?.ai?.global,
+      },
       replacement: {
         ...defaultSettings.ai.replacement,
         ...value?.ai?.replacement,

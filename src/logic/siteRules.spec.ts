@@ -13,6 +13,7 @@ describe('site rules', () => {
         enabled: true,
         mode: 'allowlist',
         domains: ['example.com'],
+        sceneRules: [],
       },
     })
 

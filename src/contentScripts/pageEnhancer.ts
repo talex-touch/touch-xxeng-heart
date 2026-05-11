@@ -734,6 +734,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let lastSelectionKey = ''
   let activeSelectionKey = ''
   let latestSelectionSnapshot = ''
+  const recentSelectionKeys = new Set<string>()
   let stats: PageStats = {
     replacements: 0,
     records: 0,
@@ -960,6 +961,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
     return window.getSelection()?.toString().trim() ?? ''
   }
 
+  function createSelectionKey(selected: string, context: string) {
+    return `${selected.replace(/\s+/g, ' ')}:${context.replace(/\s+/g, ' ').slice(0, 220)}`
+  }
+
+  function rememberSelectionKey(key: string) {
+    recentSelectionKeys.add(key)
+    window.setTimeout(() => {
+      recentSelectionKeys.delete(key)
+    }, 6000)
+  }
+
   function scheduleSelectionCheck(delay = 520) {
     latestSelectionSnapshot = getSelectionSnapshot()
     window.clearTimeout(selectionTimer)
@@ -981,17 +993,21 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!selection || !selected || selected.length < 2 || selected.length > 160)
       return
 
-    const { settings } = await getStoredState()
-    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled || !settings.selection.autoTranslate)
-      return
-
     const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
     const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
-    const selectionKey = `${selected}:${context}`
-    if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey)
+    const selectionKey = createSelectionKey(selected, context)
+    if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey || recentSelectionKeys.has(selectionKey))
       return
 
     activeSelectionKey = selectionKey
+    rememberSelectionKey(selectionKey)
+
+    const { settings } = await getStoredState()
+    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled || !settings.selection.autoTranslate) {
+      activeSelectionKey = ''
+      return
+    }
+
     try {
       await translateAndRecord(selected, context, range)
       lastSelectionKey = selectionKey

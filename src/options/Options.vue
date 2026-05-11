@@ -2,13 +2,29 @@
 import { computed, ref } from 'vue'
 import { featureLabels } from '~/logic/defaults'
 import { testAiScene } from '~/logic/aiClient'
-import { formatDomainList, parseDomainList } from '~/logic/siteRules'
+import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
-import type { FeatureScene } from '~/logic/types'
+import type { AiTestResult, FeatureScene, SiteSceneRule, TranslationDirection } from '~/logic/types'
+
+type OptionsTab = 'settings' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
 const scenes: FeatureScene[] = ['replacement', 'selection', 'daily']
+const tabs: Array<{ id: OptionsTab, label: string }> = [
+  { id: 'settings', label: '基础设置' },
+  { id: 'vocabulary', label: '词库记录' },
+  { id: 'ai', label: 'AI 场景' },
+  { id: 'diagnostics', label: '诊断记录' },
+  { id: 'about', label: '关于' },
+]
+const translationDirections: Array<{ value: TranslationDirection, label: string }> = [
+  { value: 'auto', label: '自动判断' },
+  { value: 'zh-to-en', label: '中译英' },
+  { value: 'en-to-zh', label: '英译中' },
+]
 
+const activeTab = ref<OptionsTab>('settings')
+const newSceneRuleDomain = ref('')
 const domainText = computed({
   get: () => formatDomainList(lexiSettings.value.siteRules.domains),
   set: value => lexiSettings.value.siteRules.domains = parseDomainList(value),
@@ -18,10 +34,22 @@ const visitTrend = computed(() => summarizeByDay(pageVisitLogs.value))
 const aiTrend = computed(() => summarizeByDay(aiCallLogs.value))
 const maxVisitTrend = computed(() => Math.max(1, ...visitTrend.value.map(item => item.value)))
 const maxAiTrend = computed(() => Math.max(1, ...aiTrend.value.map(item => item.value)))
-const recentAiLogs = computed(() => aiCallLogs.value.slice(0, 8))
-const recentPageVisits = computed(() => pageVisitLogs.value.slice(0, 8))
+const recentAiLogs = computed(() => aiCallLogs.value)
+const aiTokenTrend = computed(() => summarizeTokensByDay(aiCallLogs.value))
+const maxAiTokenTrend = computed(() => Math.max(1, ...aiTokenTrend.value.map(item => item.value)))
+const totalAiTokens = computed(() => aiCallLogs.value.reduce((sum, log) => sum + (log.totalTokens ?? 0), 0))
+const aiSceneTokenStats = computed(() => scenes.map(scene => ({
+  scene,
+  calls: aiCallLogs.value.filter(log => log.scene === scene).length,
+  tokens: aiCallLogs.value
+    .filter(log => log.scene === scene)
+    .reduce((sum, log) => sum + (log.totalTokens ?? 0), 0),
+})))
+const recentPageVisits = computed(() => pageVisitLogs.value)
+const recentVocabularyRecords = computed(() => vocabularyRecords.value.slice(0, 80))
 const testingScenes = ref<Partial<Record<FeatureScene, boolean>>>({})
 const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
+const sceneTestDetails = ref<Partial<Record<FeatureScene, AiTestResult>>>({})
 
 function formatTime(value: number) {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -34,10 +62,12 @@ function formatTime(value: number) {
 async function testScene(scene: FeatureScene) {
   testingScenes.value[scene] = true
   sceneTestResults.value[scene] = ''
+  sceneTestDetails.value[scene] = undefined
 
   try {
-    const ok = await testAiScene(lexiSettings.value, scene)
-    sceneTestResults.value[scene] = ok ? '测试成功' : '响应为空'
+    const result = await testAiScene(lexiSettings.value, scene)
+    sceneTestDetails.value[scene] = result
+    sceneTestResults.value[scene] = result.ok ? `测试成功 · ${result.durationMs}ms` : `测试失败 · ${result.status ?? '网络错误'}`
   }
   catch (error) {
     sceneTestResults.value[scene] = error instanceof Error ? error.message : '测试失败'
@@ -48,13 +78,58 @@ async function testScene(scene: FeatureScene) {
 }
 
 function barHeight(value: number, max: number) {
-  return `${Math.max(4, Math.round((value / max) * 96))}px`
+  return `${Math.max(4, Math.round((value / max) * 112))}px`
+}
+
+function summarizeTokensByDay(logs: typeof aiCallLogs.value, days = 7) {
+  const result = new Map<string, number>()
+  const formatter = new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+  })
+
+  for (let index = days - 1; index >= 0; index -= 1) {
+    const date = new Date()
+    date.setDate(date.getDate() - index)
+    result.set(formatter.format(date), 0)
+  }
+
+  for (const log of logs) {
+    const key = formatter.format(new Date(log.createdAt))
+    if (result.has(key))
+      result.set(key, (result.get(key) ?? 0) + (log.totalTokens ?? 0))
+  }
+
+  return Array.from(result.entries()).map(([label, value]) => ({ label, value }))
+}
+
+function formatTestRequest(result: AiTestResult) {
+  return JSON.stringify(result.request, null, 2)
+}
+
+function addSceneRule() {
+  const domain = normalizeSiteRuleDomain(newSceneRuleDomain.value)
+  if (!domain || lexiSettings.value.siteRules.sceneRules.some(rule => rule.domain === domain))
+    return
+
+  const rule: SiteSceneRule = {
+    domain,
+    replacement: true,
+    selection: true,
+    daily: true,
+  }
+  lexiSettings.value.siteRules.sceneRules = [rule, ...lexiSettings.value.siteRules.sceneRules]
+  newSceneRuleDomain.value = ''
+}
+
+function removeSceneRule(index: number) {
+  lexiSettings.value.siteRules.sceneRules = lexiSettings.value.siteRules.sceneRules.filter((_, current) => current !== index)
 }
 </script>
 
 <template>
   <main class="min-h-screen bg-neutral-50 text-neutral-950">
-    <div class="mx-auto max-w-5xl px-6 py-8">
+    <div class="mx-auto max-w-6xl px-6 py-8">
       <header class="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-neutral-200 pb-5">
         <div>
           <div class="text-24px font-700 tracking-0">
@@ -74,103 +149,271 @@ function barHeight(value: number, max: number) {
         </div>
       </header>
 
-      <section class="grid gap-5 lg:grid-cols-[1fr_1fr]">
-        <div class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <h2 class="text-16px font-600">
-            网页启用范围
-          </h2>
-          <label class="mt-4 flex items-center justify-between gap-3">
-            <span>
-              <span class="block text-14px font-500">总开关</span>
-              <span class="text-12px text-neutral-500">关闭后不替换、不划词翻译。</span>
-            </span>
-            <input v-model="lexiSettings.siteRules.enabled" type="checkbox" class="h-5 w-5">
-          </label>
+      <nav class="mb-5 overflow-x-auto rounded-2 border border-neutral-200 bg-white p-1 shadow-sm">
+        <div class="flex min-w-max gap-1">
+          <button
+            v-for="tab in tabs"
+            :key="tab.id"
+            class="rounded-2 px-4 py-2 text-14px font-500 cursor-pointer transition-colors"
+            :class="activeTab === tab.id ? 'bg-neutral-950 text-white' : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950'"
+            @click="activeTab = tab.id"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+      </nav>
 
-          <div class="mt-5">
-            <label class="text-13px font-500">匹配模式</label>
-            <select v-model="lexiSettings.siteRules.mode" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
-              <option value="all">
-                全部网页
-              </option>
-              <option value="allowlist">
-                仅白名单
-              </option>
-              <option value="blocklist">
-                排除黑名单
-              </option>
-            </select>
-          </div>
+      <section v-if="activeTab === 'settings'" class="grid gap-5 lg:grid-cols-[1fr_1fr]">
+        <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="min-h-0">
+            <h2 class="text-16px font-600">
+              网页启用范围
+            </h2>
+            <label class="mt-4 flex items-center justify-between gap-3">
+              <span>
+                <span class="block text-14px font-500">总开关</span>
+                <span class="text-12px text-neutral-500">关闭后不替换、不划词翻译。</span>
+              </span>
+              <input v-model="lexiSettings.siteRules.enabled" type="checkbox" class="h-5 w-5">
+            </label>
 
-          <div class="mt-5">
-            <label class="text-13px font-500">域名列表</label>
-            <textarea
-              v-model="domainText"
-              class="mt-2 min-h-28 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-14px leading-5 outline-none focus:border-neutral-950"
-              placeholder="example.com&#10;docs.example.com"
-            />
+            <div class="mt-5">
+              <label class="text-13px font-500">匹配模式</label>
+              <select v-model="lexiSettings.siteRules.mode" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
+                <option value="all">
+                  全部网页
+                </option>
+                <option value="allowlist">
+                  仅白名单
+                </option>
+                <option value="blocklist">
+                  排除黑名单
+                </option>
+              </select>
+            </div>
+
+            <div class="mt-5">
+              <label class="text-13px font-500">域名列表</label>
+              <textarea
+                v-model="domainText"
+                class="mt-2 min-h-28 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-14px leading-5 outline-none focus:border-neutral-950"
+                placeholder="example.com&#10;docs.example.com"
+              />
+            </div>
+
+            <div class="mt-5 border-t border-neutral-100 pt-5">
+              <label class="text-13px font-500">域名场景规则</label>
+              <div class="mt-2 flex gap-2">
+                <input v-model="newSceneRuleDomain" class="h-10 min-w-0 flex-1 rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="docs.example.com">
+                <button class="rounded-2 border border-neutral-200 bg-white px-3 text-12px cursor-pointer hover:bg-neutral-50" @click="addSceneRule">
+                  添加
+                </button>
+              </div>
+              <div class="mt-3 space-y-2">
+                <div v-for="(rule, index) in lexiSettings.siteRules.sceneRules" :key="rule.domain" class="rounded-2 border border-neutral-200 px-3 py-2">
+                  <div class="flex items-center justify-between gap-2">
+                    <input v-model="rule.domain" class="min-w-0 flex-1 border-0 bg-transparent text-13px font-600 outline-none">
+                    <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeSceneRule(index)">
+                      删除
+                    </button>
+                  </div>
+                  <div class="mt-2 grid grid-cols-3 gap-2 text-12px text-neutral-600">
+                    <label class="flex items-center gap-1">
+                      <input v-model="rule.replacement" type="checkbox">
+                      <span>替换</span>
+                    </label>
+                    <label class="flex items-center gap-1">
+                      <input v-model="rule.selection" type="checkbox">
+                      <span>划词</span>
+                    </label>
+                    <label class="flex items-center gap-1">
+                      <input v-model="rule.daily" type="checkbox">
+                      <span>每日</span>
+                    </label>
+                  </div>
+                </div>
+                <p v-if="!lexiSettings.siteRules.sceneRules.length" class="rounded-2 bg-neutral-50 px-3 py-2 text-12px text-neutral-500">
+                  暂无精细规则，默认按总开关和匹配模式启用全部场景。
+                </p>
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <h2 class="text-16px font-600">
-            替换与学习节奏
-          </h2>
-          <label class="mt-4 flex items-center justify-between">
-            <span class="text-14px font-500">自动替换词汇</span>
-            <input v-model="lexiSettings.replacement.enabled" type="checkbox" class="h-5 w-5">
-          </label>
-          <label class="mt-4 block">
-            <span class="text-13px font-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
-            <input v-model.number="lexiSettings.replacement.density" type="range" min="0.04" max="0.45" step="0.01" class="mt-2 w-full accent-neutral-950">
-          </label>
-          <label class="mt-4 block">
-            <span class="text-13px font-500">基础难度 {{ lexiSettings.replacement.difficulty }}</span>
-            <input v-model.number="lexiSettings.replacement.difficulty" type="range" min="1" max="5" step="1" class="mt-2 w-full accent-neutral-950">
-          </label>
-          <label class="mt-4 block">
-            <span class="text-13px font-500">单页最多替换</span>
-            <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="80" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-          </label>
-          <label class="mt-4 flex items-center justify-between">
-            <span class="text-14px font-500">划词自动翻译</span>
-            <input v-model="lexiSettings.selection.autoTranslate" type="checkbox" class="h-5 w-5">
-          </label>
-          <label class="mt-4 flex items-center justify-between">
-            <span>
-              <span class="block text-14px font-500">右下角状态浮标</span>
-              <span class="text-12px text-neutral-500">关闭后不显示“Lexi 已启用”。</span>
-            </span>
-            <input v-model="lexiSettings.ui.showFloatingStatus" type="checkbox" class="h-5 w-5">
-          </label>
-          <label class="mt-4 block">
-            <span class="text-13px font-500">每日推荐数量</span>
-            <input v-model.number="lexiSettings.study.dailyGoal" type="number" min="1" max="30" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-          </label>
+        <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="min-h-0">
+            <h2 class="text-16px font-600">
+              替换与学习节奏
+            </h2>
+            <label class="mt-4 flex items-center justify-between">
+              <span class="text-14px font-500">自动替换词汇</span>
+              <input v-model="lexiSettings.replacement.enabled" type="checkbox" class="h-5 w-5">
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
+              <input v-model.number="lexiSettings.replacement.density" type="range" min="0.04" max="0.45" step="0.01" class="mt-2 w-full accent-neutral-950">
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">基础难度 {{ lexiSettings.replacement.difficulty }}</span>
+              <input v-model.number="lexiSettings.replacement.difficulty" type="range" min="1" max="5" step="1" class="mt-2 w-full accent-neutral-950">
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">单页最多替换</span>
+              <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="80" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+            </label>
+            <label class="mt-4 flex items-center justify-between">
+              <span class="text-14px font-500">划词自动翻译</span>
+              <input v-model="lexiSettings.selection.autoTranslate" type="checkbox" class="h-5 w-5">
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">划词翻译方向</span>
+              <select v-model="lexiSettings.selection.translationDirection" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
+                <option v-for="item in translationDirections" :key="item.value" :value="item.value">
+                  {{ item.label }}
+                </option>
+              </select>
+            </label>
+            <label class="mt-4 flex items-center justify-between">
+              <span>
+                <span class="block text-14px font-500">右下角状态浮标</span>
+                <span class="text-12px text-neutral-500">关闭后不显示“Lexi 已启用”。</span>
+              </span>
+              <input v-model="lexiSettings.ui.showFloatingStatus" type="checkbox" class="h-5 w-5">
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">每日推荐数量</span>
+              <input v-model.number="lexiSettings.study.dailyGoal" type="number" min="1" max="30" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">自定义样式 CSS</span>
+              <textarea
+                v-model="lexiSettings.ui.customCss"
+                class="mt-2 min-h-36 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 font-mono text-12px leading-5 outline-none focus:border-neutral-950"
+                placeholder=".lexi-selection-translation { background: #fff; }&#10;.lexi-token { color: #2563eb; }"
+              />
+            </label>
+          </div>
         </div>
       </section>
 
-      <section class="mt-5 rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-        <h2 class="text-16px font-600">
-          AI 场景配置
-        </h2>
+      <section v-else-if="activeTab === 'vocabulary'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h2 class="text-16px font-600">
+              词库记录
+            </h2>
+            <p class="mt-1 text-12px text-neutral-500">
+              AI 补充、网页替换和划词翻译都会进入本地记录，后续可用于快速替换。
+            </p>
+          </div>
+          <span class="text-12px text-neutral-500">{{ vocabularyRecords.length }} 条</span>
+        </div>
+        <div class="mt-4 max-h-[40rem] overflow-y-auto">
+          <table class="w-full border-collapse text-left text-12px">
+            <thead class="sticky top-0 bg-white text-neutral-500">
+              <tr class="border-b border-neutral-200">
+                <th class="py-2 pr-3 font-500">
+                  原文
+                </th>
+                <th class="py-2 pr-3 font-500">
+                  替换/翻译
+                </th>
+                <th class="py-2 pr-3 font-500">
+                  来源
+                </th>
+                <th class="py-2 pr-3 font-500">
+                  次数
+                </th>
+                <th class="py-2 pr-3 font-500">
+                  页面
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="record in recentVocabularyRecords" :key="record.id" class="border-b border-neutral-100 align-top">
+                <td class="max-w-56 break-words py-2 pr-3 font-600">
+                  {{ record.original }}
+                </td>
+                <td class="max-w-64 break-words py-2 pr-3">
+                  {{ record.replacement }}
+                </td>
+                <td class="py-2 pr-3 text-neutral-500">
+                  {{ record.source }}
+                </td>
+                <td class="py-2 pr-3 text-neutral-500">
+                  {{ record.seenCount }} / {{ record.selectedCount }}
+                </td>
+                <td class="max-w-72 break-words py-2 pr-3 text-neutral-500">
+                  <a v-if="record.pageUrl" :href="record.pageUrl" target="_blank" rel="noreferrer" class="text-neutral-600 underline underline-offset-2 hover:text-neutral-950">
+                    {{ record.pageTitle || record.pageUrl }}
+                  </a>
+                  <span v-else>-</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="!recentVocabularyRecords.length" class="rounded-2 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+            暂无词库记录。
+          </p>
+        </div>
+      </section>
+
+      <section v-else-if="activeTab === 'ai'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-16px font-600">
+              AI 场景配置
+            </h2>
+            <p class="mt-1 text-12px leading-5 text-neutral-500">
+              场景留空时继承全局连接；需要不同模型或后端时再单独覆盖。
+            </p>
+          </div>
+        </div>
+
+        <div class="mt-4 rounded-2 border border-neutral-200 p-4">
+          <h3 class="text-14px font-600">
+            全局连接
+          </h3>
+          <div class="mt-3 grid gap-3 lg:grid-cols-3">
+            <label class="block">
+              <span class="text-12px font-500 text-neutral-600">Endpoint</span>
+              <input v-model="lexiSettings.ai.global.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1">
+            </label>
+            <label class="block">
+              <span class="text-12px font-500 text-neutral-600">Model</span>
+              <input v-model="lexiSettings.ai.global.model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
+            </label>
+            <label class="block">
+              <span class="text-12px font-500 text-neutral-600">API Key</span>
+              <input v-model="lexiSettings.ai.global.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
+            </label>
+          </div>
+        </div>
+
         <div class="mt-4 grid gap-4 lg:grid-cols-3">
-          <div v-for="scene in scenes" :key="scene" class="rounded-2 border border-neutral-200 p-4">
+          <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
             <label class="flex items-center justify-between">
               <span class="text-14px font-600">{{ featureLabels[scene] }}</span>
               <input v-model="lexiSettings.ai[scene].enabled" type="checkbox" class="h-5 w-5">
             </label>
             <label class="mt-4 block">
-              <span class="text-12px font-500 text-neutral-600">Endpoint</span>
-              <input v-model="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/translate">
+              <span class="text-12px font-500 text-neutral-600">Endpoint 覆盖</span>
+              <input v-model="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
             </label>
             <label class="mt-3 block">
-              <span class="text-12px font-500 text-neutral-600">Model</span>
-              <input v-model="lexiSettings.ai[scene].model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
+              <span class="text-12px font-500 text-neutral-600">Model 覆盖</span>
+              <input v-model="lexiSettings.ai[scene].model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
             </label>
             <label class="mt-3 block">
-              <span class="text-12px font-500 text-neutral-600">API Key</span>
-              <input v-model="lexiSettings.ai[scene].apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
+              <span class="text-12px font-500 text-neutral-600">API Key 覆盖</span>
+              <input v-model="lexiSettings.ai[scene].apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
+            </label>
+            <label class="mt-3 block">
+              <span class="text-12px font-500 text-neutral-600">提示词</span>
+              <textarea
+                v-model="lexiSettings.ai[scene].prompt"
+                class="mt-1 min-h-28 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-13px leading-5 outline-none focus:border-neutral-950"
+              />
             </label>
             <div class="mt-4 flex items-center gap-3">
               <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="testingScenes[scene]" @click="testScene(scene)">
@@ -180,29 +423,70 @@ function barHeight(value: number, max: number) {
                 {{ sceneTestResults[scene] }}
               </span>
             </div>
+            <div v-if="sceneTestDetails[scene]" class="mt-3 space-y-2">
+              <div class="text-12px font-600 text-neutral-700">
+                请求内容
+              </div>
+              <pre class="max-h-44 overflow-auto rounded-2 bg-neutral-950 p-3 text-11px leading-4 text-neutral-100">{{ formatTestRequest(sceneTestDetails[scene]!) }}</pre>
+              <div class="text-12px font-600 text-neutral-700">
+                返回内容
+              </div>
+              <pre class="max-h-36 overflow-auto rounded-2 bg-neutral-50 p-3 text-11px leading-4 text-neutral-700">{{ sceneTestDetails[scene]!.response || '空响应' }}</pre>
+            </div>
           </div>
         </div>
       </section>
 
-      <section class="mt-5 grid gap-5 lg:grid-cols-[1fr_1fr]">
-        <div class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <h2 class="text-16px font-600">
-            最近 AI 调用
-          </h2>
-          <div class="mt-4 flex items-end gap-2 border-b border-neutral-100 pb-3">
-            <div v-for="item in aiTrend" :key="item.label" class="flex flex-1 flex-col items-center gap-2">
-              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxAiTrend) }" />
-              <span class="text-10px text-neutral-500">{{ item.label }}</span>
+      <section v-else-if="activeTab === 'diagnostics'" class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div class="flex h-[36rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="flex shrink-0 items-center justify-between gap-3">
+            <h2 class="text-16px font-600">
+              最近 AI 调用
+            </h2>
+            <span class="text-12px text-neutral-500">{{ aiCallLogs.length }} 条</span>
+          </div>
+          <div class="mt-4 h-40 shrink-0 overflow-x-auto border-b border-neutral-100 pb-3">
+            <div class="flex h-full min-w-96 items-end gap-2">
+              <div v-for="item in aiTrend" :key="item.label" class="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxAiTrend) }" />
+                <span class="shrink-0 text-10px text-neutral-500">{{ item.label }}</span>
+              </div>
             </div>
           </div>
-          <div class="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
+          <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-3">
+            <div class="rounded-2 bg-neutral-50 px-3 py-2">
+              <div class="text-neutral-500">
+                Tokens
+              </div>
+              <div class="mt-1 text-16px font-700">
+                {{ totalAiTokens }}
+              </div>
+            </div>
+            <div v-for="item in aiSceneTokenStats" :key="item.scene" class="rounded-2 bg-neutral-50 px-3 py-2">
+              <div class="text-neutral-500">
+                {{ featureLabels[item.scene] }}
+              </div>
+              <div class="mt-1 font-700">
+                {{ item.tokens }} · {{ item.calls }} 次
+              </div>
+            </div>
+          </div>
+          <div class="mt-3 h-24 shrink-0 overflow-x-auto border-b border-neutral-100 pb-3">
+            <div class="flex h-full min-w-96 items-end gap-2">
+              <div v-for="item in aiTokenTrend" :key="item.label" class="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                <div class="w-full rounded-1 bg-blue-600" :style="{ height: barHeight(item.value, maxAiTokenTrend) }" />
+                <span class="shrink-0 text-10px text-neutral-500">{{ item.label }}</span>
+              </div>
+            </div>
+          </div>
+          <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div v-for="log in recentAiLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-13px font-600">{{ featureLabels[log.scene] }}</span>
                 <span class="text-12px" :class="log.ok ? 'text-emerald-600' : 'text-red-600'">{{ log.ok ? '成功' : '失败' }}</span>
               </div>
-              <div class="mt-1 truncate text-12px text-neutral-500">
-                {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.authSent ? `Key ${log.keyHint || '已发送'}` : '未发送 Key' }} · {{ log.durationMs }}ms
+              <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.streamed ? '流式' : '普通' }} · {{ log.authSent ? `Key ${log.keyHint || '已发送'}` : '未发送 Key' }} · {{ log.durationMs }}ms · {{ log.totalTokens ?? 0 }} tokens{{ log.tokenEstimate ? ' 估算' : '' }}
               </div>
               <div v-if="log.error" class="mt-1 break-words text-12px leading-5 text-red-600">
                 {{ log.error }}
@@ -214,22 +498,27 @@ function barHeight(value: number, max: number) {
           </div>
         </div>
 
-        <div class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <h2 class="text-16px font-600">
-            最近访问网页
-          </h2>
-          <div class="mt-4 flex items-end gap-2 border-b border-neutral-100 pb-3">
-            <div v-for="item in visitTrend" :key="item.label" class="flex flex-1 flex-col items-center gap-2">
-              <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxVisitTrend) }" />
-              <span class="text-10px text-neutral-500">{{ item.label }}</span>
+        <div class="flex h-[36rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="flex shrink-0 items-center justify-between gap-3">
+            <h2 class="text-16px font-600">
+              最近访问网页
+            </h2>
+            <span class="text-12px text-neutral-500">{{ pageVisitLogs.length }} 条</span>
+          </div>
+          <div class="mt-4 h-40 shrink-0 overflow-x-auto border-b border-neutral-100 pb-3">
+            <div class="flex h-full min-w-96 items-end gap-2">
+              <div v-for="item in visitTrend" :key="item.label" class="flex h-full flex-1 flex-col items-center justify-end gap-2">
+                <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxVisitTrend) }" />
+                <span class="shrink-0 text-10px text-neutral-500">{{ item.label }}</span>
+              </div>
             </div>
           </div>
-          <div class="mt-3 max-h-96 space-y-3 overflow-y-auto pr-1">
+          <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div v-for="visit in recentPageVisits" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
-              <div class="truncate text-13px font-600">
+              <div class="break-words text-13px font-600 leading-5">
                 {{ visit.title || visit.host }}
               </div>
-              <div class="mt-1 truncate text-12px text-neutral-500">
+              <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
                 {{ formatTime(visit.createdAt) }} · {{ visit.host }} · 替换 {{ visit.replacements }}
               </div>
             </div>
@@ -237,6 +526,20 @@ function barHeight(value: number, max: number) {
               暂无网页访问记录。
             </p>
           </div>
+        </div>
+      </section>
+
+      <section v-else class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <h2 class="text-16px font-600">
+          关于 Lexi
+        </h2>
+        <div class="mt-4 space-y-3 text-14px leading-6 text-neutral-700">
+          <p>
+            Lexi 由 TalexDreamSoul 开发。
+          </p>
+          <p>
+            特别感谢 XinYu Wu 101-010-000 / XinRong Liu TomHolland。
+          </p>
         </div>
       </section>
     </div>

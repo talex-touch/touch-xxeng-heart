@@ -742,9 +742,7 @@ async function translateSelection(
     if (ai)
       return ai
   }
-  catch (error) {
-    console.warn('[Lexi] AI selection translation failed', error)
-  }
+  catch {}
 
   return localTranslateSelection(selected)
 }
@@ -972,12 +970,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
       if (detailText)
         updateTranslation(translation, detailText)
     }
-    catch (error) {
+    catch {
       if (looksTechnicalTerm(selected)) {
         detailText = '技术名词：已加入本地词库。'
         updateTranslation(translation, detailText)
       }
-      console.warn('[Lexi] AI selection detail failed', error)
     }
 
     if (requestId !== selectionRequestId) {

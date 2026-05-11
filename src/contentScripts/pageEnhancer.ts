@@ -733,6 +733,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let dialogShortcut = defaultSettings.ui.dialogShortcut
   let lastSelectionKey = ''
   let activeSelectionKey = ''
+  let latestSelectionSnapshot = ''
   let stats: PageStats = {
     replacements: 0,
     records: 0,
@@ -955,6 +956,22 @@ export function startPageEnhancer(events: EnhancerEvents) {
     events.onStats(stats)
   }
 
+  function getSelectionSnapshot() {
+    return window.getSelection()?.toString().trim() ?? ''
+  }
+
+  function scheduleSelectionCheck(delay = 520) {
+    latestSelectionSnapshot = getSelectionSnapshot()
+    window.clearTimeout(selectionTimer)
+    selectionTimer = window.setTimeout(() => {
+      const current = getSelectionSnapshot()
+      if (!current || current !== latestSelectionSnapshot)
+        return
+
+      handleSelection().catch(error => console.warn('[Lexi] selection handling failed', error))
+    }, delay)
+  }
+
   async function handleSelection() {
     if (disposed)
       return
@@ -969,12 +986,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
-    const selectionKey = `${selected}:${range?.startOffset ?? 0}:${range?.endOffset ?? 0}`
+    const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
+    const selectionKey = `${selected}:${context}`
     if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey)
       return
 
     activeSelectionKey = selectionKey
-    const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
     try {
       await translateAndRecord(selected, context, range)
       lastSelectionKey = selectionKey
@@ -985,13 +1002,21 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   const onMouseUp = () => {
-    window.clearTimeout(selectionTimer)
-    selectionTimer = window.setTimeout(handleSelection, 420)
+    scheduleSelectionCheck(620)
+  }
+
+  const onPointerUp = () => {
+    scheduleSelectionCheck(620)
+  }
+
+  const onKeyUp = (event: KeyboardEvent) => {
+    if (event.key.startsWith('Arrow') || event.key === 'Shift')
+      scheduleSelectionCheck(620)
   }
 
   const onSelectionChange = () => {
+    latestSelectionSnapshot = getSelectionSnapshot()
     window.clearTimeout(selectionTimer)
-    selectionTimer = window.setTimeout(handleSelection, 650)
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -1073,6 +1098,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   run()
   document.addEventListener('mouseup', onMouseUp)
+  document.addEventListener('pointerup', onPointerUp)
+  document.addEventListener('keyup', onKeyUp)
   document.addEventListener('selectionchange', onSelectionChange)
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('keydown', onEscape)
@@ -1104,6 +1131,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.clearTimeout(selectionTimer)
     removeContextTranslateListener()
     document.removeEventListener('mouseup', onMouseUp)
+    document.removeEventListener('pointerup', onPointerUp)
+    document.removeEventListener('keyup', onKeyUp)
     document.removeEventListener('selectionchange', onSelectionChange)
     document.removeEventListener('keydown', onKeyDown)
     document.removeEventListener('keydown', onEscape)

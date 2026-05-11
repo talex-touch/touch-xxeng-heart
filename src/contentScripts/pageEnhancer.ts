@@ -707,8 +707,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let tooltip: HTMLElement | undefined
   let dynamicObserver: MutationObserver | undefined
   let dynamicTimer: number | undefined
+  let selectionTimer: number | undefined
   let dialog: HTMLElement | undefined
   let lastTranslation: LastTranslationState | undefined
+  let lastSelectionKey = ''
+  let activeSelectionKey = ''
   let stats: PageStats = {
     replacements: 0,
     records: 0,
@@ -943,17 +946,29 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
+    const selectionKey = `${selected}:${range?.startOffset ?? 0}:${range?.endOffset ?? 0}`
+    if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey)
+      return
+
+    activeSelectionKey = selectionKey
     const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
-    await translateAndRecord(selected, context, range)
+    try {
+      await translateAndRecord(selected, context, range)
+      lastSelectionKey = selectionKey
+    }
+    finally {
+      activeSelectionKey = ''
+    }
   }
 
   const onMouseUp = () => {
-    window.setTimeout(handleSelection, 120)
+    window.clearTimeout(selectionTimer)
+    selectionTimer = window.setTimeout(handleSelection, 420)
   }
 
   const onSelectionChange = () => {
-    window.clearTimeout(dynamicTimer)
-    dynamicTimer = window.setTimeout(handleSelection, 180)
+    window.clearTimeout(selectionTimer)
+    selectionTimer = window.setTimeout(handleSelection, 650)
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -1062,6 +1077,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     disposed = true
     dynamicObserver?.disconnect()
     window.clearTimeout(dynamicTimer)
+    window.clearTimeout(selectionTimer)
     removeContextTranslateListener()
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('selectionchange', onSelectionChange)

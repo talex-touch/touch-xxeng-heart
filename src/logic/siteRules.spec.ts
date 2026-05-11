@@ -42,4 +42,9 @@ describe('site rules', () => {
     expect(isSceneEnabled(defaultSettings, 'selection', 'https://mooc1.chaoxing.com/exam')).toBe(false)
     expect(findSpecialSiteProfile(defaultSettings, 'https://x.com/home')?.dynamicScan).toBe(true)
   })
+
+  it('keeps X and Twitter selection enabled', () => {
+    expect(isSceneEnabled(defaultSettings, 'selection', 'https://x.com/home')).toBe(true)
+    expect(isSceneEnabled(defaultSettings, 'selection', 'https://mobile.twitter.com/home')).toBe(true)
+  })
 })

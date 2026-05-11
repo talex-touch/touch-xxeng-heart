@@ -68,6 +68,7 @@ export interface SiteRules {
   mode: 'all' | 'allowlist' | 'blocklist'
   domains: string[]
   sceneRules: SiteSceneRule[]
+  specialProfiles: SpecialSiteProfile[]
 }
 
 export interface SiteSceneRule {
@@ -75,6 +76,23 @@ export interface SiteSceneRule {
   replacement: boolean
   selection: boolean
   daily: boolean
+}
+
+export type SpecialSiteKind = 'social-feed' | 'forum-feed' | 'learning-exam' | 'custom'
+
+export interface SpecialSiteProfile {
+  id: string
+  label: string
+  kind: SpecialSiteKind
+  domains: string[]
+  enabled: boolean
+  replacement: boolean
+  selection: boolean
+  dynamicScan: boolean
+  conservative: boolean
+  examSafe: boolean
+  maxPerPage?: number
+  density?: number
 }
 
 export interface ReplacementSettings {

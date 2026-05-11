@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { featureLabels } from '~/logic/defaults'
+import { computed, ref, watchEffect } from 'vue'
+import { defaultSettings, featureLabels } from '~/logic/defaults'
 import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
-import type { AiTestResult, FeatureScene, SiteSceneRule, TranslationDirection } from '~/logic/types'
+import type { AiTestResult, FeatureScene, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
-type OptionsTab = 'settings' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
+type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
 const scenes: FeatureScene[] = ['replacement', 'selection', 'daily']
 const tabs: Array<{ id: OptionsTab, label: string }> = [
   { id: 'settings', label: '基础设置' },
+  { id: 'special', label: '特殊场景' },
   { id: 'vocabulary', label: '词库记录' },
   { id: 'ai', label: 'AI 场景' },
   { id: 'diagnostics', label: '诊断记录' },
@@ -47,9 +48,40 @@ const aiSceneTokenStats = computed(() => scenes.map(scene => ({
 })))
 const recentPageVisits = computed(() => pageVisitLogs.value)
 const recentVocabularyRecords = computed(() => vocabularyRecords.value.slice(0, 80))
+const todayStudySummary = computed(() => createTodayStudySummary(vocabularyRecords.value))
+const storageStats = computed(() => {
+  const items = [
+    { label: '词库', bytes: estimateStorageBytes(vocabularyRecords.value) },
+    { label: 'AI 日志', bytes: estimateStorageBytes(aiCallLogs.value) },
+    { label: '访问日志', bytes: estimateStorageBytes(pageVisitLogs.value) },
+    { label: '设置', bytes: estimateStorageBytes(lexiSettings.value) },
+  ]
+
+  return {
+    items,
+    total: items.reduce((sum, item) => sum + item.bytes, 0),
+  }
+})
 const testingScenes = ref<Partial<Record<FeatureScene, boolean>>>({})
 const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
 const sceneTestDetails = ref<Partial<Record<FeatureScene, AiTestResult>>>({})
+
+function ensureSpecialProfiles() {
+  const current = new Map(lexiSettings.value.siteRules.specialProfiles.map(profile => [profile.id, profile]))
+  const mergedDefaults = defaultSettings.siteRules.specialProfiles.map(profile => ({
+    ...profile,
+    ...current.get(profile.id),
+  }))
+  const customProfiles = lexiSettings.value.siteRules.specialProfiles.filter(profile => profile.kind === 'custom')
+  const nextProfiles = [...mergedDefaults, ...customProfiles]
+  const changed = nextProfiles.length !== lexiSettings.value.siteRules.specialProfiles.length
+    || nextProfiles.some((profile, index) => profile.id !== lexiSettings.value.siteRules.specialProfiles[index]?.id)
+
+  if (changed)
+    lexiSettings.value.siteRules.specialProfiles = nextProfiles
+}
+
+watchEffect(ensureSpecialProfiles)
 
 function formatTime(value: number) {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -79,6 +111,72 @@ async function testScene(scene: FeatureScene) {
 
 function barHeight(value: number, max: number) {
   return `${Math.max(4, Math.round((value / max) * 112))}px`
+}
+
+function estimateStorageBytes(value: unknown) {
+  return new Blob([JSON.stringify(value)]).size
+}
+
+function formatBytes(bytes: number) {
+  const kb = bytes / 1024
+  if (kb > 1024)
+    return `${(kb / 1024).toFixed(2)} MB`
+
+  return `${kb.toFixed(1)} KB`
+}
+
+function createTodayStudySummary(records: typeof vocabularyRecords.value) {
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  const today = records.filter(record => record.updatedAt >= start.getTime())
+  const technical = today.filter(record => record.tags.includes('technical'))
+  const manual = today.filter(record => record.source === 'manual')
+  const auto = today.filter(record => record.source === 'auto')
+  const terms = [...technical, ...manual]
+    .slice(0, 8)
+    .map(record => `${record.original} -> ${record.replacement}`)
+
+  return {
+    total: today.length,
+    manual: manual.length,
+    auto: auto.length,
+    technical: technical.length,
+    terms,
+    suggestion: today.length
+      ? '建议保留高频技术词，过滤重复上下文和普通短句。'
+      : '今天暂无新记录，浏览技术内容后会自动形成学习摘要。',
+  }
+}
+
+function addSpecialProfile() {
+  const id = `custom-${Date.now()}`
+  const profile: SpecialSiteProfile = {
+    id,
+    label: '自定义场景',
+    kind: 'custom',
+    domains: [],
+    enabled: false,
+    replacement: false,
+    selection: true,
+    dynamicScan: false,
+    conservative: true,
+    examSafe: false,
+    maxPerPage: 4,
+    density: 0.05,
+  }
+  lexiSettings.value.siteRules.specialProfiles = [profile, ...lexiSettings.value.siteRules.specialProfiles]
+}
+
+function removeSpecialProfile(id: string) {
+  lexiSettings.value.siteRules.specialProfiles = lexiSettings.value.siteRules.specialProfiles.filter(profile => profile.id !== id)
+}
+
+function formatSpecialDomains(profile: SpecialSiteProfile) {
+  return profile.domains.join('\n')
+}
+
+function updateSpecialDomains(profile: SpecialSiteProfile, value: string) {
+  profile.domains = parseDomainList(value)
 }
 
 function summarizeTokensByDay(logs: typeof aiCallLogs.value, days = 7) {
@@ -296,6 +394,84 @@ function removeSceneRule(index: number) {
         </div>
       </section>
 
+      <section v-else-if="activeTab === 'special'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 class="text-16px font-600">
+              特殊场景处理
+            </h2>
+            <p class="mt-1 max-w-2xl text-12px leading-5 text-neutral-500">
+              信息流站点可开启动态扫描并降低替换密度；学习、考试类站点默认关闭，避免影响答题或课堂页面。
+            </p>
+          </div>
+          <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="addSpecialProfile">
+            添加场景
+          </button>
+        </div>
+
+        <div class="mt-4 grid gap-4 lg:grid-cols-2">
+          <article v-for="profile in lexiSettings.siteRules.specialProfiles" :key="profile.id" class="rounded-2 border border-neutral-200 p-4">
+            <div class="flex items-start justify-between gap-3">
+              <label class="min-w-0 flex-1">
+                <span class="text-12px font-500 text-neutral-500">名称</span>
+                <input v-model="profile.label" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px font-600 outline-none focus:border-neutral-950">
+              </label>
+              <button v-if="profile.kind === 'custom'" class="mt-6 border-0 bg-transparent text-12px text-red-600 cursor-pointer" @click="removeSpecialProfile(profile.id)">
+                删除
+              </button>
+            </div>
+
+            <label class="mt-3 block">
+              <span class="text-12px font-500 text-neutral-500">域名</span>
+              <textarea
+                :value="formatSpecialDomains(profile)"
+                class="mt-1 min-h-20 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-13px leading-5 outline-none focus:border-neutral-950"
+                placeholder="x.com&#10;twitter.com"
+                @input="updateSpecialDomains(profile, ($event.target as HTMLTextAreaElement).value)"
+              />
+            </label>
+
+            <div class="mt-3 grid grid-cols-2 gap-2 text-12px">
+              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span>启用此场景</span>
+                <input v-model="profile.enabled" type="checkbox">
+              </label>
+              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span>考试安全</span>
+                <input v-model="profile.examSafe" type="checkbox">
+              </label>
+              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span>网页替换</span>
+                <input v-model="profile.replacement" type="checkbox">
+              </label>
+              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span>划词翻译</span>
+                <input v-model="profile.selection" type="checkbox">
+              </label>
+              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span>动态扫描</span>
+                <input v-model="profile.dynamicScan" type="checkbox">
+              </label>
+              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span>保守替换</span>
+                <input v-model="profile.conservative" type="checkbox">
+              </label>
+            </div>
+
+            <div class="mt-3 grid grid-cols-2 gap-3">
+              <label class="block">
+                <span class="text-12px text-neutral-500">单页上限</span>
+                <input v-model.number="profile.maxPerPage" type="number" min="0" max="20" class="mt-1 h-9 w-full rounded-2 border border-neutral-300 px-2 text-13px outline-none focus:border-neutral-950">
+              </label>
+              <label class="block">
+                <span class="text-12px text-neutral-500">密度 {{ Math.round((profile.density ?? 0) * 100) }}%</span>
+                <input v-model.number="profile.density" type="range" min="0" max="0.2" step="0.01" class="mt-2 w-full accent-neutral-950">
+              </label>
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section v-else-if="activeTab === 'vocabulary'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
         <div class="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -306,7 +482,32 @@ function removeSceneRule(index: number) {
               AI 补充、网页替换和划词翻译都会进入本地记录，后续可用于快速替换。
             </p>
           </div>
-          <span class="text-12px text-neutral-500">{{ vocabularyRecords.length }} 条</span>
+          <span class="text-12px text-neutral-500">{{ vocabularyRecords.length }} 条 · {{ formatBytes(storageStats.items[0].bytes) }}</span>
+        </div>
+        <div class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <h3 class="text-14px font-600">
+              今日学习概览
+            </h3>
+            <span class="text-12px text-neutral-500">新增 {{ todayStudySummary.total }} · 技术词 {{ todayStudySummary.technical }}</span>
+          </div>
+          <div class="mt-3 grid gap-2 text-12px lg:grid-cols-3">
+            <div class="rounded-2 bg-white px-3 py-2">
+              划词 {{ todayStudySummary.manual }}
+            </div>
+            <div class="rounded-2 bg-white px-3 py-2">
+              替换 {{ todayStudySummary.auto }}
+            </div>
+            <div class="rounded-2 bg-white px-3 py-2">
+              词库 {{ formatBytes(storageStats.items[0].bytes) }}
+            </div>
+          </div>
+          <p class="mt-3 text-12px leading-5 text-neutral-600">
+            {{ todayStudySummary.suggestion }}
+          </p>
+          <p v-if="todayStudySummary.terms.length" class="mt-2 text-12px leading-5 text-neutral-500">
+            {{ todayStudySummary.terms.join('；') }}
+          </p>
         </div>
         <div class="mt-4 max-h-[40rem] overflow-y-auto">
           <table class="w-full border-collapse text-left text-12px">
@@ -438,7 +639,7 @@ function removeSceneRule(index: number) {
       </section>
 
       <section v-else-if="activeTab === 'diagnostics'" class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div class="flex h-[36rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex shrink-0 items-center justify-between gap-3">
             <h2 class="text-16px font-600">
               最近 AI 调用
@@ -479,6 +680,32 @@ function removeSceneRule(index: number) {
               </div>
             </div>
           </div>
+          <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-2">
+            <div class="rounded-2 bg-neutral-50 px-3 py-2">
+              <div class="text-neutral-500">
+                本地存储估算
+              </div>
+              <div class="mt-1 text-16px font-700">
+                {{ formatBytes(storageStats.total) }}
+              </div>
+            </div>
+            <div class="rounded-2 bg-neutral-50 px-3 py-2">
+              <div class="text-neutral-500">
+                词库占用
+              </div>
+              <div class="mt-1 text-16px font-700">
+                {{ formatBytes(storageStats.items[0].bytes) }}
+              </div>
+            </div>
+            <div v-for="item in storageStats.items.slice(1)" :key="item.label" class="rounded-2 bg-neutral-50 px-3 py-2">
+              <div class="text-neutral-500">
+                {{ item.label }}
+              </div>
+              <div class="mt-1 font-700">
+                {{ formatBytes(item.bytes) }}
+              </div>
+            </div>
+          </div>
           <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             <div v-for="log in recentAiLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
               <div class="flex items-center justify-between gap-3">
@@ -498,7 +725,7 @@ function removeSceneRule(index: number) {
           </div>
         </div>
 
-        <div class="flex h-[36rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex shrink-0 items-center justify-between gap-3">
             <h2 class="text-16px font-600">
               最近访问网页

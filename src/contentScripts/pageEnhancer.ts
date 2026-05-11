@@ -1,9 +1,9 @@
 import browser from 'webextension-polyfill'
 import { onMessage } from 'webext-bridge/content-script'
-import { localTranslateSelection, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
+import { localTranslateSelection, requestLexiDialogAnswer, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
-import { isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
+import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import { settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { findCandidateByChinese } from '~/logic/vocabularyBank'
 import { getVocabularyId, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
@@ -63,6 +63,23 @@ interface ReplacementSeed {
   context: string
 }
 
+interface SelectionDetailView {
+  explanation?: string
+  context?: string
+  terms: Array<{
+    term: string
+    explanation: string
+  }>
+  advice?: string
+}
+
+interface LastTranslationState {
+  selected: string
+  translation: string
+  detail: string
+  context: string
+}
+
 function textNodeAllowed(node: Text) {
   const parent = node.parentElement
   if (!parent)
@@ -118,6 +135,71 @@ function createManualCandidate(translation: SelectionTranslation): VocabularyCan
     meaning: translation.explanation,
     example: `Selected on page: ${translation.original}`,
     tags: ['manual'],
+    difficulty: 2,
+  }
+}
+
+function normalizeTerm(value: unknown) {
+  if (!value || typeof value !== 'object')
+    return undefined
+
+  const item = value as { term?: unknown, explanation?: unknown }
+  const term = typeof item.term === 'string' ? item.term.trim() : ''
+  const explanation = typeof item.explanation === 'string' ? item.explanation.trim() : ''
+  if (!term || !explanation)
+    return undefined
+
+  return {
+    term,
+    explanation,
+  }
+}
+
+function normalizeSelectionDetail(value: unknown): SelectionDetailView {
+  if (!value || typeof value !== 'object')
+    return { terms: [] }
+
+  const detail = value as {
+    explanation?: unknown
+    context?: unknown
+    terms?: unknown
+    advice?: unknown
+    aiSuggestion?: unknown
+  }
+
+  return {
+    explanation: typeof detail.explanation === 'string' ? detail.explanation.trim() : undefined,
+    context: typeof detail.context === 'string' ? detail.context.trim() : undefined,
+    terms: Array.isArray(detail.terms)
+      ? detail.terms.map(normalizeTerm).filter(item => item != null)
+      : [],
+    advice: typeof detail.advice === 'string'
+      ? detail.advice.trim()
+      : typeof detail.aiSuggestion === 'string'
+        ? detail.aiSuggestion.trim()
+        : undefined,
+  }
+}
+
+function formatSelectionDetail(detail: SelectionDetailView) {
+  const lines = [
+    detail.explanation,
+    ...detail.terms.map(item => `名词：${item.term} - ${item.explanation}`),
+    detail.context ? `上下文：${detail.context}` : '',
+    detail.advice ? `AI 建议：${detail.advice}` : '',
+  ].filter(Boolean)
+
+  return lines.join('\n')
+}
+
+function createCandidateFromTerm(translation: SelectionTranslation, term: { term: string, explanation: string }): VocabularyCandidate {
+  const isChineseTerm = /[\u4E00-\u9FA5]/.test(term.term)
+  return {
+    original: isChineseTerm ? term.term : translation.original,
+    replacement: isChineseTerm ? translation.translation : term.term,
+    meaning: term.explanation,
+    example: `Selected on page: ${translation.original}`,
+    tags: ['technical', 'selection'],
     difficulty: 2,
   }
 }
@@ -210,6 +292,103 @@ function getPageStyleContent(customCss = '') {
       font: 12px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .lexi-dialog {
+      all: initial;
+      box-sizing: border-box;
+      position: fixed;
+      z-index: 2147483647;
+      inset: 12vh auto auto 50%;
+      transform: translateX(-50%);
+      width: min(720px, calc(100vw - 32px));
+      border: 1px solid #d4d4d4;
+      background: #fff;
+      color: #111827;
+      font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .lexi-dialog * {
+      box-sizing: border-box;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .lexi-dialog__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid #e5e7eb;
+      padding: 12px 14px;
+    }
+
+    .lexi-dialog__title {
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .lexi-dialog__close {
+      border: 0;
+      background: transparent;
+      color: #525252;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 2px;
+    }
+
+    .lexi-dialog__body {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .lexi-dialog__context,
+    .lexi-dialog__answer {
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      background: #f8fafc;
+      padding: 10px;
+      color: #525252;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .lexi-dialog__answer {
+      max-height: 220px;
+      background: #fff;
+      color: #111827;
+      font-size: 13px;
+    }
+
+    .lexi-dialog__form {
+      display: flex;
+      gap: 8px;
+    }
+
+    .lexi-dialog__input {
+      min-width: 0;
+      flex: 1;
+      border: 1px solid #d4d4d4;
+      border-radius: 0;
+      padding: 10px 11px;
+      color: #111827;
+      font-size: 14px;
+      outline: none;
+    }
+
+    .lexi-dialog__button {
+      border: 1px solid #111827;
+      border-radius: 0;
+      background: #111827;
+      color: #fff;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 0 14px;
     }
 
     ${customCss}
@@ -331,6 +510,22 @@ function pageFeatureEnabled(settings: LexiSettings) {
   )
 }
 
+function getReplacementBudget(settings: LexiSettings) {
+  const profile = findSpecialSiteProfile(settings)
+  const maxPerPage = profile?.conservative
+    ? Math.min(settings.replacement.maxPerPage, profile.maxPerPage ?? 6)
+    : settings.replacement.maxPerPage
+  const density = profile?.conservative
+    ? Math.min(settings.replacement.density, profile.density ?? 0.06)
+    : settings.replacement.density
+
+  return {
+    maxPerPage: Math.max(0, maxPerPage),
+    density: Math.max(0, density),
+    dynamicScan: Boolean(profile?.dynamicScan),
+  }
+}
+
 function getContextText(node: Text) {
   const text = node.parentElement?.textContent?.trim() ?? node.nodeValue ?? ''
   return text.replace(/\s+/g, ' ').slice(0, 420)
@@ -367,6 +562,108 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
     if (detailText)
       detail.textContent = detailText
   }
+}
+
+function getPageContext(range?: Range) {
+  const fromSelection = range?.commonAncestorContainer.textContent
+  const pageText = fromSelection || document.body.textContent || ''
+  return pageText.replace(/\s+/g, ' ').trim().slice(0, 1200)
+}
+
+function createDialogContext(lastTranslation?: LastTranslationState) {
+  const selection = window.getSelection()
+  const selected = selection?.toString().trim()
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+
+  return {
+    selected: selected || lastTranslation?.selected || '',
+    translation: lastTranslation?.translation || '',
+    detail: lastTranslation?.detail || '',
+    page: getPageContext(range) || lastTranslation?.context || '',
+  }
+}
+
+function renderDialogContext(context: ReturnType<typeof createDialogContext>) {
+  return [
+    context.selected ? `选区：${context.selected}` : '',
+    context.translation ? `最近翻译：${context.translation}` : '',
+    context.detail ? `说明：${context.detail}` : '',
+    context.page ? `页面：${context.page.slice(0, 360)}` : '',
+  ].filter(Boolean).join('\n')
+}
+
+function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslationState) {
+  ensurePageStyles(settings.ui.customCss)
+
+  const existing = document.querySelector<HTMLElement>('[data-lexi-dialog]')
+  if (existing) {
+    existing.remove()
+    return undefined
+  }
+
+  const context = createDialogContext(lastTranslation)
+  const dialog = document.createElement('section')
+  const head = document.createElement('div')
+  const title = document.createElement('div')
+  const close = document.createElement('button')
+  const body = document.createElement('div')
+  const contextBlock = document.createElement('div')
+  const answer = document.createElement('div')
+  const form = document.createElement('form')
+  const input = document.createElement('input')
+  const button = document.createElement('button')
+
+  dialog.dataset.lexiDialog = 'true'
+  dialog.className = 'lexi-dialog'
+  head.className = 'lexi-dialog__head'
+  title.className = 'lexi-dialog__title'
+  close.className = 'lexi-dialog__close'
+  body.className = 'lexi-dialog__body'
+  contextBlock.className = 'lexi-dialog__context'
+  answer.className = 'lexi-dialog__answer'
+  form.className = 'lexi-dialog__form'
+  input.className = 'lexi-dialog__input'
+  button.className = 'lexi-dialog__button'
+
+  title.textContent = 'Lexi 对话'
+  close.type = 'button'
+  close.textContent = '×'
+  contextBlock.textContent = renderDialogContext(context) || '当前页面暂无可用上下文。'
+  answer.textContent = '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。'
+  input.placeholder = context.selected ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
+  button.type = 'submit'
+  button.textContent = '发送'
+
+  close.addEventListener('click', () => dialog.remove())
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const question = input.value.trim()
+    if (!question)
+      return
+
+    answer.textContent = '思考中...'
+    button.setAttribute('disabled', 'true')
+    requestLexiDialogAnswer(settings, question, context, text => answer.textContent = text)
+      .then((text) => {
+        if (text)
+          answer.textContent = text
+      })
+      .catch((error) => {
+        answer.textContent = error instanceof Error ? error.message : '请求失败'
+      })
+      .finally(() => {
+        button.removeAttribute('disabled')
+      })
+  })
+
+  head.append(title, close)
+  form.append(input, button)
+  body.append(contextBlock, form, answer)
+  dialog.append(head, body)
+  document.documentElement.appendChild(dialog)
+  input.focus()
+
+  return dialog
 }
 
 async function translateSelection(
@@ -408,6 +705,10 @@ function createTechnicalCandidate(translation: SelectionTranslation, explanation
 export function startPageEnhancer(events: EnhancerEvents) {
   let disposed = false
   let tooltip: HTMLElement | undefined
+  let dynamicObserver: MutationObserver | undefined
+  let dynamicTimer: number | undefined
+  let dialog: HTMLElement | undefined
+  let lastTranslation: LastTranslationState | undefined
   let stats: PageStats = {
     replacements: 0,
     records: 0,
@@ -430,6 +731,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const { settings, records } = await getStoredState()
     const enabled = pageFeatureEnabled(settings)
     const replacementEnabled = settings.replacement.enabled && isSceneEnabled(settings, 'replacement')
+    const budget = getReplacementBudget(settings)
     stats = {
       replacements: 0,
       records: records.length,
@@ -437,7 +739,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       showFloatingStatus: settings.ui.showFloatingStatus,
     }
 
-    if (!replacementEnabled) {
+    if (!replacementEnabled || budget.maxPerPage < 1 || budget.density <= 0) {
       events.onStats(stats)
       return
     }
@@ -457,23 +759,29 @@ export function startPageEnhancer(events: EnhancerEvents) {
     })
 
     const textNodes: Text[] = []
-    while (walker.nextNode() && textNodes.length < settings.replacement.maxPerPage * 4)
+    while (walker.nextNode() && textNodes.length < budget.maxPerPage * 4)
       textNodes.push(walker.currentNode as Text)
 
     let nextRecords = records
     const aiReplacementSeeds: ReplacementSeed[] = []
     for (const node of textNodes) {
-      if (stats.replacements >= settings.replacement.maxPerPage)
+      if (stats.replacements >= budget.maxPerPage)
         break
 
       const context = getContextText(node)
       const sourceText = node.nodeValue ?? ''
-      let candidates = pickCandidates(sourceText, settings, records)
+      let candidates = pickCandidates(sourceText, {
+        ...settings,
+        replacement: {
+          ...settings.replacement,
+          density: budget.density,
+        },
+      }, records)
 
       if (!candidates.length && settings.ai.replacement.enabled)
         collectReplacementSeed(aiReplacementSeeds, sourceText, context)
 
-      const remaining = settings.replacement.maxPerPage - stats.replacements
+      const remaining = budget.maxPerPage - stats.replacements
       candidates = candidates.slice(0, remaining)
       const changed = replaceTextNode(node, candidates)
       if (!changed)
@@ -564,14 +872,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const translation = await translateSelection(settings, selected, context, updateTranslation)
     updateTranslation(translation)
 
+    let detailView: SelectionDetailView = { terms: [] }
     let detailText = ''
     let detailCandidate: VocabularyCandidate | undefined
     try {
       const detail = await requestSelectionDetail(settings, selected, translation.translation, context)
-      detailText = [
-        detail?.explanation,
-        detail?.context ? `上下文：${detail.context}` : '',
-      ].filter(Boolean).join('\n')
+      detailView = normalizeSelectionDetail(detail)
+      detailText = formatSelectionDetail(detailView)
       detailCandidate = detail?.candidate
       if (detailText)
         updateTranslation(translation, detailText)
@@ -584,18 +891,38 @@ export function startPageEnhancer(events: EnhancerEvents) {
       console.warn('[Lexi] AI selection detail failed', error)
     }
 
+    lastTranslation = {
+      selected,
+      translation: translation.translation,
+      detail: detailText,
+      context,
+    }
+
     if (!settings.history.enabled)
       return
 
     const candidate = detailCandidate
+      ?? (detailView.terms[0] ? createCandidateFromTerm(translation, detailView.terms[0]) : undefined)
       ?? (looksTechnicalTerm(selected) ? createTechnicalCandidate(translation, detailText) : createManualCandidate(translation))
-    const nextRecords = applyHistoryLimit(upsertVocabularyRecord(records, {
+    let nextRecords = upsertVocabularyRecord(records, {
       candidate,
       source: 'manual',
       pageUrl: location.href,
       pageTitle: document.title,
       context,
-    }), settings)
+    })
+
+    for (const term of detailView.terms.slice(1, 4)) {
+      nextRecords = upsertVocabularyRecord(nextRecords, {
+        candidate: createCandidateFromTerm(translation, term),
+        source: 'manual',
+        pageUrl: location.href,
+        pageTitle: document.title,
+        context,
+      })
+    }
+
+    nextRecords = applyHistoryLimit(nextRecords, settings)
     await saveRecords(nextRecords)
     stats.records = nextRecords.length
     stats.showFloatingStatus = settings.ui.showFloatingStatus
@@ -622,6 +949,37 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const onMouseUp = () => {
     window.setTimeout(handleSelection, 120)
+  }
+
+  const onSelectionChange = () => {
+    window.clearTimeout(dynamicTimer)
+    dynamicTimer = window.setTimeout(handleSelection, 180)
+  }
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.key.toLowerCase() !== 'k' || (!event.metaKey && !event.ctrlKey))
+      return
+
+    const target = event.target
+    if (target instanceof HTMLElement && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))
+      return
+
+    event.preventDefault()
+    getStoredState()
+      .then(({ settings }) => {
+        if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+          return
+
+        dialog = createLexiDialog(settings, lastTranslation) ?? dialog
+      })
+      .catch(error => console.warn('[Lexi] dialog failed', error))
+  }
+
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape')
+      return
+
+    document.querySelector<HTMLElement>('[data-lexi-dialog]')?.remove()
   }
 
   const onPointerOver = (event: PointerEvent) => {
@@ -676,19 +1034,44 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   run()
   document.addEventListener('mouseup', onMouseUp)
+  document.addEventListener('selectionchange', onSelectionChange)
+  document.addEventListener('keydown', onKeyDown)
+  document.addEventListener('keydown', onEscape)
   document.addEventListener('pointerover', onPointerOver)
   document.addEventListener('pointermove', onPointerMove)
   document.addEventListener('pointerout', onPointerOut)
   browser.storage.onChanged.addListener(onStorageChanged)
 
+  void getStoredState().then(({ settings }) => {
+    if (!getReplacementBudget(settings).dynamicScan)
+      return
+
+    dynamicObserver = new MutationObserver(() => {
+      window.clearTimeout(dynamicTimer)
+      dynamicTimer = window.setTimeout(() => {
+        run().catch(error => console.warn('[Lexi] dynamic scan failed', error))
+      }, 900)
+    })
+    dynamicObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    })
+  })
+
   return () => {
     disposed = true
+    dynamicObserver?.disconnect()
+    window.clearTimeout(dynamicTimer)
     removeContextTranslateListener()
     document.removeEventListener('mouseup', onMouseUp)
+    document.removeEventListener('selectionchange', onSelectionChange)
+    document.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('keydown', onEscape)
     document.removeEventListener('pointerover', onPointerOver)
     document.removeEventListener('pointermove', onPointerMove)
     document.removeEventListener('pointerout', onPointerOut)
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()
+    dialog?.remove()
   }
 }

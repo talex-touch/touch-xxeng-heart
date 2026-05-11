@@ -15,6 +15,12 @@ interface AiTranslationResponse {
 interface AiSelectionDetailResponse {
   explanation?: string
   context?: string
+  terms?: Array<{
+    term: string
+    explanation: string
+  }>
+  advice?: string
+  aiSuggestion?: string
   candidate?: VocabularyCandidate
 }
 
@@ -485,6 +491,7 @@ async function postAiText(
   scene: FeatureScene,
   text: string,
   onText?: (text: string) => void,
+  promptOverride?: string,
 ): Promise<string | undefined> {
   const request = createAiRequestContext(settings, scene)
   if (!request)
@@ -496,7 +503,7 @@ async function postAiText(
       headers: request.headers,
       body: buildChatBody(
         request.model,
-        request.prompt,
+        promptOverride ?? request.prompt,
         text,
         true,
       ),
@@ -519,7 +526,7 @@ async function postAiText(
       throw new Error(`AI request failed: ${response.status}`)
     }
 
-    const { text: translated, streamed, usageLog } = await readAiResponseTextWithUsage(response, `${request.prompt}\n${text}`, onText)
+    const { text: translated, streamed, usageLog } = await readAiResponseTextWithUsage(response, `${promptOverride ?? request.prompt}\n${text}`, onText)
     await recordAiCall({
       scene,
       endpoint: request.endpoint,
@@ -552,6 +559,37 @@ async function postAiText(
 
     throw error
   }
+}
+
+export async function requestLexiDialogAnswer(
+  settings: LexiSettings,
+  question: string,
+  context: {
+    selected?: string
+    translation?: string
+    detail?: string
+    page?: string
+  },
+  onText?: (text: string) => void,
+) {
+  return postAiText(
+    settings,
+    'selection',
+    [
+      `用户问题：${question}`,
+      context.selected ? `当前选区：${context.selected}` : '',
+      context.translation ? `最近翻译：${context.translation}` : '',
+      context.detail ? `翻译说明：${context.detail}` : '',
+      context.page ? `页面上下文：${context.page}` : '',
+    ].filter(Boolean).join('\n\n'),
+    onText,
+    [
+      '你是 Lexi 的网页上下文助手。',
+      '基于用户选区、最近翻译和页面上下文回答。',
+      '回答要简洁、直接、中文优先；如涉及术语，给出短解释。',
+      '不要输出 JSON、Markdown 标题或思考过程。',
+    ].join(' '),
+  )
 }
 
 export async function requestReplacementCandidates(
@@ -615,14 +653,15 @@ export async function requestSelectionDetail(
     translation,
     context: context.slice(0, 240),
     instruction: [
-      'If the selected text is a technical term, return a concise explanation and a candidate dictionary entry.',
-      'If it is not a technical term, return only a short explanation.',
-      'Keep explanation under 80 Chinese characters and context under 80 Chinese characters.',
-      'Return JSON: {"explanation":"","context":"","candidate":{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}}.',
+      'Explain only terms that help understand the selected text.',
+      'Put each term explanation into terms as one short item.',
+      'Keep explanation, context and advice under 60 Chinese characters each.',
+      'If the selected text contains a technical term, return a candidate dictionary entry.',
+      'Return JSON: {"explanation":"","terms":[{"term":"","explanation":""}],"context":"","advice":"","candidate":{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}}.',
     ].join(' '),
   }, [
     'You are Lexi. Return only compact JSON matching the requested schema.',
-    'Explain technical terms briefly when relevant.',
+    'Use plain Chinese. Keep term explanations short and useful.',
     'Do not include markdown or hidden reasoning.',
   ].join(' '))
 

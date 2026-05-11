@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { defaultSettings, mergeSettings } from './defaults'
-import { isPageEnabled, parseDomainList } from './siteRules'
+import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled, parseDomainList } from './siteRules'
 
 describe('site rules', () => {
   it('enables all pages by default', () => {
@@ -14,6 +14,7 @@ describe('site rules', () => {
         mode: 'allowlist',
         domains: ['example.com'],
         sceneRules: [],
+        specialProfiles: [],
       },
     })
 
@@ -35,5 +36,10 @@ describe('site rules', () => {
 
     expect(settings.replacement.difficulty).toBe(4)
     expect(settings.ai.selection.enabled).toBe(false)
+  })
+
+  it('disables learning exam profiles by default', () => {
+    expect(isSceneEnabled(defaultSettings, 'selection', 'https://mooc1.chaoxing.com/exam')).toBe(false)
+    expect(findSpecialSiteProfile(defaultSettings, 'https://x.com/home')?.dynamicScan).toBe(true)
   })
 })

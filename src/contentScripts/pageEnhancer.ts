@@ -547,14 +547,36 @@ function createSelectionDomKey(selected: string) {
 }
 
 function removeSelectionBlocksByKey(key: string) {
+  const blocks = document.querySelectorAll<HTMLElement>(`[data-lexi-selection-key="${key}"]`)
+  blocks.forEach(block => block.remove())
+}
+
+function pruneDuplicateSelectionBlocks(key: string, keep: HTMLElement) {
   document
     .querySelectorAll<HTMLElement>(`[data-lexi-selection-key="${key}"]`)
-    .forEach(block => block.remove())
+    .forEach((block) => {
+      if (block !== keep)
+        block.remove()
+    })
+}
+
+function claimSelectionDomLock(key: string) {
+  const lockKey = `lexiSelectionLock${key}`
+  const now = Date.now()
+  const current = Number(document.documentElement.dataset[lockKey] ?? 0)
+  if (current && now - current < 8000)
+    return false
+
+  document.documentElement.dataset[lockKey] = String(now)
+  return true
+}
+
+function releaseSelectionDomLock(key: string) {
+  delete document.documentElement.dataset[`lexiSelectionLock${key}`]
 }
 
 function createSelectionTranslationBlock(settings: LexiSettings, selected: string, requestKey: string, range?: Range) {
   ensurePageStyles(settings.ui.customCss)
-  removeSelectionBlocksByKey(requestKey)
 
   const anchor = getSelectionBlock(range)
   const block = document.createElement('div')
@@ -573,6 +595,7 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
 
   block.append(label, text, detail)
   anchor.insertAdjacentElement('afterend', block)
+  pruneDuplicateSelectionBlocks(requestKey, block)
 
   return {
     update(translation: SelectionTranslation, detailText?: string) {
@@ -1048,6 +1071,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const domKey = createSelectionDomKey(selected)
     if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey || recentSelectionKeys.has(selectionKey))
       return
+    if (!claimSelectionDomLock(domKey))
+      return
 
     selectionRequestId += 1
     activeSelectionBlock?.remove()
@@ -1068,6 +1093,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
     finally {
       activeSelectionKey = ''
+      releaseSelectionDomLock(domKey)
     }
   }
 
@@ -1162,8 +1188,15 @@ export function startPageEnhancer(events: EnhancerEvents) {
     activeSelectionBlock?.remove()
     activeSelectionBlock = undefined
     const domKey = createSelectionDomKey(selected)
+    if (!claimSelectionDomLock(domKey))
+      return
     removeSelectionBlocksByKey(domKey)
-    await translateAndRecord(selected, selected, range, selectionRequestId, domKey)
+    try {
+      await translateAndRecord(selected, selected, range, selectionRequestId, domKey)
+    }
+    finally {
+      releaseSelectionDomLock(domKey)
+    }
   })
 
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {

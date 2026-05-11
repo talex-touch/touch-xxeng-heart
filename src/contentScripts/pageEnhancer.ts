@@ -537,8 +537,24 @@ function getSelectionBlock(range?: Range) {
   return element?.closest(blockSelectors) ?? element ?? document.body
 }
 
-function createSelectionTranslationBlock(settings: LexiSettings, selected: string, range?: Range) {
+function createSelectionDomKey(selected: string) {
+  let hash = 0
+  const normalized = selected.replace(/\s+/g, ' ').trim()
+  for (let index = 0; index < normalized.length; index += 1)
+    hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0
+
+  return hash.toString(36)
+}
+
+function removeSelectionBlocksByKey(key: string) {
+  document
+    .querySelectorAll<HTMLElement>(`[data-lexi-selection-key="${key}"]`)
+    .forEach(block => block.remove())
+}
+
+function createSelectionTranslationBlock(settings: LexiSettings, selected: string, requestKey: string, range?: Range) {
   ensurePageStyles(settings.ui.customCss)
+  removeSelectionBlocksByKey(requestKey)
 
   const anchor = getSelectionBlock(range)
   const block = document.createElement('div')
@@ -547,6 +563,7 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   const detail = document.createElement('span')
 
   block.dataset.lexiSelectionTranslation = 'true'
+  block.dataset.lexiSelectionKey = requestKey
   block.className = 'lexi-selection-translation'
   label.className = 'lexi-selection-translation__label'
   text.className = 'lexi-selection-translation__text'
@@ -899,12 +916,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     currentEvents.onStats(stats)
   }
 
-  async function translateAndRecord(selected: string, context: string, range: Range | undefined, requestId: number) {
+  async function translateAndRecord(selected: string, context: string, range: Range | undefined, requestId: number, requestKey: string) {
     const { settings, records } = await getStoredState()
     if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
       return
 
-    const block = createSelectionTranslationBlock(settings, selected, range)
+    const block = createSelectionTranslationBlock(settings, selected, requestKey, range)
     activeSelectionBlock = block
     const updateTranslation = (translation: SelectionTranslation, detailText?: string) => {
       if (requestId === selectionRequestId)
@@ -1028,12 +1045,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
     const context = range?.commonAncestorContainer.textContent?.replace(/\s+/g, ' ').slice(0, 420) ?? selected
     const selectionKey = createSelectionKey(selected, context)
+    const domKey = createSelectionDomKey(selected)
     if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey || recentSelectionKeys.has(selectionKey))
       return
 
     selectionRequestId += 1
     activeSelectionBlock?.remove()
     activeSelectionBlock = undefined
+    removeSelectionBlocksByKey(domKey)
     activeSelectionKey = selectionKey
     rememberSelectionKey(selectionKey)
 
@@ -1044,7 +1063,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
 
     try {
-      await translateAndRecord(selected, context, range, selectionRequestId)
+      await translateAndRecord(selected, context, range, selectionRequestId, domKey)
       lastSelectionKey = selectionKey
     }
     finally {
@@ -1142,7 +1161,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     selectionRequestId += 1
     activeSelectionBlock?.remove()
     activeSelectionBlock = undefined
-    await translateAndRecord(selected, selected, range, selectionRequestId)
+    const domKey = createSelectionDomKey(selected)
+    removeSelectionBlocksByKey(domKey)
+    await translateAndRecord(selected, selected, range, selectionRequestId, domKey)
   })
 
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {

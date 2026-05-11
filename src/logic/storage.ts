@@ -1,4 +1,4 @@
-import { defaultSettings } from './defaults'
+import { defaultSettings, mergeSettings } from './defaults'
 import { aiCallLogsStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
 import type { AiCallLog, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
 import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
@@ -7,7 +7,7 @@ export const { data: lexiSettings, dataReady: lexiSettingsReady } = useWebExtens
   settingsStorageKey,
   defaultSettings,
   {
-    mergeDefaults: true,
+    mergeDefaults: value => mergeSettings(value as Partial<LexiSettings>),
   },
 )
 

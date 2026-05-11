@@ -1114,7 +1114,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     selectionRequestId += 1
     activeSelectionBlock?.remove()
     activeSelectionBlock = undefined
-    window.clearTimeout(selectionTimer)
+    scheduleSelectionCheck(900)
   }
 
   const onKeyDown = (event: KeyboardEvent) => {

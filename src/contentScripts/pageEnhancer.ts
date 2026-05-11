@@ -557,10 +557,15 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   block.append(label, text, detail)
   anchor.insertAdjacentElement('afterend', block)
 
-  return (translation: SelectionTranslation, detailText?: string) => {
-    text.textContent = translation.translation
-    if (detailText)
-      detail.textContent = detailText
+  return {
+    update(translation: SelectionTranslation, detailText?: string) {
+      text.textContent = translation.translation
+      if (detailText)
+        detail.textContent = detailText
+    },
+    remove() {
+      block.remove()
+    },
   }
 }
 
@@ -734,6 +739,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let lastSelectionKey = ''
   let activeSelectionKey = ''
   let latestSelectionSnapshot = ''
+  let selectionChangingSince = 0
+  let selectionRequestId = 0
+  let activeSelectionBlock: { remove: () => void } | undefined
   const recentSelectionKeys = new Set<string>()
   let stats: PageStats = {
     replacements: 0,
@@ -891,13 +899,22 @@ export function startPageEnhancer(events: EnhancerEvents) {
     currentEvents.onStats(stats)
   }
 
-  async function translateAndRecord(selected: string, context: string, range?: Range) {
+  async function translateAndRecord(selected: string, context: string, range: Range | undefined, requestId: number) {
     const { settings, records } = await getStoredState()
     if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
       return
 
-    const updateTranslation = createSelectionTranslationBlock(settings, selected, range)
+    const block = createSelectionTranslationBlock(settings, selected, range)
+    activeSelectionBlock = block
+    const updateTranslation = (translation: SelectionTranslation, detailText?: string) => {
+      if (requestId === selectionRequestId)
+        block.update(translation, detailText)
+    }
     const translation = await translateSelection(settings, selected, context, updateTranslation)
+    if (requestId !== selectionRequestId) {
+      block.remove()
+      return
+    }
     updateTranslation(translation)
 
     let detailView: SelectionDetailView = { terms: [] }
@@ -905,6 +922,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
     let detailCandidate: VocabularyCandidate | undefined
     try {
       const detail = await requestSelectionDetail(settings, selected, translation.translation, context)
+      if (requestId !== selectionRequestId) {
+        block.remove()
+        return
+      }
       detailView = normalizeSelectionDetail(detail)
       detailText = formatSelectionDetail(detailView)
       detailCandidate = detail?.candidate
@@ -917,6 +938,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
         updateTranslation(translation, detailText)
       }
       console.warn('[Lexi] AI selection detail failed', error)
+    }
+
+    if (requestId !== selectionRequestId) {
+      block.remove()
+      return
     }
 
     lastTranslation = {
@@ -974,14 +1000,20 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   function scheduleSelectionCheck(delay = 520) {
     latestSelectionSnapshot = getSelectionSnapshot()
+    if (!selectionChangingSince)
+      selectionChangingSince = performance.now()
+
+    const activeDuration = performance.now() - selectionChangingSince
+    const stableDelay = delay + Math.min(900, Math.floor(activeDuration / 120) * 120)
     window.clearTimeout(selectionTimer)
     selectionTimer = window.setTimeout(() => {
       const current = getSelectionSnapshot()
       if (!current || current !== latestSelectionSnapshot)
         return
 
+      selectionChangingSince = 0
       handleSelection().catch(error => console.warn('[Lexi] selection handling failed', error))
-    }, delay)
+    }, stableDelay)
   }
 
   async function handleSelection() {
@@ -999,6 +1031,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey || recentSelectionKeys.has(selectionKey))
       return
 
+    selectionRequestId += 1
+    activeSelectionBlock?.remove()
+    activeSelectionBlock = undefined
     activeSelectionKey = selectionKey
     rememberSelectionKey(selectionKey)
 
@@ -1009,7 +1044,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
 
     try {
-      await translateAndRecord(selected, context, range)
+      await translateAndRecord(selected, context, range, selectionRequestId)
       lastSelectionKey = selectionKey
     }
     finally {
@@ -1032,6 +1067,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const onSelectionChange = () => {
     latestSelectionSnapshot = getSelectionSnapshot()
+    if (!selectionChangingSince)
+      selectionChangingSince = performance.now()
+    selectionRequestId += 1
+    activeSelectionBlock?.remove()
+    activeSelectionBlock = undefined
     window.clearTimeout(selectionTimer)
   }
 
@@ -1099,7 +1139,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     const selection = window.getSelection()
     const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
-    await translateAndRecord(selected, selected, range)
+    selectionRequestId += 1
+    activeSelectionBlock?.remove()
+    activeSelectionBlock = undefined
+    await translateAndRecord(selected, selected, range, selectionRequestId)
   })
 
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {

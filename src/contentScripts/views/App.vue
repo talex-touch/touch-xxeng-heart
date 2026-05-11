@@ -1,60 +1,25 @@
 <script setup lang="ts">
 import 'uno.css'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { startPageEnhancer } from '../pageEnhancer'
 import type { PageStats } from '../pageEnhancer'
-import type { SelectionTranslation } from '~/logic/types'
 
 const stats = ref<PageStats>({
   replacements: 0,
   records: 0,
   enabled: false,
-  showFloatingStatus: true,
+  showFloatingStatus: false,
 })
-const translation = ref<SelectionTranslation>()
-const translationPosition = ref({ x: 0, y: 0 })
-const viewport = ref({ width: 1024, height: 768 })
 let stopEnhancer: (() => void) | undefined
-let hideTimer: number | undefined
-
-const translationStyle = computed(() => ({
-  left: `${Math.min(Math.max(12, translationPosition.value.x - 160), viewport.value.width - 332)}px`,
-  top: `${Math.min(Math.max(12, translationPosition.value.y), viewport.value.height - 180)}px`,
-}))
-
-function updateViewport() {
-  viewport.value = {
-    width: window.innerWidth,
-    height: window.innerHeight,
-  }
-}
-
-function showTranslation(value: SelectionTranslation, position: { x: number, y: number }) {
-  translation.value = value
-  translationPosition.value = position
-
-  if (hideTimer)
-    window.clearTimeout(hideTimer)
-
-  hideTimer = window.setTimeout(() => {
-    translation.value = undefined
-  }, 9000)
-}
 
 onMounted(() => {
-  updateViewport()
-  window.addEventListener('resize', updateViewport)
   stopEnhancer = startPageEnhancer({
-    onSelection: showTranslation,
     onStats: value => stats.value = value,
   })
 })
 
 onUnmounted(() => {
   stopEnhancer?.()
-  window.removeEventListener('resize', updateViewport)
-  if (hideTimer)
-    window.clearTimeout(hideTimer)
 })
 </script>
 
@@ -72,25 +37,6 @@ onUnmounted(() => {
       <div v-if="stats.enabled" class="mt-1 text-neutral-500">
         替换 {{ stats.replacements }} · 记录 {{ stats.records }}
       </div>
-    </div>
-
-    <div
-      v-if="translation"
-      class="fixed max-w-80 rounded-2 border border-neutral-200 bg-white px-4 py-3 text-left text-13px text-neutral-800 shadow-xl"
-      :style="translationStyle"
-    >
-      <div class="text-12px text-neutral-500">
-        划词翻译 · {{ translation.source === 'ai' ? 'AI' : '本地' }}
-      </div>
-      <div class="mt-1 break-words text-15px font-600">
-        {{ translation.translation }}
-      </div>
-      <div class="mt-2 break-words leading-5 text-neutral-600">
-        {{ translation.explanation }}
-      </div>
-      <button class="mt-3 border-0 bg-transparent p-0 text-12px text-neutral-500 underline cursor-pointer" @click="translation = undefined">
-        关闭
-      </button>
     </div>
   </div>
 </template>

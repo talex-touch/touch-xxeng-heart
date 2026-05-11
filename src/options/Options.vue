@@ -379,6 +379,11 @@ function removeSceneRule(index: number) {
               <input v-model="lexiSettings.ui.showFloatingStatus" type="checkbox" class="h-5 w-5">
             </label>
             <label class="mt-4 block">
+              <span class="text-13px font-500">快捷对话键</span>
+              <input v-model.trim="lexiSettings.ui.dialogShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="mod+k">
+              <span class="mt-1 block text-12px text-neutral-500">支持 mod+k、ctrl+k、meta+k、alt+l、shift+mod+k。</span>
+            </label>
+            <label class="mt-4 block">
               <span class="text-13px font-500">每日推荐数量</span>
               <input v-model.number="lexiSettings.study.dailyGoal" type="number" min="1" max="30" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
             </label>

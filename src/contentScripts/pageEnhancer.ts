@@ -666,6 +666,26 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   return dialog
 }
 
+function shortcutMatches(event: KeyboardEvent, shortcut: string) {
+  const parts = shortcut.toLowerCase().split('+').map(part => part.trim()).filter(Boolean)
+  const key = parts.at(-1)
+  if (!key)
+    return false
+
+  const wantsMod = parts.includes('mod')
+  const wantsCtrl = parts.includes('ctrl') || parts.includes('control')
+  const wantsMeta = parts.includes('meta') || parts.includes('cmd') || parts.includes('command')
+  const wantsAlt = parts.includes('alt') || parts.includes('option')
+  const wantsShift = parts.includes('shift')
+
+  return event.key.toLowerCase() === key
+    && (!wantsMod || event.metaKey || event.ctrlKey)
+    && (!wantsCtrl || event.ctrlKey)
+    && (!wantsMeta || event.metaKey)
+    && (!wantsAlt || event.altKey)
+    && (!wantsShift || event.shiftKey)
+}
+
 async function translateSelection(
   settings: LexiSettings,
   selected: string,
@@ -710,6 +730,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let selectionTimer: number | undefined
   let dialog: HTMLElement | undefined
   let lastTranslation: LastTranslationState | undefined
+  let dialogShortcut = defaultSettings.ui.dialogShortcut
   let lastSelectionKey = ''
   let activeSelectionKey = ''
   let stats: PageStats = {
@@ -727,6 +748,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       enabled: pageFeatureEnabled(settings),
       showFloatingStatus: settings.ui.showFloatingStatus,
     }
+    dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
     events.onStats(stats)
   }
 
@@ -735,6 +757,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const enabled = pageFeatureEnabled(settings)
     const replacementEnabled = settings.replacement.enabled && isSceneEnabled(settings, 'replacement')
     const budget = getReplacementBudget(settings)
+    dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
     stats = {
       replacements: 0,
       records: records.length,
@@ -972,7 +995,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.key.toLowerCase() !== 'k' || (!event.metaKey && !event.ctrlKey))
+    if (event.defaultPrevented || !shortcutMatches(event, dialogShortcut))
       return
 
     const target = event.target
@@ -985,6 +1008,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
         if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
           return
 
+        dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
         dialog = createLexiDialog(settings, lastTranslation) ?? dialog
       })
       .catch(error => console.warn('[Lexi] dialog failed', error))

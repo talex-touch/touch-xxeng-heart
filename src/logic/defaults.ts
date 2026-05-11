@@ -54,8 +54,8 @@ export const defaultSettings: LexiSettings = {
         dynamicScan: true,
         conservative: true,
         examSafe: false,
-        maxPerPage: 4,
-        density: 0.06,
+        maxPerPage: 8,
+        density: 0.1,
       },
       {
         id: 'discourse',
@@ -68,8 +68,8 @@ export const defaultSettings: LexiSettings = {
         dynamicScan: true,
         conservative: true,
         examSafe: false,
-        maxPerPage: 6,
-        density: 0.05,
+        maxPerPage: 10,
+        density: 0.09,
       },
       {
         id: 'chaoxing',
@@ -123,6 +123,7 @@ export const defaultSettings: LexiSettings = {
   },
   ui: {
     showFloatingStatus: false,
+    dialogShortcut: 'mod+k',
     customCss: '',
   },
   ai: {

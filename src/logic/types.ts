@@ -121,6 +121,7 @@ export interface HistorySettings {
 
 export interface UiSettings {
   showFloatingStatus: boolean
+  dialogShortcut: string
   customCss: string
 }
 

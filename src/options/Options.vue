@@ -26,6 +26,7 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
 
 const activeTab = ref<OptionsTab>('settings')
 const newSceneRuleDomain = ref('')
+const vocabularySearchQuery = ref('')
 const domainText = computed({
   get: () => formatDomainList(lexiSettings.value.siteRules.domains),
   set: value => lexiSettings.value.siteRules.domains = parseDomainList(value),
@@ -47,7 +48,24 @@ const aiSceneTokenStats = computed(() => scenes.map(scene => ({
     .reduce((sum, log) => sum + (log.totalTokens ?? 0), 0),
 })))
 const recentPageVisits = computed(() => pageVisitLogs.value)
-const recentVocabularyRecords = computed(() => vocabularyRecords.value.slice(0, 80))
+const filteredVocabularyRecords = computed(() => {
+  const query = normalizeSearchText(vocabularySearchQuery.value)
+  if (!query)
+    return vocabularyRecords.value
+
+  return vocabularyRecords.value.filter(record => normalizeSearchText([
+    record.original,
+    record.replacement,
+    record.meaning,
+    record.example,
+    record.tags.join(' '),
+    record.context,
+    record.pageTitle,
+    record.pageUrl,
+    record.source,
+  ].filter(Boolean).join(' ')).includes(query))
+})
+const recentVocabularyRecords = computed(() => filteredVocabularyRecords.value.slice(0, 120))
 const todayStudySummary = computed(() => createTodayStudySummary(vocabularyRecords.value))
 const storageStats = computed(() => {
   const items = [
@@ -123,6 +141,10 @@ function formatBytes(bytes: number) {
     return `${(kb / 1024).toFixed(2)} MB`
 
   return `${kb.toFixed(1)} KB`
+}
+
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
 function createTodayStudySummary(records: typeof vocabularyRecords.value) {
@@ -487,7 +509,17 @@ function removeSceneRule(index: number) {
               AI 补充、网页替换和划词翻译都会进入本地记录，后续可用于快速替换。
             </p>
           </div>
-          <span class="text-12px text-neutral-500">{{ vocabularyRecords.length }} 条 · {{ formatBytes(storageStats.items[0].bytes) }}</span>
+          <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · {{ formatBytes(storageStats.items[0].bytes) }}</span>
+        </div>
+        <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <input
+            v-model.trim="vocabularySearchQuery"
+            class="h-10 w-full rounded-1 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950"
+            placeholder="搜索原文、翻译、解释、上下文、标签、页面标题或 URL"
+          >
+          <button class="rounded-1 border border-neutral-200 bg-white px-3 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!vocabularySearchQuery" @click="vocabularySearchQuery = ''">
+            清空
+          </button>
         </div>
         <div class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
           <div class="flex flex-wrap items-center justify-between gap-3">
@@ -559,7 +591,7 @@ function removeSceneRule(index: number) {
             </tbody>
           </table>
           <p v-if="!recentVocabularyRecords.length" class="rounded-2 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-            暂无词库记录。
+            {{ vocabularySearchQuery ? '没有匹配的词库记录。' : '暂无词库记录。' }}
           </p>
         </div>
       </section>

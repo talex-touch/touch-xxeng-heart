@@ -4,10 +4,10 @@ import { localTranslateSelection, requestLexiDialogAnswer, requestReplacementCan
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
-import { settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
+import { pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { findCandidateByChinese } from '~/logic/vocabularyBank'
 import { getVocabularyId, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
-import type { LexiSettings, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
+import type { LexiSettings, PageTranslationBlock, PageTranslationCache, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
 interface EnhancerEvents {
   onStats: (stats: PageStats) => void
@@ -33,6 +33,8 @@ const ignoredSelectors = [
   '[contenteditable="true"]',
   '[data-lexi-token]',
   '[data-lexi-selection-translation]',
+  '[data-lexi-page-translation]',
+  '[data-lexi-dialog]',
 ]
 
 const blockSelectors = [
@@ -53,6 +55,29 @@ const blockSelectors = [
   'section',
   'article',
   'div',
+].join(',')
+
+const selectionAnchorSelectors = [
+  '[data-testid="tweetText"]',
+  '[data-testid="tweet"] div[lang]',
+  '[data-testid="tweet"]',
+  'article div[lang]',
+  'article p',
+  'article blockquote',
+  'p',
+  'li',
+  'blockquote',
+  'dd',
+  'dt',
+  'figcaption',
+  'td',
+  'th',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
 ].join(',')
 
 const maxAiReplacementSeedsPerPage = 3
@@ -290,6 +315,20 @@ function getPageStyleContent(customCss = '') {
       margin-top: 0.45em;
       color: rgba(17, 24, 39, 0.68);
       font: 12px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .lexi-page-translation {
+      all: initial;
+      box-sizing: border-box;
+      display: block;
+      margin: 0.55em 0;
+      border-left: 3px solid #0ea5e9;
+      background: rgba(14, 165, 233, 0.08);
+      padding: 0.55em 0.7em;
+      color: #0f172a;
+      font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
@@ -534,7 +573,118 @@ function getContextText(node: Text) {
 function getSelectionBlock(range?: Range) {
   const node = range?.commonAncestorContainer
   const element = node instanceof Element ? node : node?.parentElement
+  const anchor = element?.closest<HTMLElement>(selectionAnchorSelectors)
+  if (anchor)
+    return anchor
+
+  if (range) {
+    const container = document.createElement('span')
+    container.dataset.lexiSelectionAnchor = 'true'
+    container.style.cssText = 'display:block;height:0;overflow:hidden;'
+    try {
+      const collapsed = range.cloneRange()
+      collapsed.collapse(false)
+      collapsed.insertNode(container)
+      return container
+    }
+    catch {}
+  }
+
   return element?.closest(blockSelectors) ?? element ?? document.body
+}
+
+function insertAfterSelectionAnchor(anchor: Element, block: HTMLElement) {
+  if (anchor instanceof HTMLElement && anchor.dataset.lexiSelectionAnchor === 'true') {
+    const parent = anchor.parentElement
+    if (parent)
+      parent.insertAdjacentElement('afterend', block)
+    else
+      anchor.insertAdjacentElement('afterend', block)
+
+    anchor.remove()
+    return
+  }
+
+  anchor.insertAdjacentElement('afterend', block)
+}
+
+function getPageTranslationCacheKey() {
+  return `${pageTranslationsStorageKey}:${location.href}`
+}
+
+function createPageTranslationBlockId(index: number, text: string) {
+  return `${index}:${createSelectionDomKey(text)}`
+}
+
+function createPageTranslationElement(block: PageTranslationBlock) {
+  const element = document.createElement('div')
+  element.dataset.lexiPageTranslation = 'true'
+  element.dataset.lexiPageTranslationId = block.id
+  element.className = 'lexi-page-translation'
+  element.textContent = block.translation
+  return element
+}
+
+function removePageTranslationElements() {
+  document
+    .querySelectorAll<HTMLElement>('[data-lexi-page-translation]')
+    .forEach(element => element.remove())
+}
+
+function getPageTranslationTargets(limit = 12) {
+  const selectors = location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
+    ? '[data-testid="tweetText"], article div[lang]'
+    : 'article p, article div[lang], main p, main li, p, li'
+  const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors))
+  const seen = new Set<string>()
+  const targets: Array<{ element: HTMLElement, text: string, id: string }> = []
+
+  for (const element of elements) {
+    if (targets.length >= limit)
+      break
+
+    if (element.closest('[data-lexi-page-translation], [data-lexi-selection-translation], [data-lexi-dialog], [data-lexi-token]'))
+      continue
+
+    const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? ''
+    if (text.length < 24 || text.length > 600 || seen.has(text))
+      continue
+
+    seen.add(text)
+    targets.push({
+      element,
+      text,
+      id: createPageTranslationBlockId(targets.length, text),
+    })
+  }
+
+  return targets
+}
+
+async function readPageTranslationCache() {
+  const stored = await browser.storage.local.get(getPageTranslationCacheKey())
+  return readJsonValue<PageTranslationCache | undefined>(stored[getPageTranslationCacheKey()], undefined)
+}
+
+async function savePageTranslationCache(cache: PageTranslationCache) {
+  await browser.storage.local.set({ [getPageTranslationCacheKey()]: JSON.stringify(cache) })
+}
+
+async function restorePageTranslationCache(settings: LexiSettings) {
+  const cache = await readPageTranslationCache()
+  if (!cache?.enabled || !cache.blocks.length)
+    return
+
+  ensurePageStyles(settings.ui.customCss)
+  removePageTranslationElements()
+  const targets = getPageTranslationTargets(cache.blocks.length + 4)
+  for (const block of cache.blocks) {
+    const target = targets.find(item => item.id === block.id || item.text === block.source)
+    if (!target)
+      continue
+
+    target.element.insertAdjacentElement('afterend', createPageTranslationElement(block))
+  }
 }
 
 function createSelectionDomKey(selected: string) {
@@ -594,7 +744,7 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   text.textContent = `翻译中：${selected}`
 
   block.append(label, text, detail)
-  anchor.insertAdjacentElement('afterend', block)
+  insertAfterSelectionAnchor(anchor, block)
   pruneDuplicateSelectionBlocks(requestKey, block)
 
   return {
@@ -780,6 +930,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let selectionChangingSince = 0
   let selectionRequestId = 0
   let activeSelectionBlock: { remove: () => void } | undefined
+  let pageTranslationRunning = false
+  let pageTranslationRunId = 0
   const recentSelectionKeys = new Set<string>()
   let stats: PageStats = {
     replacements: 0,
@@ -894,6 +1046,123 @@ export function startPageEnhancer(events: EnhancerEvents) {
       void queueAiReplacementSeeds(settings, aiReplacementSeeds, events)
         .catch(error => console.warn('[Lexi] AI replacement seed queue failed', error))
     }
+  }
+
+  async function runPageTranslation(settings: LexiSettings, runId: number) {
+    ensurePageStyles(settings.ui.customCss)
+    removePageTranslationElements()
+
+    const targets = getPageTranslationTargets()
+    await savePageTranslationCache({
+      url: location.href,
+      title: document.title,
+      enabled: true,
+      blocks: [],
+      updatedAt: Date.now(),
+    })
+
+    const blocks: PageTranslationBlock[] = []
+    for (const target of targets) {
+      if (!pageTranslationRunning || runId !== pageTranslationRunId)
+        break
+
+      const placeholder: PageTranslationBlock = {
+        id: target.id,
+        source: target.text,
+        translation: '翻译中...',
+      }
+      const element = createPageTranslationElement(placeholder)
+      target.element.insertAdjacentElement('afterend', element)
+
+      const translation = await translateSelection(settings, target.text, target.text)
+      if (!pageTranslationRunning || runId !== pageTranslationRunId) {
+        element.remove()
+        break
+      }
+
+      const block: PageTranslationBlock = {
+        ...placeholder,
+        translation: translation.translation,
+      }
+      element.textContent = block.translation
+      blocks.push(block)
+      await savePageTranslationCache({
+        url: location.href,
+        title: document.title,
+        enabled: pageTranslationRunning,
+        blocks,
+        updatedAt: Date.now(),
+      })
+    }
+
+    if (runId !== pageTranslationRunId)
+      return
+
+    const cache: PageTranslationCache = {
+      url: location.href,
+      title: document.title,
+      enabled: blocks.length > 0 && pageTranslationRunning,
+      blocks,
+      updatedAt: Date.now(),
+    }
+    await savePageTranslationCache(cache)
+    pageTranslationRunning = false
+  }
+
+  async function startPageTranslation() {
+    if (pageTranslationRunning)
+      return { ok: true, message: '当前页面翻译正在进行中。', blocks: 0 }
+
+    const { settings } = await getStoredState()
+    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+      return { ok: false, message: '划词翻译场景未启用。', blocks: 0 }
+
+    pageTranslationRunning = true
+    pageTranslationRunId += 1
+    const runId = pageTranslationRunId
+    void runPageTranslation(settings, runId)
+      .catch(error => console.warn('[Lexi] page translation failed', error))
+      .finally(() => {
+        if (runId === pageTranslationRunId)
+          pageTranslationRunning = false
+      })
+
+    return { ok: true, message: '已启用当前页面自动翻译，结果会逐段插入并保存。', blocks: 0 }
+  }
+
+  async function stopPageTranslation() {
+    pageTranslationRunId += 1
+    pageTranslationRunning = false
+    removePageTranslationElements()
+    const cache = await readPageTranslationCache()
+    await savePageTranslationCache({
+      url: location.href,
+      title: document.title,
+      enabled: false,
+      blocks: cache?.blocks ?? [],
+      updatedAt: Date.now(),
+    })
+
+    return { ok: true, message: '已停止当前页面自动翻译。' }
+  }
+
+  async function getPageTranslationStatus() {
+    const cache = await readPageTranslationCache()
+    return {
+      ok: true,
+      enabled: Boolean(cache?.enabled || pageTranslationRunning),
+      blocks: cache?.blocks.length ?? 0,
+      cached: Boolean(cache?.blocks.length),
+      bytes: cache ? new Blob([JSON.stringify(cache)]).size : 0,
+    }
+  }
+
+  async function restoreSavedPageTranslation() {
+    const { settings } = await getStoredState()
+    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+      return
+
+    await restorePageTranslationCache(settings)
   }
 
   async function queueAiReplacementSeeds(settings: LexiSettings, seeds: ReplacementSeed[], currentEvents: EnhancerEvents) {
@@ -1021,7 +1290,16 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   function getSelectionSnapshot() {
-    return window.getSelection()?.toString().trim() ?? ''
+    const selection = window.getSelection()
+    const selected = selection?.toString().trim() ?? ''
+    if (!selection?.rangeCount || !selected)
+      return ''
+
+    const element = selection.getRangeAt(0).commonAncestorContainer.parentElement
+    if (element?.closest('[data-lexi-selection-translation], [data-lexi-page-translation], [data-lexi-dialog]'))
+      return ''
+
+    return selected
   }
 
   function createSelectionKey(selected: string, context: string) {
@@ -1196,6 +1474,18 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   })
 
+  const removePageTranslateStartListener = onMessage('lexi-page-translate-start', () => {
+    return startPageTranslation()
+  })
+
+  const removePageTranslateStopListener = onMessage('lexi-page-translate-stop', () => {
+    return stopPageTranslation()
+  })
+
+  const removePageTranslateStatusListener = onMessage('lexi-page-translate-status', () => {
+    return getPageTranslationStatus()
+  })
+
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {
     if (areaName === 'local' && changes[settingsStorageKey])
       refreshStats()
@@ -1207,6 +1497,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   })
 
   run()
+  restoreSavedPageTranslation().catch(error => console.warn('[Lexi] restore page translation failed', error))
   document.addEventListener('mouseup', onMouseUp)
   document.addEventListener('pointerup', onPointerUp)
   document.addEventListener('keyup', onKeyUp)
@@ -1240,6 +1531,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.clearTimeout(dynamicTimer)
     window.clearTimeout(selectionTimer)
     removeContextTranslateListener()
+    removePageTranslateStartListener()
+    removePageTranslateStopListener()
+    removePageTranslateStatusListener()
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('pointerup', onPointerUp)
     document.removeEventListener('keyup', onKeyUp)

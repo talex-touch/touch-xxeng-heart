@@ -119,8 +119,18 @@ function createAiRequestContext(settings: LexiSettings, scene: FeatureScene): Ai
   }
 }
 
+const reasoningModelPattern = /(?:^|[\W_])(?:o1|o3|o4|r1|reasoner|reasoning|thinking)(?:$|[\W_])/i
+
+function modelPrefersNonStreaming(model: string) {
+  return reasoningModelPattern.test(model)
+}
+
+function modelAcceptsTemperature(model: string) {
+  return !modelPrefersNonStreaming(model)
+}
+
 function buildChatBody(model: string, system: string, user: string, stream: boolean) {
-  return JSON.stringify({
+  const body: Record<string, unknown> = {
     model,
     messages: [
       {
@@ -132,9 +142,13 @@ function buildChatBody(model: string, system: string, user: string, stream: bool
         content: user,
       },
     ],
-    temperature: 0.2,
     stream,
-  })
+  }
+
+  if (modelAcceptsTemperature(model))
+    body.temperature = 0.2
+
+  return JSON.stringify(body)
 }
 
 function estimateTokens(value: string) {
@@ -162,12 +176,24 @@ function getUsageLog(usage: OpenAiUsage | undefined, promptText: string, complet
 }
 
 function parseJsonContent<T>(content: string): T {
-  const fenceStart = content.indexOf('```')
-  const fenceEnd = fenceStart >= 0 ? content.indexOf('```', fenceStart + 3) : -1
+  const cleaned = stripThinkingText(content)
+  const fenceStart = cleaned.indexOf('```')
+  const fenceEnd = fenceStart >= 0 ? cleaned.indexOf('```', fenceStart + 3) : -1
   const fenced = fenceStart >= 0 && fenceEnd > fenceStart
-    ? content.slice(fenceStart + 3, fenceEnd).replace(/^json\s*/i, '')
-    : content
-  return JSON.parse(fenced.trim()) as T
+    ? cleaned.slice(fenceStart + 3, fenceEnd).replace(/^json\s*/i, '')
+    : cleaned
+
+  try {
+    return JSON.parse(fenced.trim()) as T
+  }
+  catch {
+    const start = fenced.indexOf('{')
+    const end = fenced.lastIndexOf('}')
+    if (start >= 0 && end > start)
+      return JSON.parse(fenced.slice(start, end + 1).trim()) as T
+
+    throw new Error('AI response JSON parse failed')
+  }
 }
 
 function extractJsonObject<T>(value: unknown): T {
@@ -261,7 +287,9 @@ async function readAiResponseJson<T>(response: Response): Promise<{ data: T, str
 function stripThinkingText(value: string) {
   return value
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
     .replace(/<think>[\s\S]*$/gi, '')
+    .replace(/<thinking>[\s\S]*$/gi, '')
     .trim()
 }
 
@@ -297,7 +325,28 @@ function normalizeTranslationText(value: string) {
   }
   catch {}
 
-  return content
+  return content.replace(/^(译文|翻译|translation)\s*[:：]\s*/i, '').trim()
+}
+
+async function fetchChatCompletion(request: AiRequestContext, system: string, user: string, stream: boolean) {
+  return fetch(request.endpoint, {
+    method: 'POST',
+    headers: request.headers,
+    body: buildChatBody(
+      request.model,
+      system,
+      user,
+      stream,
+    ),
+  })
+}
+
+function shouldRetryWithoutStream(status: number, error: string) {
+  return status === 400 && /stream|temperature|unsupported|not support|does not support|invalid parameter/i.test(error)
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function getRawAiText(value: unknown) {
@@ -421,19 +470,23 @@ async function postAiJson<T>(
 
   try {
     const user = JSON.stringify({ scene, ...payload })
-    const response = await fetch(request.endpoint, {
-      method: 'POST',
-      headers: request.headers,
-      body: buildChatBody(
-        request.model,
-        promptOverride ?? request.prompt,
-        user,
-        true,
-      ),
-    })
+    const system = promptOverride ?? request.prompt
+    const stream = !modelPrefersNonStreaming(request.model)
+    let response = await fetchChatCompletion(request, system, user, stream)
+    let retryError: string | undefined
+    let firstError: string | undefined
 
     if (!response.ok) {
-      const error = await readErrorText(response)
+      firstError = await readErrorText(response)
+      if (stream && shouldRetryWithoutStream(response.status, firstError)) {
+        retryError = firstError
+        firstError = undefined
+        response = await fetchChatCompletion(request, system, user, false)
+      }
+    }
+
+    if (!response.ok) {
+      const error = firstError ?? await readErrorText(response)
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -443,14 +496,35 @@ async function postAiJson<T>(
         streamed: false,
         ok: false,
         status: response.status,
-        error,
+        error: retryError ? `${retryError}; retry: ${error}` : error,
         durationMs: Math.round(performance.now() - request.startedAt),
       })
       throw new Error(`AI request failed: ${response.status}`)
     }
 
-    const { data, streamed } = await readAiResponseJson<T>(response)
-    const usageLog = getUsageLog(undefined, `${promptOverride ?? request.prompt}\n${user}`, JSON.stringify(data))
+    let data: T
+    let streamed = false
+    try {
+      const result = await readAiResponseJson<T>(response)
+      data = result.data
+      streamed = result.streamed
+    }
+    catch (error) {
+      if (!stream)
+        throw error
+
+      retryError = getErrorMessage(error)
+      response = await fetchChatCompletion(request, system, user, false)
+      if (!response.ok) {
+        const responseError = await readErrorText(response)
+        throw new Error(`${retryError}; retry: ${responseError}`)
+      }
+
+      const result = await readAiResponseJson<T>(response)
+      data = result.data
+      streamed = result.streamed
+    }
+    const usageLog = getUsageLog(undefined, `${system}\n${user}`, JSON.stringify(data))
 
     await recordAiCall({
       scene,
@@ -498,19 +572,23 @@ async function postAiText(
     return undefined
 
   try {
-    const response = await fetch(request.endpoint, {
-      method: 'POST',
-      headers: request.headers,
-      body: buildChatBody(
-        request.model,
-        promptOverride ?? request.prompt,
-        text,
-        true,
-      ),
-    })
+    const system = promptOverride ?? request.prompt
+    const stream = !modelPrefersNonStreaming(request.model)
+    let response = await fetchChatCompletion(request, system, text, stream)
+    let retryError: string | undefined
+    let firstError: string | undefined
 
     if (!response.ok) {
-      const error = await readErrorText(response)
+      firstError = await readErrorText(response)
+      if (stream && shouldRetryWithoutStream(response.status, firstError)) {
+        retryError = firstError
+        firstError = undefined
+        response = await fetchChatCompletion(request, system, text, false)
+      }
+    }
+
+    if (!response.ok) {
+      const error = firstError ?? await readErrorText(response)
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -520,13 +598,37 @@ async function postAiText(
         streamed: false,
         ok: false,
         status: response.status,
-        error,
+        error: retryError ? `${retryError}; retry: ${error}` : error,
         durationMs: Math.round(performance.now() - request.startedAt),
       })
       throw new Error(`AI request failed: ${response.status}`)
     }
 
-    const { text: translated, streamed, usageLog } = await readAiResponseTextWithUsage(response, `${promptOverride ?? request.prompt}\n${text}`, onText)
+    let translated: string
+    let streamed = false
+    let usageLog: ReturnType<typeof getUsageLog>
+    try {
+      const result = await readAiResponseTextWithUsage(response, `${system}\n${text}`, onText)
+      translated = result.text
+      streamed = result.streamed
+      usageLog = result.usageLog
+    }
+    catch (error) {
+      if (!stream)
+        throw error
+
+      retryError = getErrorMessage(error)
+      response = await fetchChatCompletion(request, system, text, false)
+      if (!response.ok) {
+        const responseError = await readErrorText(response)
+        throw new Error(`${retryError}; retry: ${responseError}`)
+      }
+
+      const result = await readAiResponseTextWithUsage(response, `${system}\n${text}`, onText)
+      translated = result.text
+      streamed = result.streamed
+      usageLog = result.usageLog
+    }
     await recordAiCall({
       scene,
       endpoint: request.endpoint,

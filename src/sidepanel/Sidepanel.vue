@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { sendMessage } from 'webext-bridge/popup'
+import { computed, onMounted, ref } from 'vue'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations } from '~/logic/vocabularyRecords'
 import type { TranslationDirection, VocabularyRecord } from '~/logic/types'
@@ -15,6 +16,15 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
 ]
 const cleanupDays = ref(30)
 const importMessage = ref('')
+const pageTranslationLoading = ref(false)
+const pageTranslationMessage = ref('')
+const pageTranslationStatus = ref({
+  ok: false,
+  enabled: false,
+  blocks: 0,
+  cached: false,
+  bytes: 0,
+})
 
 const difficulty = computed(() => getProgressDifficulty(
   vocabularyRecords.value,
@@ -26,14 +36,68 @@ const manualRecords = computed(() => vocabularyRecords.value.filter(record => re
 const autoRecords = computed(() => vocabularyRecords.value.filter(record => record.source === 'auto').slice(0, 8))
 const storageBytes = computed(() => new Blob([JSON.stringify(vocabularyRecords.value)]).size)
 const storageSize = computed(() => {
-  const kb = storageBytes.value / 1024
-  return kb > 1024 ? `${(kb / 1024).toFixed(2)} MB` : `${kb.toFixed(1)} KB`
+  return formatBytes(storageBytes.value)
 })
 const dailyRecommendations = computed(() => getTodayRecommendations(
   vocabularyRecords.value,
   lexiSettings.value.study.dailyGoal,
   difficulty.value,
 ))
+
+async function getActiveTabId() {
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
+  if (!tab?.id)
+    throw new Error('无法读取当前标签页')
+
+  return tab.id
+}
+
+async function refreshPageTranslationStatus() {
+  try {
+    const tabId = await getActiveTabId()
+    const status = await sendMessage('lexi-page-translate-status', {}, { context: 'content-script', tabId })
+    pageTranslationStatus.value = status
+    pageTranslationMessage.value = status.cached
+      ? `已保存 ${status.blocks} 段，下次打开会自动恢复。`
+      : '当前页暂无保存的翻译。'
+  }
+  catch (error) {
+    pageTranslationStatus.value = {
+      ok: false,
+      enabled: false,
+      blocks: 0,
+      cached: false,
+      bytes: 0,
+    }
+    pageTranslationMessage.value = error instanceof Error ? error.message : '无法连接当前页面'
+  }
+}
+
+function formatBytes(bytes: number) {
+  const kb = bytes / 1024
+  return kb > 1024 ? `${(kb / 1024).toFixed(2)} MB` : `${kb.toFixed(1)} KB`
+}
+
+async function controlPageTranslation(action: 'start' | 'stop') {
+  pageTranslationLoading.value = true
+  try {
+    const tabId = await getActiveTabId()
+    const result = await sendMessage(
+      action === 'start' ? 'lexi-page-translate-start' : 'lexi-page-translate-stop',
+      {},
+      { context: 'content-script', tabId },
+    )
+    pageTranslationMessage.value = result.message
+    await refreshPageTranslationStatus()
+    pageTranslationMessage.value = result.message
+  }
+  catch (error) {
+    pageTranslationMessage.value = error instanceof Error ? error.message : '操作失败'
+  }
+  finally {
+    pageTranslationLoading.value = false
+  }
+}
 
 function exportRecords() {
   const blob = new Blob([JSON.stringify(vocabularyRecords.value, null, 2)], { type: 'application/json' })
@@ -80,6 +144,10 @@ async function importRecords(event: Event) {
     input.value = ''
   }
 }
+
+onMounted(() => {
+  refreshPageTranslationStatus()
+})
 </script>
 
 <template>
@@ -155,6 +223,40 @@ async function importRecords(event: Event) {
         <span class="text-12px text-neutral-500">最多保存记录</span>
         <input v-model.number="lexiSettings.history.maxRecords" type="number" min="50" max="5000" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
       </label>
+    </section>
+
+    <section class="mt-4 border border-neutral-200 bg-white px-3 py-3">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <h2 class="text-14px font-600">
+            当前页面自动翻译
+          </h2>
+          <p class="mt-1 text-12px text-neutral-500">
+            自动保存当前页翻译，下次打开同一链接会读取并恢复。
+          </p>
+        </div>
+        <span class="shrink-0 text-12px" :class="pageTranslationStatus.enabled ? 'text-blue-600' : 'text-neutral-500'">
+          {{ pageTranslationStatus.enabled ? '启用' : '停止' }}
+        </span>
+      </div>
+      <div class="mt-3 grid grid-cols-3 gap-2">
+        <button class="border border-neutral-950 bg-neutral-950 px-2 py-1.5 text-12px text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50" :disabled="pageTranslationLoading" @click="controlPageTranslation('start')">
+          启用
+        </button>
+        <button class="border border-neutral-200 bg-white px-2 py-1.5 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="pageTranslationLoading" @click="controlPageTranslation('stop')">
+          停止
+        </button>
+        <button class="border border-neutral-200 bg-white px-2 py-1.5 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="pageTranslationLoading" @click="refreshPageTranslationStatus">
+          刷新
+        </button>
+      </div>
+      <div class="mt-3 flex items-center justify-between gap-3 border-t border-neutral-100 pt-3 text-12px text-neutral-500">
+        <span>已缓存 {{ pageTranslationStatus.blocks }} 段</span>
+        <span>{{ pageTranslationStatus.cached ? `可恢复 · ${formatBytes(pageTranslationStatus.bytes)}` : '未保存' }}</span>
+      </div>
+      <p v-if="pageTranslationMessage" class="mt-2 text-12px leading-5 text-neutral-500">
+        {{ pageTranslationMessage }}
+      </p>
     </section>
 
     <section class="mt-5">

@@ -63,6 +63,20 @@ export interface PageVisitLog {
   createdAt: number
 }
 
+export interface PageTranslationBlock {
+  id: string
+  source: string
+  translation: string
+}
+
+export interface PageTranslationCache {
+  url: string
+  title: string
+  enabled: boolean
+  blocks: PageTranslationBlock[]
+  updatedAt: number
+}
+
 export interface SiteRules {
   enabled: boolean
   mode: 'all' | 'allowlist' | 'blocklist'

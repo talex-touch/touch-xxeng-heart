@@ -1,3 +1,49 @@
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M26.6667 1.66667H24V7H8V9.66667H5.33333V20.3333H8V23H10.6667V28.3333H21.3333V25.6667H26.6667V23H21.3333V20.3333H26.6667V17.6667H21.3333V15H10.6667V20.3333H8V9.66667H24V7H26.6667V1.66667ZM18.6667 25.6667H13.3333V17.6667H18.6667V25.6667Z" fill="#888888"/>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="244" y1="166" x2="780" y2="858" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F8F8FA"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="332" y1="311" x2="720" y2="721" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7C75FF"/>
+      <stop offset="0.5" stop-color="#625BFF"/>
+      <stop offset="1" stop-color="#4D51F2"/>
+    </linearGradient>
+    <linearGradient id="tag" x1="573" y1="514" x2="760" y2="705" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F1EEFF"/>
+      <stop offset="1" stop-color="#D9D5FF"/>
+    </linearGradient>
+    <filter id="cardShadow" x="157" y="151" width="710" height="742" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="42" flood-color="#1D1D1F" flood-opacity="0.13"/>
+    </filter>
+    <filter id="softShadow" x="284" y="276" width="507" height="536" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="24" flood-color="#4F46E5" flood-opacity="0.22"/>
+    </filter>
+    <filter id="tagShadow" x="542" y="493" width="258" height="258" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#2F2B73" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="#F4F4F5"/>
+  <g transform="translate(512 512) scale(1.36) translate(-512 -512)">
+  <g filter="url(#cardShadow)">
+    <rect x="214" y="176" width="596" height="672" rx="136" fill="url(#bg)"/>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <path d="M344 418C344 352.83 396.83 300 462 300H603C668.17 300 721 352.83 721 418V560C721 625.17 668.17 678 603 678H531.5L480.67 720.36C463.68 734.52 438 722.43 438 700.31V678H462C396.83 678 344 625.17 344 560V418Z" fill="url(#bubble)"/>
+  </g>
+
+  <path d="M474 410C474 394.54 486.54 382 502 382C517.46 382 530 394.54 530 410V533H600C615.46 533 628 545.54 628 561C628 576.46 615.46 589 600 589H502C486.54 589 474 576.46 474 561V410Z" fill="white"/>
+
+  <g filter="url(#tagShadow)">
+    <rect x="574" y="517" width="186" height="186" rx="46" fill="url(#tag)"/>
+  </g>
+
+  <g fill="#5A54EE">
+    <path d="M648 555C648 548.93 652.93 544 659 544C665.07 544 670 548.93 670 555V563H708C714.07 563 719 567.93 719 574C719 580.07 714.07 585 708 585H614C607.93 585 603 580.07 603 574C603 567.93 607.93 563 614 563H648V555Z"/>
+    <path d="M637.2 590.7C641.86 586.79 648.79 587.4 652.7 592.06L661.34 602.37L670.5 591.67C674.45 587.05 681.39 586.51 686.01 590.46C690.63 594.41 691.17 601.35 687.22 605.97L676.07 619L692.43 638.51C696.34 643.17 695.73 650.1 691.07 654.01C686.41 657.92 679.48 657.31 675.57 652.65L661.72 636.13L642.87 658.15C638.92 662.77 631.98 663.31 627.36 659.36C622.74 655.41 622.2 648.47 626.15 643.85L647 619.49L635.84 606.2C631.93 601.54 632.54 594.61 637.2 590.7Z"/>
+    <path d="M706.34 667.62C701.11 667.62 697.75 662.09 700.15 657.44L734.35 591.1C737.13 585.7 744.85 585.69 747.65 591.08L782.13 657.42C784.55 662.08 781.19 667.62 775.94 667.62C773.35 667.62 770.98 666.18 769.79 663.88L763.37 651.42H718.94L712.49 663.9C711.3 666.18 708.93 667.62 706.34 667.62ZM729.06 631.83H753.27L741.16 608.33L729.06 631.83Z"/>
+  </g>
+  </g>
 </svg>

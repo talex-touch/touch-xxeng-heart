@@ -69,8 +69,16 @@ async function refreshPageTranslationStatus() {
       cached: false,
       bytes: 0,
     }
-    pageTranslationMessage.value = error instanceof Error ? error.message : '无法连接当前页面'
+    pageTranslationMessage.value = formatBridgeError(error)
   }
+}
+
+function formatBridgeError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/No handler registered|Could not establish connection|Receiving end does not exist/i.test(message))
+    return '当前页面还未加载新版 Lexi 内容脚本，请刷新页面或重新加载扩展后再试。'
+
+  return message || '无法连接当前页面'
 }
 
 function formatBytes(bytes: number) {
@@ -92,7 +100,7 @@ async function controlPageTranslation(action: 'start' | 'stop') {
     pageTranslationMessage.value = result.message
   }
   catch (error) {
-    pageTranslationMessage.value = error instanceof Error ? error.message : '操作失败'
+    pageTranslationMessage.value = formatBridgeError(error)
   }
   finally {
     pageTranslationLoading.value = false

@@ -3,6 +3,13 @@ import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
 import { isDev, isFirefox, port, r } from '../scripts/utils'
 
+const extensionIcons = {
+  16: 'assets/icon-16.png',
+  48: 'assets/icon-48.png',
+  128: 'assets/icon-128.png',
+  512: 'assets/icon-512.png',
+}
+
 export async function getManifest() {
   const pkg = await fs.readJSON(r('package.json')) as typeof PkgType
 
@@ -14,7 +21,7 @@ export async function getManifest() {
     version: pkg.version,
     description: pkg.description,
     action: {
-      default_icon: 'assets/icon-512.png',
+      default_icon: extensionIcons,
       default_popup: 'dist/popup/index.html',
     },
     options_ui: {
@@ -29,11 +36,7 @@ export async function getManifest() {
       : {
           service_worker: 'dist/background/index.mjs',
         },
-    icons: {
-      16: 'assets/icon-512.png',
-      48: 'assets/icon-512.png',
-      128: 'assets/icon-512.png',
-    },
+    icons: extensionIcons,
     permissions: [
       'tabs',
       'storage',

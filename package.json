@@ -5,6 +5,15 @@
   "private": true,
   "packageManager": "pnpm@9.7.1",
   "description": "Chrome extension for contextual programmer English learning on web pages.",
+  "license": "MIT",
+  "homepage": "https://github.com/talex-touch/touch-xxeng-heart#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/talex-touch/touch-xxeng-heart.git"
+  },
+  "bugs": {
+    "url": "https://github.com/talex-touch/touch-xxeng-heart/issues"
+  },
   "scripts": {
     "dev": "npm run clear && cross-env NODE_ENV=development run-p dev:*",
     "dev-firefox": "npm run clear && cross-env NODE_ENV=development EXTENSION=firefox run-p dev:*",

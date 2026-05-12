@@ -77,10 +77,10 @@ const blockSelectors = [
 const selectionAnchorSelectors = [
   '[data-testid="tweetText"]',
   '[data-testid="tweet"] div[lang]',
-  '[data-testid="tweet"]',
   'article div[lang]',
   'article p',
   'article blockquote',
+  'div[dir="auto"]',
   'p',
   'li',
   'blockquote',
@@ -99,6 +99,7 @@ const selectionAnchorSelectors = [
 
 const maxAiReplacementSeedsPerPage = 3
 const requestedReplacementSeeds = new Set<string>()
+const replacementFreshnessWindowMs = 7 * 24 * 60 * 60 * 1000
 
 interface ReplacementSeed {
   text: string
@@ -122,6 +123,15 @@ interface LastTranslationState {
   context: string
 }
 
+interface DialogAnchor {
+  left: number
+  right: number
+  top: number
+  bottom: number
+  width: number
+  height: number
+}
+
 function textNodeAllowed(node: Text) {
   const parent = node.parentElement
   if (!parent)
@@ -141,12 +151,59 @@ function isSelectionInIgnoredArea(range?: Range) {
   return Boolean(element && isLexiIgnoredElement(element))
 }
 
-function pickCandidates(text: string, settings: LexiSettings, records: VocabularyRecord[]) {
+function getCandidateRecord(records: VocabularyRecord[], candidate: VocabularyCandidate) {
+  const id = getVocabularyId(candidate.original, candidate.replacement)
+  return records.find(record => record.id === id)
+    ?? records.find(record => record.original === candidate.original)
+}
+
+function dedupeReplacementCandidates(candidates: VocabularyCandidate[]) {
+  const byOriginal = new Map<string, VocabularyCandidate>()
+  for (const candidate of candidates)
+    byOriginal.set(candidate.original.trim().toLowerCase(), candidate)
+
+  return [...byOriginal.values()]
+}
+
+function getReplacementCandidates(text: string, settings: LexiSettings, records: VocabularyRecord[]) {
   const recorded = records.filter(record => record.difficulty <= settings.replacement.difficulty && text.includes(record.original))
-  const local = [...findCandidateByChinese(text, settings.replacement.difficulty), ...recorded]
+  return dedupeReplacementCandidates([...findCandidateByChinese(text, settings.replacement.difficulty), ...recorded])
+}
+
+function scoreReplacementCandidate(candidate: VocabularyCandidate, records: VocabularyRecord[], randomWeight = 0.65) {
+  const record = getCandidateRecord(records, candidate)
+  const now = Date.now()
+  const unseenBoost = record ? 0 : 1.2
+  const staleBoost = record ? Math.min(1.2, (now - record.updatedAt) / replacementFreshnessWindowMs) : 0.8
+  const fatiguePenalty = record
+    ? Math.min(1.8, Math.log1p(record.seenCount) * 0.35 + record.learnedLevel * 0.16)
+    : 0
+
+  return unseenBoost
+    + staleBoost
+    + Math.random() * randomWeight
+    + candidate.difficulty * 0.06
+    + Math.min(0.25, candidate.original.length / 30)
+    - fatiguePenalty
+}
+
+function scoreTextNodeForReplacement(node: Text, settings: LexiSettings, records: VocabularyRecord[]) {
+  const text = node.nodeValue ?? ''
+  const candidates = getReplacementCandidates(text, settings, records)
+  if (!candidates.length)
+    return settings.ai.replacement.enabled ? Math.random() * 0.2 : 0
+
+  return candidates.reduce((total, candidate) => total + scoreReplacementCandidate(candidate, records, 0.2), 0)
+    + Math.min(0.4, text.length / 500)
+}
+
+function pickCandidates(text: string, settings: LexiSettings, records: VocabularyRecord[], usedOriginals = new Set<string>()) {
+  const local = getReplacementCandidates(text, settings, records)
   const limit = Math.max(1, Math.round(local.length * settings.replacement.density))
-  return local
-    .map(candidate => ({ candidate, score: Math.random() + candidate.difficulty / 10 }))
+  const fresh = local.filter(candidate => !usedOriginals.has(candidate.original))
+  const source = fresh.length ? fresh : local
+  return source
+    .map(candidate => ({ candidate, score: scoreReplacementCandidate(candidate, records) }))
     .sort((a, b) => b.score - a.score)
     .map(item => item.candidate)
     .slice(0, limit)
@@ -303,6 +360,7 @@ function getPageStyleContent(customCss = '') {
       all: initial;
       box-sizing: border-box;
       display: block;
+      position: relative;
       max-width: min(100%, 64rem);
       margin: 0.85em 0;
       border: 1px solid #bfdbfe;
@@ -314,6 +372,23 @@ function getPageStyleContent(customCss = '') {
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       opacity: 1;
+      overflow: hidden;
+    }
+
+    .lexi-selection-translation[data-lexi-loading="true"] {
+      background: linear-gradient(100deg, #eff6ff 0%, #dbeafe 48%, #eff6ff 100%);
+      background-size: 220% 100%;
+      animation: lexi-shimmer-surface 900ms ease-in-out infinite;
+    }
+
+    .lexi-selection-translation[data-lexi-loading="true"]::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, 0.72) 46%, transparent 78%);
+      transform: translateX(-120%);
+      animation: lexi-shimmer-sweep 900ms ease-in-out infinite;
+      pointer-events: none;
     }
 
     .lexi-selection-translation__label {
@@ -330,11 +405,23 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-selection-translation__text {
       all: initial;
+      display: inline;
       color: #111827;
       font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       opacity: 1;
+    }
+
+    .lexi-selection-translation__text[data-lexi-revealing="true"] {
+      animation: lexi-text-reveal 220ms ease-out both;
+      will-change: opacity, filter, transform;
+    }
+
+    .lexi-selection-translation__text[data-lexi-loading="true"] {
+      display: inline;
+      color: #1d4ed8;
+      opacity: 0.62;
     }
 
     .lexi-selection-translation__detail {
@@ -345,6 +432,44 @@ function getPageStyleContent(customCss = '') {
       font: 12px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    @keyframes lexi-text-reveal {
+      from {
+        opacity: 0;
+        opacity: 0.42;
+        filter: blur(3px);
+        transform: translateY(2px);
+      }
+      to {
+        opacity: 1;
+        filter: blur(0);
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes lexi-shimmer-surface {
+      from {
+        background-position-x: 110%;
+      }
+      to {
+        background-position-x: -110%;
+      }
+    }
+
+    @keyframes lexi-shimmer-sweep {
+      to {
+        transform: translateX(120%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .lexi-selection-translation__text[data-lexi-revealing="true"],
+      .lexi-selection-translation__text[data-lexi-loading="true"],
+      .lexi-selection-translation[data-lexi-loading="true"],
+      .lexi-selection-translation[data-lexi-loading="true"]::after {
+        animation: none;
+      }
     }
 
     .lexi-page-translation {
@@ -366,13 +491,24 @@ function getPageStyleContent(customCss = '') {
       box-sizing: border-box;
       position: fixed;
       z-index: 2147483647;
-      inset: 12vh auto auto 50%;
-      transform: translateX(-50%);
+      top: 12vh;
+      left: 50%;
+      transform: translateX(-50%) translateY(-4px);
       width: min(720px, calc(100vw - 32px));
-      border: 1px solid #d4d4d4;
-      background: #fff;
+      border: 1px solid rgba(129, 140, 248, 0.34);
+      border-radius: 10px;
+      background:
+        radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.16), transparent 34%),
+        radial-gradient(circle at 100% 8%, rgba(14, 165, 233, 0.14), transparent 30%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.7) inset;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
       color: #111827;
       font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+      opacity: 0;
+      animation: lexi-dialog-enter 160ms ease-out forwards;
     }
 
     .lexi-dialog * {
@@ -385,11 +521,16 @@ function getPageStyleContent(customCss = '') {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      border-bottom: 1px solid #e5e7eb;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.3);
+      background: linear-gradient(90deg, rgba(79, 70, 229, 0.08), rgba(14, 165, 233, 0.05), transparent);
       padding: 12px 14px;
     }
 
     .lexi-dialog__title {
+      background: linear-gradient(90deg, #111827, #4f46e5 58%, #0284c7);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
       font-size: 14px;
       font-weight: 700;
     }
@@ -414,8 +555,8 @@ function getPageStyleContent(customCss = '') {
     .lexi-dialog__answer {
       max-height: 160px;
       overflow: auto;
-      border: 1px solid #e5e7eb;
-      background: #f8fafc;
+      border: 1px solid rgba(203, 213, 225, 0.72);
+      background: rgba(248, 250, 252, 0.72);
       padding: 10px;
       color: #525252;
       font-size: 12px;
@@ -426,7 +567,7 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-dialog__answer {
       max-height: 220px;
-      background: #fff;
+      background: rgba(255, 255, 255, 0.72);
       color: #111827;
       font-size: 13px;
     }
@@ -439,7 +580,7 @@ function getPageStyleContent(customCss = '') {
     .lexi-dialog__input {
       min-width: 0;
       flex: 1;
-      border: 1px solid #d4d4d4;
+      border: 1px solid rgba(148, 163, 184, 0.78);
       border-radius: 0;
       padding: 10px 11px;
       color: #111827;
@@ -448,14 +589,21 @@ function getPageStyleContent(customCss = '') {
     }
 
     .lexi-dialog__button {
-      border: 1px solid #111827;
+      border: 1px solid #312e81;
       border-radius: 0;
-      background: #111827;
+      background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7);
       color: #fff;
       cursor: pointer;
       font-size: 13px;
       font-weight: 600;
       padding: 0 14px;
+    }
+
+    @keyframes lexi-dialog-enter {
+      to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
     }
 
     ${customCss}
@@ -598,13 +746,19 @@ function getContextText(node: Text) {
   return text.replace(/\s+/g, ' ').slice(0, 420)
 }
 
+function getElementFromRangeEnd(range: Range) {
+  const container = range.endContainer
+  return container instanceof Element ? container : container.parentElement
+}
+
 function getSelectionBlock(range?: Range) {
-  const node = range?.commonAncestorContainer
-  const element = node instanceof Element ? node : node?.parentElement
-  const anchor = element?.closest<HTMLElement>(selectionAnchorSelectors)
+  const endElement = range ? getElementFromRangeEnd(range) : undefined
+  const anchor = endElement?.closest<HTMLElement>(selectionAnchorSelectors)
   if (anchor)
     return anchor
 
+  const node = range?.commonAncestorContainer
+  const element = node instanceof Element ? node : node?.parentElement
   if (range) {
     const container = document.createElement('span')
     container.dataset.lexiSelectionAnchor = 'true'
@@ -782,12 +936,14 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
 
   block.dataset.lexiSelectionTranslation = 'true'
   block.dataset.lexiSelectionKey = requestKey
+  block.dataset.lexiLoading = 'true'
   block.className = 'lexi-selection-translation'
   label.className = 'lexi-selection-translation__label'
   text.className = 'lexi-selection-translation__text'
   detail.className = 'lexi-selection-translation__detail'
   label.textContent = 'Lexi 翻译'
   text.textContent = `翻译中：${selected}`
+  text.dataset.lexiLoading = 'true'
 
   block.append(label, text, detail)
   insertAfterSelectionAnchor(anchor, block)
@@ -795,7 +951,18 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
 
   return {
     update(translation: SelectionTranslation, detailText?: string) {
+      const wasLoading = text.dataset.lexiLoading === 'true'
+      const previousText = text.textContent ?? ''
+      const nextText = translation.translation
       text.textContent = translation.translation
+      delete block.dataset.lexiLoading
+      delete text.dataset.lexiLoading
+      if (wasLoading || previousText.length === 0 || nextText.length < previousText.length) {
+        text.dataset.lexiRevealing = 'true'
+        window.setTimeout(() => {
+          delete text.dataset.lexiRevealing
+        }, 260)
+      }
       if (detailText)
         detail.textContent = detailText
     },
@@ -833,16 +1000,69 @@ function renderDialogContext(context: ReturnType<typeof createDialogContext>) {
   ].filter(Boolean).join('\n')
 }
 
+function getDialogAnchorFromRange(range?: Range): DialogAnchor | undefined {
+  if (!range)
+    return undefined
+
+  const rects = Array.from(range.getClientRects()).filter(rect => rect.width > 0 || rect.height > 0)
+  const rect = rects.at(-1) ?? range.getBoundingClientRect()
+  if (!rect || (!rect.width && !rect.height))
+    return undefined
+
+  return {
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  }
+}
+
+function getCurrentDialogAnchor() {
+  const selection = window.getSelection()
+  const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+  return getDialogAnchorFromRange(range)
+}
+
+function positionLexiDialog(dialog: HTMLElement, anchor?: DialogAnchor) {
+  const margin = 16
+  const gap = 10
+  const width = Math.min(720, Math.max(280, window.innerWidth - margin * 2))
+  dialog.style.width = `${width}px`
+
+  const measured = dialog.getBoundingClientRect()
+  const height = Math.min(measured.height || 420, window.innerHeight - margin * 2)
+  const anchorCenter = anchor ? anchor.left + anchor.width / 2 : window.innerWidth / 2
+  const left = Math.max(margin + width / 2, Math.min(anchorCenter, window.innerWidth - margin - width / 2))
+  let top = anchor ? anchor.bottom + gap : Math.max(margin, window.innerHeight * 0.12)
+
+  if (anchor && top + height > window.innerHeight - margin)
+    top = anchor.top - height - gap
+
+  if (top < margin)
+    top = Math.max(margin, Math.min(window.innerHeight - height - margin, window.innerHeight * 0.12))
+
+  dialog.style.left = `${left}px`
+  dialog.style.top = `${top}px`
+}
+
+function closeLexiDialog(dialog: HTMLElement) {
+  dialog.dispatchEvent(new CustomEvent('lexi-dialog-close'))
+  dialog.remove()
+}
+
 function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslationState) {
   ensurePageStyles(settings.ui.customCss)
 
   const existing = document.querySelector<HTMLElement>('[data-lexi-dialog]')
   if (existing) {
-    existing.remove()
+    closeLexiDialog(existing)
     return undefined
   }
 
   const context = createDialogContext(lastTranslation)
+  const anchor = getCurrentDialogAnchor()
   const dialog = document.createElement('section')
   const head = document.createElement('div')
   const title = document.createElement('div')
@@ -875,7 +1095,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   button.type = 'submit'
   button.textContent = '发送'
 
-  close.addEventListener('click', () => dialog.remove())
+  close.addEventListener('click', () => closeLexiDialog(dialog))
   form.addEventListener('submit', (event) => {
     event.preventDefault()
     const question = input.value.trim()
@@ -902,6 +1122,14 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   body.append(contextBlock, form, answer)
   dialog.append(head, body)
   document.documentElement.appendChild(dialog)
+  positionLexiDialog(dialog, anchor)
+  const reposition = () => positionLexiDialog(dialog, anchor)
+  window.addEventListener('resize', reposition)
+  window.addEventListener('scroll', reposition, true)
+  dialog.addEventListener('lexi-dialog-close', () => {
+    window.removeEventListener('resize', reposition)
+    window.removeEventListener('scroll', reposition, true)
+  }, { once: true })
   input.focus()
 
   return dialog
@@ -975,6 +1203,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let latestSelectionSnapshot = ''
   let selectionChangingSince = 0
   let selectionRequestId = 0
+  let selectionPointerDown = false
+  let selectionFinalizedAt = 0
   let activeSelectionBlock: { remove: () => void } | undefined
   let pageTranslationRunning = false
   let pageTranslationEnabled = false
@@ -1036,12 +1266,20 @@ export function startPageEnhancer(events: EnhancerEvents) {
     })
 
     const textNodes: Text[] = []
-    while (walker.nextNode() && textNodes.length < budget.maxPerPage * 4)
+    const scanLimit = Math.max(budget.maxPerPage * 12, 80)
+    while (walker.nextNode() && textNodes.length < scanLimit)
       textNodes.push(walker.currentNode as Text)
+
+    const prioritizedTextNodes = textNodes
+      .map(node => ({ node, score: scoreTextNodeForReplacement(node, settings, records) }))
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(item => item.node)
 
     let nextRecords = records
     const aiReplacementSeeds: ReplacementSeed[] = []
-    for (const node of textNodes) {
+    const usedOriginals = new Set<string>()
+    for (const node of prioritizedTextNodes) {
       if (stats.replacements >= budget.maxPerPage)
         break
 
@@ -1053,7 +1291,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
           ...settings.replacement,
           density: budget.density,
         },
-      }, records)
+      }, records, usedOriginals)
 
       if (!candidates.length && settings.ai.replacement.enabled)
         collectReplacementSeed(aiReplacementSeeds, sourceText, context)
@@ -1066,6 +1304,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
       stats.replacements += changed
       for (const candidate of candidates.slice(0, changed)) {
+        usedOriginals.add(candidate.original)
         nextRecords = upsertVocabularyRecord(nextRecords, {
           candidate,
           source: 'auto',
@@ -1420,7 +1659,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }, 6000)
   }
 
-  function scheduleSelectionCheck(delay = 520) {
+  function cancelActiveSelectionRequest() {
+    selectionRequestId += 1
+    activeSelectionBlock?.remove()
+    activeSelectionBlock = undefined
+  }
+
+  function scheduleSelectionCheck(delay = 520, requireFinalized = true) {
     latestSelectionSnapshot = getSelectionSnapshot()
     if (!selectionChangingSince)
       selectionChangingSince = performance.now()
@@ -1429,6 +1674,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const stableDelay = delay + Math.min(900, Math.floor(activeDuration / 120) * 120)
     window.clearTimeout(selectionTimer)
     selectionTimer = window.setTimeout(() => {
+      if (requireFinalized && (selectionPointerDown || !selectionFinalizedAt))
+        return
+
       const current = getSelectionSnapshot()
       if (!current || current !== latestSelectionSnapshot)
         return
@@ -1444,7 +1692,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     const selection = window.getSelection()
     const selected = selection?.toString().trim()
-    if (!selection || !selected || selected.length < 2 || selected.length > 160)
+    if (!selection || !selected || selected.length < 2 || selected.length > 600)
       return
 
     const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
@@ -1459,9 +1707,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!claimSelectionDomLock(domKey))
       return
 
-    selectionRequestId += 1
-    activeSelectionBlock?.remove()
-    activeSelectionBlock = undefined
+    cancelActiveSelectionRequest()
     removeSelectionBlocksByKey(domKey)
     activeSelectionKey = selectionKey
     rememberSelectionKey(selectionKey)
@@ -1482,17 +1728,31 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   }
 
+  const onPointerDown = () => {
+    selectionPointerDown = true
+    selectionFinalizedAt = 0
+    selectionChangingSince = performance.now()
+    cancelActiveSelectionRequest()
+    window.clearTimeout(selectionTimer)
+  }
+
   const onMouseUp = () => {
-    scheduleSelectionCheck(620)
+    selectionPointerDown = false
+    selectionFinalizedAt = performance.now()
+    scheduleSelectionCheck(360)
   }
 
   const onPointerUp = () => {
-    scheduleSelectionCheck(620)
+    selectionPointerDown = false
+    selectionFinalizedAt = performance.now()
+    scheduleSelectionCheck(360)
   }
 
   const onKeyUp = (event: KeyboardEvent) => {
-    if (event.key.startsWith('Arrow') || event.key === 'Shift')
-      scheduleSelectionCheck(620)
+    if (event.key.startsWith('Arrow') || event.key === 'Shift') {
+      selectionFinalizedAt = performance.now()
+      scheduleSelectionCheck(420)
+    }
   }
 
   const onSelectionChange = () => {
@@ -1504,12 +1764,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     latestSelectionSnapshot = snapshot
     if (!selectionChangingSince)
       selectionChangingSince = performance.now()
-    if (previousSnapshot && snapshot !== previousSnapshot) {
-      selectionRequestId += 1
-      activeSelectionBlock?.remove()
-      activeSelectionBlock = undefined
-    }
-    scheduleSelectionCheck(900)
+    if (previousSnapshot && snapshot !== previousSnapshot)
+      cancelActiveSelectionRequest()
+
+    if (!selectionPointerDown && selectionFinalizedAt)
+      scheduleSelectionCheck(520)
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -1536,7 +1795,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (event.key !== 'Escape')
       return
 
-    document.querySelector<HTMLElement>('[data-lexi-dialog]')?.remove()
+    const currentDialog = document.querySelector<HTMLElement>('[data-lexi-dialog]')
+    if (currentDialog)
+      closeLexiDialog(currentDialog)
   }
 
   const onPointerOver = (event: PointerEvent) => {
@@ -1627,8 +1888,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   run()
   restoreSavedPageTranslation().catch(error => console.warn('[Lexi] restore page translation failed', error))
+  document.addEventListener('pointerdown', onPointerDown)
   document.addEventListener('mouseup', onMouseUp)
   document.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('mouseup', onMouseUp, true)
+  window.addEventListener('pointerup', onPointerUp, true)
   document.addEventListener('keyup', onKeyUp)
   document.addEventListener('selectionchange', onSelectionChange)
   document.addEventListener('keydown', onKeyDown)
@@ -1665,8 +1929,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     removePageTranslateStartListener()
     removePageTranslateStopListener()
     removePageTranslateStatusListener()
+    document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('mouseup', onMouseUp, true)
+    window.removeEventListener('pointerup', onPointerUp, true)
     document.removeEventListener('keyup', onKeyUp)
     document.removeEventListener('selectionchange', onSelectionChange)
     document.removeEventListener('keydown', onKeyDown)

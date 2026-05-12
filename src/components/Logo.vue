@@ -1,5 +1,7 @@
+<script setup lang="ts">
+import logoUrl from '../assets/logo.svg'
+</script>
+
 <template>
-  <div class="inline-flex h-9 w-9 items-center justify-center rounded-2 bg-neutral-950 text-white" title="Lexi">
-    <pixelarticons-book />
-  </div>
+  <img :src="logoUrl" alt="Lexi" class="h-9 w-9">
 </template>

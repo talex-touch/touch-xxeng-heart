@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import 'uno.css'
 import { onMounted, onUnmounted, ref } from 'vue'
-import { startPageEnhancer } from '../pageEnhancer'
+import { subscribePageStats } from '../pageEnhancerRuntime'
 import type { PageStats } from '../pageEnhancer'
 
 const stats = ref<PageStats>({
@@ -10,16 +10,14 @@ const stats = ref<PageStats>({
   enabled: false,
   showFloatingStatus: false,
 })
-let stopEnhancer: (() => void) | undefined
+let unsubscribeStats: (() => void) | undefined
 
 onMounted(() => {
-  stopEnhancer = startPageEnhancer({
-    onStats: value => stats.value = value,
-  })
+  unsubscribeStats = subscribePageStats(value => stats.value = value)
 })
 
 onUnmounted(() => {
-  stopEnhancer?.()
+  unsubscribeStats?.()
 })
 </script>
 

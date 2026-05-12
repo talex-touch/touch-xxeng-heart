@@ -3,11 +3,13 @@ import { onMessage } from 'webext-bridge/content-script'
 import { createApp } from 'vue'
 import browser from 'webextension-polyfill'
 import App from './views/App.vue'
+import { ensurePageEnhancer } from './pageEnhancerRuntime'
 import { setupApp } from '~/logic/common-setup'
 
 // Firefox `browser.tabs.executeScript()` requires scripts return a primitive value
 (() => {
   console.info('[Lexi] content script ready')
+  ensurePageEnhancer()
 
   // communication example: send previous tab title from background page
   onMessage('tab-prev', ({ data }) => {

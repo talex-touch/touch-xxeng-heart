@@ -436,8 +436,8 @@ function removeSceneRule(index: number) {
           </button>
         </div>
 
-        <div class="mt-4 grid gap-4 lg:grid-cols-2">
-          <article v-for="profile in lexiSettings.siteRules.specialProfiles" :key="profile.id" class="rounded-2 border border-neutral-200 p-4">
+        <div class="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,28rem),1fr))] gap-4">
+          <article v-for="profile in lexiSettings.siteRules.specialProfiles" :key="profile.id" class="min-w-0 rounded-2 border border-neutral-200 p-4">
             <div class="flex items-start justify-between gap-3">
               <label class="min-w-0 flex-1">
                 <span class="text-12px font-500 text-neutral-500">名称</span>
@@ -458,39 +458,39 @@ function removeSceneRule(index: number) {
               />
             </label>
 
-            <div class="mt-3 grid grid-cols-2 gap-2 text-12px">
-              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span>启用此场景</span>
+            <div class="mt-3 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2 text-12px">
+              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span class="min-w-0 break-words">启用此场景</span>
                 <input v-model="profile.enabled" type="checkbox">
               </label>
-              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span>考试安全</span>
+              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span class="min-w-0 break-words">考试安全</span>
                 <input v-model="profile.examSafe" type="checkbox">
               </label>
-              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span>网页替换</span>
+              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span class="min-w-0 break-words">网页替换</span>
                 <input v-model="profile.replacement" type="checkbox">
               </label>
-              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span>划词翻译</span>
+              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span class="min-w-0 break-words">划词翻译</span>
                 <input v-model="profile.selection" type="checkbox">
               </label>
-              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span>动态扫描</span>
+              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span class="min-w-0 break-words">动态扫描</span>
                 <input v-model="profile.dynamicScan" type="checkbox">
               </label>
-              <label class="flex items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span>保守替换</span>
+              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+                <span class="min-w-0 break-words">保守替换</span>
                 <input v-model="profile.conservative" type="checkbox">
               </label>
             </div>
 
-            <div class="mt-3 grid grid-cols-2 gap-3">
-              <label class="block">
+            <div class="mt-3 grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-3">
+              <label class="min-w-0 block">
                 <span class="text-12px text-neutral-500">单页上限</span>
                 <input v-model.number="profile.maxPerPage" type="number" min="0" max="20" class="mt-1 h-9 w-full rounded-2 border border-neutral-300 px-2 text-13px outline-none focus:border-neutral-950">
               </label>
-              <label class="block">
+              <label class="min-w-0 block">
                 <span class="text-12px text-neutral-500">密度 {{ Math.round((profile.density ?? 0) * 100) }}%</span>
                 <input v-model.number="profile.density" type="range" min="0" max="0.2" step="0.01" class="mt-2 w-full accent-neutral-950">
               </label>

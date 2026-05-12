@@ -363,9 +363,10 @@ function getPageStyleContent(customCss = '') {
       position: relative;
       max-width: min(100%, 64rem);
       margin: 0.85em 0;
-      border: 1px solid #bfdbfe;
+      border: 1px solid #d7e3f8;
       border-left: 4px solid #2563eb;
-      background: #eff6ff;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.96);
       padding: 0.7em 0.85em;
       color: #111827;
       font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -373,21 +374,22 @@ function getPageStyleContent(customCss = '') {
       overflow-wrap: anywhere;
       opacity: 1;
       overflow: hidden;
+      animation: lexi-card-enter 180ms ease-out both;
     }
 
     .lexi-selection-translation[data-lexi-loading="true"] {
-      background: linear-gradient(100deg, #eff6ff 0%, #dbeafe 48%, #eff6ff 100%);
+      background: linear-gradient(100deg, #ffffff 0%, #f1f7ff 48%, #ffffff 100%);
       background-size: 220% 100%;
-      animation: lexi-shimmer-surface 900ms ease-in-out infinite;
+      animation: lexi-card-enter 180ms ease-out both, lexi-shimmer-surface 1000ms ease-in-out infinite;
     }
 
     .lexi-selection-translation[data-lexi-loading="true"]::after {
       content: "";
       position: absolute;
       inset: 0;
-      background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, 0.72) 46%, transparent 78%);
+      background: linear-gradient(105deg, transparent 0%, rgba(37, 99, 235, 0.08) 46%, transparent 78%);
       transform: translateX(-120%);
-      animation: lexi-shimmer-sweep 900ms ease-in-out infinite;
+      animation: lexi-shimmer-sweep 1000ms ease-in-out infinite;
       pointer-events: none;
     }
 
@@ -401,6 +403,7 @@ function getPageStyleContent(customCss = '') {
       font-weight: 600;
       font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       padding: 0.15em 0.55em;
+      border-radius: 3px;
     }
 
     .lexi-selection-translation__text {
@@ -415,6 +418,17 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-selection-translation__text[data-lexi-revealing="true"] {
       animation: lexi-text-reveal 220ms ease-out both;
+      will-change: opacity, filter, transform;
+    }
+
+    .lexi-selection-translation__chunk[data-lexi-new="true"] {
+      animation: lexi-text-reveal 180ms ease-out both;
+      will-change: opacity, filter, transform;
+    }
+
+    .lexi-selection-translation__char[data-lexi-new="true"] {
+      display: inline-block;
+      animation: lexi-char-reveal 190ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
       will-change: opacity, filter, transform;
     }
 
@@ -436,7 +450,6 @@ function getPageStyleContent(customCss = '') {
 
     @keyframes lexi-text-reveal {
       from {
-        opacity: 0;
         opacity: 0.42;
         filter: blur(3px);
         transform: translateY(2px);
@@ -445,6 +458,30 @@ function getPageStyleContent(customCss = '') {
         opacity: 1;
         filter: blur(0);
         transform: translateY(0);
+      }
+    }
+
+    @keyframes lexi-card-enter {
+      from {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes lexi-char-reveal {
+      from {
+        opacity: 0;
+        filter: blur(3px);
+        transform: translateX(4px);
+      }
+      to {
+        opacity: 1;
+        filter: blur(0);
+        transform: translateX(0);
       }
     }
 
@@ -465,9 +502,12 @@ function getPageStyleContent(customCss = '') {
 
     @media (prefers-reduced-motion: reduce) {
       .lexi-selection-translation__text[data-lexi-revealing="true"],
+      .lexi-selection-translation__chunk[data-lexi-new="true"],
+      .lexi-selection-translation__char[data-lexi-new="true"],
       .lexi-selection-translation__text[data-lexi-loading="true"],
       .lexi-selection-translation[data-lexi-loading="true"],
-      .lexi-selection-translation[data-lexi-loading="true"]::after {
+      .lexi-selection-translation[data-lexi-loading="true"]::after,
+      .lexi-selection-translation {
         animation: none;
       }
     }
@@ -547,17 +587,18 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-dialog__body {
       display: grid;
-      gap: 10px;
+      gap: 12px;
       padding: 14px;
     }
 
     .lexi-dialog__context,
     .lexi-dialog__answer {
-      max-height: 160px;
+      position: relative;
+      max-height: 150px;
       overflow: auto;
       border: 1px solid rgba(203, 213, 225, 0.72);
       background: rgba(248, 250, 252, 0.72);
-      padding: 10px;
+      padding: 11px 12px;
       color: #525252;
       font-size: 12px;
       line-height: 1.6;
@@ -565,38 +606,62 @@ function getPageStyleContent(customCss = '') {
       overflow-wrap: anywhere;
     }
 
+    .lexi-dialog__context {
+      background:
+        linear-gradient(90deg, rgba(99, 102, 241, 0.07), transparent 22%),
+        rgba(248, 250, 252, 0.72);
+      color: #4b5563;
+    }
+
     .lexi-dialog__answer {
       max-height: 220px;
-      background: rgba(255, 255, 255, 0.72);
+      border-color: rgba(129, 140, 248, 0.28);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 250, 252, 0.74));
       color: #111827;
       font-size: 13px;
     }
 
     .lexi-dialog__form {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
       gap: 8px;
     }
 
     .lexi-dialog__input {
+      display: block;
       min-width: 0;
-      flex: 1;
+      min-height: 54px;
+      max-height: 120px;
+      resize: vertical;
       border: 1px solid rgba(148, 163, 184, 0.78);
-      border-radius: 0;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.78);
       padding: 10px 11px;
       color: #111827;
       font-size: 14px;
+      line-height: 1.45;
       outline: none;
     }
 
+    .lexi-dialog__input:focus {
+      border-color: rgba(79, 70, 229, 0.72);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
+    }
+
     .lexi-dialog__button {
+      align-self: end;
+      min-width: 76px;
+      height: 42px;
       border: 1px solid #312e81;
-      border-radius: 0;
+      border-radius: 6px;
       background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7);
       color: #fff;
       cursor: pointer;
       font-size: 13px;
       font-weight: 600;
-      padding: 0 14px;
+      padding: 0 16px;
     }
 
     @keyframes lexi-dialog-enter {
@@ -925,6 +990,59 @@ function releaseSelectionDomLock(key: string) {
   delete document.documentElement.dataset[`lexiSelectionLock${key}`]
 }
 
+function animateSelectionBlockHeight(block: HTMLElement, mutate: () => void) {
+  const fromHeight = block.getBoundingClientRect().height
+  mutate()
+
+  const toHeight = block.getBoundingClientRect().height
+  if (Math.abs(toHeight - fromHeight) < 1)
+    return
+
+  block.style.height = `${fromHeight}px`
+  block.style.transition = 'height 180ms cubic-bezier(0.2, 0.7, 0.2, 1)'
+  void block.offsetHeight
+  block.style.height = `${toHeight}px`
+  window.setTimeout(() => {
+    block.style.height = ''
+    block.style.transition = ''
+  }, 210)
+}
+
+function renderSelectionTranslationText(container: HTMLElement, text: string, previousText: string, revealChunk: boolean) {
+  if (!revealChunk || !previousText || !text.startsWith(previousText)) {
+    container.textContent = text
+    return
+  }
+
+  const nextChunk = text.slice(previousText.length)
+  if (!nextChunk)
+    return
+
+  const stableText = previousText.replace(/\s+$/, '')
+  const chunkPrefix = previousText.slice(stableText.length)
+  container.textContent = previousText
+  const chunk = document.createElement('span')
+  chunk.className = 'lexi-selection-translation__chunk'
+  chunk.dataset.lexiNew = 'true'
+  for (const [index, char] of Array.from(`${chunkPrefix}${nextChunk}`).entries()) {
+    const charElement = document.createElement('span')
+    charElement.className = 'lexi-selection-translation__char'
+    charElement.dataset.lexiNew = 'true'
+    charElement.textContent = char
+    charElement.style.animationDelay = `${Math.min(index * 14, 140)}ms`
+    chunk.append(charElement)
+  }
+  if (stableText.length !== previousText.length)
+    container.textContent = stableText
+  container.append(chunk)
+  window.setTimeout(() => {
+    delete chunk.dataset.lexiNew
+    chunk
+      .querySelectorAll<HTMLElement>('[data-lexi-new="true"]')
+      .forEach(element => delete element.dataset.lexiNew)
+  }, 220)
+}
+
 function createSelectionTranslationBlock(settings: LexiSettings, selected: string, requestKey: string, range?: Range) {
   ensurePageStyles(settings.ui.customCss)
 
@@ -954,9 +1072,11 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
       const wasLoading = text.dataset.lexiLoading === 'true'
       const previousText = text.textContent ?? ''
       const nextText = translation.translation
-      text.textContent = translation.translation
-      delete block.dataset.lexiLoading
-      delete text.dataset.lexiLoading
+      animateSelectionBlockHeight(block, () => {
+        renderSelectionTranslationText(text, nextText, previousText, !wasLoading)
+        delete block.dataset.lexiLoading
+        delete text.dataset.lexiLoading
+      })
       if (wasLoading || previousText.length === 0 || nextText.length < previousText.length) {
         text.dataset.lexiRevealing = 'true'
         window.setTimeout(() => {
@@ -1071,7 +1191,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   const contextBlock = document.createElement('div')
   const answer = document.createElement('div')
   const form = document.createElement('form')
-  const input = document.createElement('input')
+  const input = document.createElement('textarea')
   const button = document.createElement('button')
 
   dialog.dataset.lexiDialog = 'true'
@@ -1092,8 +1212,14 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   contextBlock.textContent = renderDialogContext(context) || '当前页面暂无可用上下文。'
   answer.textContent = '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。'
   input.placeholder = context.selected ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
+  input.rows = 2
   button.type = 'submit'
   button.textContent = '发送'
+
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey))
+      form.requestSubmit()
+  })
 
   close.addEventListener('click', () => closeLexiDialog(dialog))
   form.addEventListener('submit', (event) => {
@@ -1559,6 +1685,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     const block = createSelectionTranslationBlock(settings, selected, requestKey, range)
+    let translationVisible = false
     activeSelectionBlock = block
     const updateTranslation = (translation: SelectionTranslation, detailText?: string) => {
       if (requestId === selectionRequestId)
@@ -1570,6 +1697,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
     }
     updateTranslation(translation)
+    translationVisible = true
+    activeSelectionBlock = undefined
 
     let detailView: SelectionDetailView = { terms: [] }
     let detailText = ''
@@ -1577,7 +1706,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     try {
       const detail = await requestSelectionDetail(settings, selected, translation.translation, context)
       if (requestId !== selectionRequestId) {
-        block.remove()
+        if (!translationVisible)
+          block.remove()
         return
       }
       detailView = normalizeSelectionDetail(detail)
@@ -1594,7 +1724,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
 
     if (requestId !== selectionRequestId) {
-      block.remove()
+      if (!translationVisible)
+        block.remove()
       return
     }
 
@@ -1666,7 +1797,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   function scheduleSelectionCheck(delay = 520, requireFinalized = true) {
-    latestSelectionSnapshot = getSelectionSnapshot()
+    const snapshot = getSelectionSnapshot()
+    if (snapshot)
+      latestSelectionSnapshot = snapshot
     if (!selectionChangingSince)
       selectionChangingSince = performance.now()
 
@@ -1678,8 +1811,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
         return
 
       const current = getSelectionSnapshot()
-      if (!current || current !== latestSelectionSnapshot)
+      if (!current)
         return
+      if (latestSelectionSnapshot && current !== latestSelectionSnapshot)
+        latestSelectionSnapshot = current
 
       selectionChangingSince = 0
       handleSelection().catch(error => console.warn('[Lexi] selection handling failed', error))
@@ -1732,7 +1867,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
     selectionPointerDown = true
     selectionFinalizedAt = 0
     selectionChangingSince = performance.now()
-    cancelActiveSelectionRequest()
     window.clearTimeout(selectionTimer)
   }
 
@@ -1740,12 +1874,20 @@ export function startPageEnhancer(events: EnhancerEvents) {
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
     scheduleSelectionCheck(360)
+    window.setTimeout(() => {
+      if (!disposed && getSelectionSnapshot())
+        handleSelection().catch(error => console.warn('[Lexi] selection mouseup fallback failed', error))
+    }, 80)
   }
 
   const onPointerUp = () => {
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
     scheduleSelectionCheck(360)
+    window.setTimeout(() => {
+      if (!disposed && getSelectionSnapshot())
+        handleSelection().catch(error => console.warn('[Lexi] selection pointerup fallback failed', error))
+    }, 80)
   }
 
   const onKeyUp = (event: KeyboardEvent) => {

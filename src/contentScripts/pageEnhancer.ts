@@ -5,7 +5,7 @@ import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import { pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
-import { findCandidateByChinese } from '~/logic/vocabularyBank'
+import { programmerVocabulary } from '~/logic/vocabularyBank'
 import { getVocabularyId, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
 import type { LexiSettings, PageTranslationBlock, PageTranslationCache, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
@@ -106,6 +106,25 @@ interface ReplacementSeed {
   context: string
 }
 
+interface ReplacementRecordIndex {
+  byId: Map<string, VocabularyRecord>
+  byOriginal: Map<string, VocabularyRecord>
+}
+
+interface ReplacementMatch {
+  candidate: VocabularyCandidate
+  index: number
+  score: number
+  nodeScore: number
+}
+
+interface ReplacementNodePlan {
+  node: Text
+  matches: ReplacementMatch[]
+  score: number
+  limit: number
+}
+
 interface SelectionDetailView {
   explanation?: string
   context?: string
@@ -151,12 +170,6 @@ function isSelectionInIgnoredArea(range?: Range) {
   return Boolean(element && isLexiIgnoredElement(element))
 }
 
-function getCandidateRecord(records: VocabularyRecord[], candidate: VocabularyCandidate) {
-  const id = getVocabularyId(candidate.original, candidate.replacement)
-  return records.find(record => record.id === id)
-    ?? records.find(record => record.original === candidate.original)
-}
-
 function dedupeReplacementCandidates(candidates: VocabularyCandidate[]) {
   const byOriginal = new Map<string, VocabularyCandidate>()
   for (const candidate of candidates)
@@ -165,13 +178,32 @@ function dedupeReplacementCandidates(candidates: VocabularyCandidate[]) {
   return [...byOriginal.values()]
 }
 
-function getReplacementCandidates(text: string, settings: LexiSettings, records: VocabularyRecord[]) {
-  const recorded = records.filter(record => record.difficulty <= settings.replacement.difficulty && text.includes(record.original))
-  return dedupeReplacementCandidates([...findCandidateByChinese(text, settings.replacement.difficulty), ...recorded])
+function createReplacementRecordIndex(records: VocabularyRecord[]): ReplacementRecordIndex {
+  const byId = new Map<string, VocabularyRecord>()
+  const byOriginal = new Map<string, VocabularyRecord>()
+  for (const record of records) {
+    byId.set(record.id, record)
+    if (!byOriginal.has(record.original))
+      byOriginal.set(record.original, record)
+  }
+
+  return { byId, byOriginal }
 }
 
-function scoreReplacementCandidate(candidate: VocabularyCandidate, records: VocabularyRecord[], randomWeight = 0.65) {
-  const record = getCandidateRecord(records, candidate)
+function getCandidateRecord(index: ReplacementRecordIndex, candidate: VocabularyCandidate) {
+  const id = getVocabularyId(candidate.original, candidate.replacement)
+  return index.byId.get(id) ?? index.byOriginal.get(candidate.original)
+}
+
+function createReplacementCandidatePool(settings: LexiSettings, records: VocabularyRecord[]) {
+  const maxDifficulty = settings.replacement.difficulty
+  const local = programmerVocabulary.filter(item => item.difficulty <= maxDifficulty)
+  const recorded = records.filter(record => record.difficulty <= maxDifficulty)
+  return dedupeReplacementCandidates([...local, ...recorded])
+}
+
+function scoreReplacementCandidate(candidate: VocabularyCandidate, index: ReplacementRecordIndex, randomWeight = 0.65) {
+  const record = getCandidateRecord(index, candidate)
   const now = Date.now()
   const unseenBoost = record ? 0 : 1.2
   const staleBoost = record ? Math.min(1.2, (now - record.updatedAt) / replacementFreshnessWindowMs) : 0.8
@@ -187,26 +219,90 @@ function scoreReplacementCandidate(candidate: VocabularyCandidate, records: Voca
     - fatiguePenalty
 }
 
-function scoreTextNodeForReplacement(node: Text, settings: LexiSettings, records: VocabularyRecord[]) {
+function collectReplacementMatches(
+  node: Text,
+  candidates: VocabularyCandidate[],
+  recordIndex: ReplacementRecordIndex,
+  density: number,
+): ReplacementNodePlan | undefined {
   const text = node.nodeValue ?? ''
-  const candidates = getReplacementCandidates(text, settings, records)
-  if (!candidates.length)
-    return settings.ai.replacement.enabled ? Math.random() * 0.2 : 0
+  const matches: ReplacementMatch[] = []
 
-  return candidates.reduce((total, candidate) => total + scoreReplacementCandidate(candidate, records, 0.2), 0)
-    + Math.min(0.4, text.length / 500)
+  for (const candidate of candidates) {
+    if (!candidate.original)
+      continue
+
+    const index = text.indexOf(candidate.original)
+    if (index < 0)
+      continue
+
+    matches.push({
+      candidate,
+      index,
+      score: scoreReplacementCandidate(candidate, recordIndex, 0.2),
+      nodeScore: 0,
+    })
+  }
+
+  if (!matches.length)
+    return undefined
+
+  const nodeBoost = Math.min(0.4, text.length / 500)
+  const score = matches.reduce((total, match) => total + match.score, 0) + nodeBoost
+  const uniqueOriginals = new Set(matches.map(match => match.candidate.original))
+  const limit = Math.max(1, Math.round(uniqueOriginals.size * density))
+
+  return {
+    node,
+    matches: matches.map(match => ({ ...match, nodeScore: score })),
+    score,
+    limit,
+  }
 }
 
-function pickCandidates(text: string, settings: LexiSettings, records: VocabularyRecord[], usedOriginals = new Set<string>()) {
-  const local = getReplacementCandidates(text, settings, records)
-  const limit = Math.max(1, Math.round(local.length * settings.replacement.density))
-  const fresh = local.filter(candidate => !usedOriginals.has(candidate.original))
-  const source = fresh.length ? fresh : local
-  return source
-    .map(candidate => ({ candidate, score: scoreReplacementCandidate(candidate, records) }))
-    .sort((a, b) => b.score - a.score)
-    .map(item => item.candidate)
-    .slice(0, limit)
+function selectReplacementPlans(plans: ReplacementNodePlan[], maxPerPage: number) {
+  const usedOriginals = new Set<string>()
+  const selected = new Map<Text, ReplacementMatch[]>()
+  const sortedPlans = [...plans].sort((a, b) => b.score - a.score)
+
+  let count = 0
+  for (const plan of sortedPlans) {
+    if (count >= maxPerPage)
+      break
+
+    const fresh = plan.matches.filter(match => !usedOriginals.has(match.candidate.original))
+    const source = fresh.length ? fresh : plan.matches
+    const matches = source
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .slice(0, Math.min(plan.limit, maxPerPage - count))
+
+    for (const match of matches) {
+      const nodeMatches = selected.get(plan.node) ?? []
+      if (nodeMatches.some(selectedMatch => replacementMatchesOverlap(selectedMatch, match)))
+        continue
+
+      nodeMatches.push(match)
+      selected.set(plan.node, nodeMatches)
+      usedOriginals.add(match.candidate.original)
+      count += 1
+    }
+  }
+
+  return selected
+}
+
+function replacementMatchesOverlap(a: ReplacementMatch, b: ReplacementMatch) {
+  const aEnd = a.index + a.candidate.original.length
+  const bEnd = b.index + b.candidate.original.length
+  return a.index < bEnd && b.index < aEnd
+}
+
+function countSelectedReplacements(plans: Map<Text, ReplacementMatch[]>) {
+  let count = 0
+  for (const matches of plans.values())
+    count += matches.length
+
+  return count
 }
 
 function normalizeReplacementSeed(text: string) {
@@ -375,6 +471,18 @@ function getPageStyleContent(customCss = '') {
       opacity: 1;
       overflow: hidden;
       animation: lexi-card-enter 180ms ease-out both;
+      transform-origin: top left;
+    }
+
+    .lexi-selection-translation[data-lexi-collapsed="true"] {
+      display: inline-flex;
+      width: fit-content;
+      max-width: min(100%, 22rem);
+      border: 1px solid #bfdbfe;
+      border-radius: 999px;
+      background: #eff6ff;
+      padding: 0;
+      color: #1e3a8a;
     }
 
     .lexi-selection-translation[data-lexi-loading="true"] {
@@ -393,17 +501,68 @@ function getPageStyleContent(customCss = '') {
       pointer-events: none;
     }
 
+    .lexi-selection-translation__header {
+      all: initial;
+      display: flex;
+      box-sizing: border-box;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.65em;
+      margin-bottom: 0.18em;
+    }
+
+    .lexi-selection-translation[data-lexi-collapsed="true"] .lexi-selection-translation__header,
+    .lexi-selection-translation[data-lexi-collapsed="true"] .lexi-selection-translation__body {
+      display: none;
+    }
+
     .lexi-selection-translation__label {
       all: initial;
       display: inline-block;
       box-sizing: border-box;
-      margin: 0 0.55em 0.15em 0;
+      margin: 0;
       background: #2563eb;
       color: #fff;
       font-weight: 600;
       font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       padding: 0.15em 0.55em;
       border-radius: 3px;
+    }
+
+    .lexi-selection-translation__actions {
+      all: initial;
+      display: inline-flex;
+      box-sizing: border-box;
+      align-items: center;
+      gap: 0.25em;
+    }
+
+    .lexi-selection-translation__icon-button {
+      all: initial;
+      box-sizing: border-box;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.65em;
+      height: 1.65em;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: #475569;
+      cursor: pointer;
+      font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      user-select: none;
+    }
+
+    .lexi-selection-translation__icon-button:hover {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+
+    .lexi-selection-translation__body {
+      all: initial;
+      display: block;
+      box-sizing: border-box;
     }
 
     .lexi-selection-translation__text {
@@ -448,6 +607,41 @@ function getPageStyleContent(customCss = '') {
       overflow-wrap: anywhere;
     }
 
+    .lexi-selection-translation__collapsed {
+      all: initial;
+      box-sizing: border-box;
+      display: none;
+      align-items: center;
+      gap: 0.4em;
+      max-width: 100%;
+      padding: 0.24em 0.65em;
+      color: #1e3a8a;
+      cursor: pointer;
+      font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      user-select: none;
+    }
+
+    .lexi-selection-translation[data-lexi-collapsed="true"] .lexi-selection-translation__collapsed {
+      display: inline-flex;
+      animation: lexi-capsule-content-enter 180ms ease-out both;
+    }
+
+    .lexi-selection-translation__collapsed-icon {
+      all: initial;
+      color: #2563eb;
+      font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .lexi-selection-translation__collapsed-text {
+      all: initial;
+      min-width: 0;
+      overflow: hidden;
+      color: #1e3a8a;
+      font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
     @keyframes lexi-text-reveal {
       from {
         opacity: 0.42;
@@ -469,6 +663,17 @@ function getPageStyleContent(customCss = '') {
       to {
         opacity: 1;
         transform: translateY(0);
+      }
+    }
+
+    @keyframes lexi-capsule-content-enter {
+      from {
+        opacity: 0;
+        transform: translateY(1px) scale(0.98);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
       }
     }
 
@@ -507,6 +712,7 @@ function getPageStyleContent(customCss = '') {
       .lexi-selection-translation__text[data-lexi-loading="true"],
       .lexi-selection-translation[data-lexi-loading="true"],
       .lexi-selection-translation[data-lexi-loading="true"]::after,
+      .lexi-selection-translation[data-lexi-collapsed="true"] .lexi-selection-translation__collapsed,
       .lexi-selection-translation {
         animation: none;
       }
@@ -713,38 +919,40 @@ function moveTooltip(tooltip: HTMLElement, event: MouseEvent) {
   tooltip.style.top = `${Math.max(12, Math.min(event.clientY + offset, maxTop))}px`
 }
 
-function replaceTextNode(node: Text, candidates: VocabularyCandidate[]) {
-  if (!candidates.length || !node.parentNode)
-    return 0
+function replaceTextNode(node: Text, matches: ReplacementMatch[]) {
+  if (!matches.length || !node.parentNode)
+    return []
 
-  let text = node.nodeValue ?? ''
+  const text = node.nodeValue ?? ''
   const fragment = document.createDocumentFragment()
-  let count = 0
+  const applied: VocabularyCandidate[] = []
+  let cursor = 0
 
   const used = new Set<string>()
+  const sorted = [...matches].sort((a, b) => a.index - b.index || b.candidate.original.length - a.candidate.original.length)
 
-  while (text) {
-    const next = candidates
-      .map(candidate => ({ candidate, index: text.indexOf(candidate.original) }))
-      .filter(item => item.index >= 0 && !used.has(item.candidate.original))
-      .sort((a, b) => a.index - b.index || b.candidate.original.length - a.candidate.original.length)[0]
+  for (const match of sorted) {
+    const { candidate, index } = match
+    if (used.has(candidate.original) || index < cursor)
+      continue
 
-    if (!next) {
-      fragment.append(document.createTextNode(text))
-      break
-    }
+    if (index > cursor)
+      fragment.append(document.createTextNode(text.slice(cursor, index)))
 
-    if (next.index > 0)
-      fragment.append(document.createTextNode(text.slice(0, next.index)))
-
-    fragment.append(createToken(next.candidate))
-    used.add(next.candidate.original)
-    text = text.slice(next.index + next.candidate.original.length)
-    count += 1
+    fragment.append(createToken(candidate))
+    used.add(candidate.original)
+    applied.push(candidate)
+    cursor = index + candidate.original.length
   }
 
+  if (!applied.length)
+    return []
+
+  if (cursor < text.length)
+    fragment.append(document.createTextNode(text.slice(cursor)))
+
   node.parentNode.replaceChild(fragment, node)
-  return count
+  return applied
 }
 
 function readJsonValue<T>(value: unknown, fallback: T): T {
@@ -816,7 +1024,29 @@ function getElementFromRangeEnd(range: Range) {
   return container instanceof Element ? container : container.parentElement
 }
 
+function createCollapsedSelectionAnchor(range: Range) {
+  const anchor = document.createElement('span')
+  anchor.dataset.lexiSelectionAnchor = 'true'
+  anchor.style.cssText = 'display:inline-block;width:0;height:0;overflow:hidden;'
+
+  try {
+    const collapsed = range.cloneRange()
+    collapsed.collapse(false)
+    collapsed.insertNode(anchor)
+    return anchor
+  }
+  catch {
+    return undefined
+  }
+}
+
 function getSelectionBlock(range?: Range) {
+  if (range) {
+    const insertedAnchor = createCollapsedSelectionAnchor(range)
+    if (insertedAnchor)
+      return insertedAnchor
+  }
+
   const endElement = range ? getElementFromRangeEnd(range) : undefined
   const anchor = endElement?.closest<HTMLElement>(selectionAnchorSelectors)
   if (anchor)
@@ -824,27 +1054,14 @@ function getSelectionBlock(range?: Range) {
 
   const node = range?.commonAncestorContainer
   const element = node instanceof Element ? node : node?.parentElement
-  if (range) {
-    const container = document.createElement('span')
-    container.dataset.lexiSelectionAnchor = 'true'
-    container.style.cssText = 'display:block;height:0;overflow:hidden;'
-    try {
-      const collapsed = range.cloneRange()
-      collapsed.collapse(false)
-      collapsed.insertNode(container)
-      return container
-    }
-    catch {}
-  }
-
   return element?.closest(blockSelectors) ?? element ?? document.body
 }
 
 function insertAfterSelectionAnchor(anchor: Element, block: HTMLElement) {
   if (anchor instanceof HTMLElement && anchor.dataset.lexiSelectionAnchor === 'true') {
-    const parent = anchor.parentElement
-    if (parent)
-      parent.insertAdjacentElement('afterend', block)
+    const parentBlock = anchor.parentElement?.closest<HTMLElement>(blockSelectors)
+    if (parentBlock && parentBlock !== document.body && parentBlock.contains(anchor))
+      parentBlock.insertAdjacentElement('afterend', block)
     else
       anchor.insertAdjacentElement('afterend', block)
 
@@ -990,6 +1207,67 @@ function releaseSelectionDomLock(key: string) {
   delete document.documentElement.dataset[`lexiSelectionLock${key}`]
 }
 
+function createSelectionCardButton(label: string, icon: string) {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'lexi-selection-translation__icon-button'
+  button.textContent = icon
+  button.setAttribute('aria-label', label)
+  button.title = label
+  return button
+}
+
+function createCollapsedSelectionSummary(translation: string) {
+  const normalized = translation.replace(/\s+/g, ' ').trim()
+  return normalized ? `${Array.from(normalized).slice(0, 5).join('')}...` : '翻译...'
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function animateSelectionCardFlip(block: HTMLElement, mutate: () => void) {
+  const first = block.getBoundingClientRect()
+  mutate()
+
+  if (prefersReducedMotion())
+    return
+
+  const last = block.getBoundingClientRect()
+  if (!first.width || !first.height || !last.width || !last.height)
+    return
+
+  const deltaX = first.left - last.left
+  const deltaY = first.top - last.top
+  const scaleX = first.width / last.width
+  const scaleY = first.height / last.height
+  const settlingScaleX = 1 + (scaleX < 1 ? 0.015 : -0.012)
+  const settlingScaleY = 1 + (scaleY < 1 ? 0.035 : -0.018)
+
+  block.getAnimations().forEach(animation => animation.cancel())
+  block.animate(
+    [
+      {
+        opacity: 0.88,
+        transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`,
+      },
+      {
+        opacity: 1,
+        offset: 0.78,
+        transform: `translate(0, 0) scale(${settlingScaleX}, ${settlingScaleY})`,
+      },
+      {
+        opacity: 1,
+        transform: 'translate(0, 0) scale(1, 1)',
+      },
+    ],
+    {
+      duration: 320,
+      easing: 'cubic-bezier(0.2, 0.9, 0.18, 1)',
+    },
+  )
+}
+
 function animateSelectionBlockHeight(block: HTMLElement, mutate: () => void) {
   const fromHeight = block.getBoundingClientRect().height
   mutate()
@@ -1048,22 +1326,65 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
 
   const anchor = getSelectionBlock(range)
   const block = document.createElement('div')
+  const header = document.createElement('div')
   const label = document.createElement('span')
+  const actions = document.createElement('span')
+  const hide = createSelectionCardButton('隐藏翻译卡片', '−')
+  const close = createSelectionCardButton('关闭翻译卡片', '×')
+  const body = document.createElement('div')
   const text = document.createElement('span')
   const detail = document.createElement('span')
+  const collapsed = document.createElement('button')
+  const collapsedIcon = document.createElement('span')
+  const collapsedText = document.createElement('span')
 
   block.dataset.lexiSelectionTranslation = 'true'
   block.dataset.lexiSelectionKey = requestKey
   block.dataset.lexiLoading = 'true'
   block.className = 'lexi-selection-translation'
+  header.className = 'lexi-selection-translation__header'
   label.className = 'lexi-selection-translation__label'
+  actions.className = 'lexi-selection-translation__actions'
+  body.className = 'lexi-selection-translation__body'
   text.className = 'lexi-selection-translation__text'
   detail.className = 'lexi-selection-translation__detail'
+  collapsed.className = 'lexi-selection-translation__collapsed'
+  collapsed.type = 'button'
+  collapsed.setAttribute('aria-label', '展开翻译卡片')
+  collapsed.title = '展开翻译卡片'
+  collapsedIcon.className = 'lexi-selection-translation__collapsed-icon'
+  collapsedText.className = 'lexi-selection-translation__collapsed-text'
   label.textContent = 'Lexi 翻译'
   text.textContent = `翻译中：${selected}`
   text.dataset.lexiLoading = 'true'
+  collapsedIcon.textContent = '+'
+  collapsedText.textContent = '翻译中...'
 
-  block.append(label, text, detail)
+  hide.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    animateSelectionCardFlip(block, () => {
+      block.dataset.lexiCollapsed = 'true'
+    })
+  })
+  close.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    block.remove()
+  })
+  collapsed.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    animateSelectionCardFlip(block, () => {
+      delete block.dataset.lexiCollapsed
+    })
+  })
+
+  actions.append(hide, close)
+  header.append(label, actions)
+  body.append(text, detail)
+  collapsed.append(collapsedIcon, collapsedText)
+  block.append(header, body, collapsed)
   insertAfterSelectionAnchor(anchor, block)
   pruneDuplicateSelectionBlocks(requestKey, block)
 
@@ -1085,6 +1406,7 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
       }
       if (detailText)
         detail.textContent = detailText
+      collapsedText.textContent = createCollapsedSelectionSummary(nextText)
     },
     remove() {
       block.remove()
@@ -1281,6 +1603,14 @@ function shortcutMatches(event: KeyboardEvent, shortcut: string) {
     && (!wantsShift || event.shiftKey)
 }
 
+function isMacPlatform() {
+  return /\bMac|iPhone|iPad|iPod\b/i.test(navigator.platform)
+}
+
+function selectionModifierPressed(event: MouseEvent | PointerEvent | KeyboardEvent) {
+  return isMacPlatform() ? event.metaKey : event.ctrlKey
+}
+
 async function translateSelection(
   settings: LexiSettings,
   selected: string,
@@ -1331,6 +1661,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let selectionRequestId = 0
   let selectionPointerDown = false
   let selectionFinalizedAt = 0
+  let selectionFinalizedWithModifier = false
   let activeSelectionBlock: { remove: () => void } | undefined
   let pageTranslationRunning = false
   let pageTranslationEnabled = false
@@ -1396,41 +1727,47 @@ export function startPageEnhancer(events: EnhancerEvents) {
     while (walker.nextNode() && textNodes.length < scanLimit)
       textNodes.push(walker.currentNode as Text)
 
-    const prioritizedTextNodes = textNodes
-      .map(node => ({ node, score: scoreTextNodeForReplacement(node, settings, records) }))
-      .filter(item => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(item => item.node)
-
     let nextRecords = records
     const aiReplacementSeeds: ReplacementSeed[] = []
-    const usedOriginals = new Set<string>()
+    const recordIndex = createReplacementRecordIndex(records)
+    const candidatePool = createReplacementCandidatePool(settings, records)
+    const replacementPlans: ReplacementNodePlan[] = []
+
+    for (const node of textNodes) {
+      const plan = collectReplacementMatches(node, candidatePool, recordIndex, budget.density)
+      if (plan) {
+        replacementPlans.push(plan)
+        continue
+      }
+
+      if (settings.ai.replacement.enabled)
+        collectReplacementSeed(aiReplacementSeeds, node.nodeValue ?? '', getContextText(node))
+    }
+
+    const selectedPlans = selectReplacementPlans(replacementPlans, budget.maxPerPage)
+    if (countSelectedReplacements(selectedPlans) >= budget.maxPerPage)
+      aiReplacementSeeds.length = 0
+
+    const prioritizedTextNodes = [...selectedPlans.keys()]
+      .sort((a, b) => {
+        const aScore = selectedPlans.get(a)?.[0]?.nodeScore ?? 0
+        const bScore = selectedPlans.get(b)?.[0]?.nodeScore ?? 0
+        return bScore - aScore
+      })
+
     for (const node of prioritizedTextNodes) {
       if (stats.replacements >= budget.maxPerPage)
         break
 
       const context = getContextText(node)
-      const sourceText = node.nodeValue ?? ''
-      let candidates = pickCandidates(sourceText, {
-        ...settings,
-        replacement: {
-          ...settings.replacement,
-          density: budget.density,
-        },
-      }, records, usedOriginals)
-
-      if (!candidates.length && settings.ai.replacement.enabled)
-        collectReplacementSeed(aiReplacementSeeds, sourceText, context)
-
       const remaining = budget.maxPerPage - stats.replacements
-      candidates = candidates.slice(0, remaining)
-      const changed = replaceTextNode(node, candidates)
-      if (!changed)
+      const matches = selectedPlans.get(node)?.slice(0, remaining) ?? []
+      const changedCandidates = replaceTextNode(node, matches)
+      if (!changedCandidates.length)
         continue
 
-      stats.replacements += changed
-      for (const candidate of candidates.slice(0, changed)) {
-        usedOriginals.add(candidate.original)
+      stats.replacements += changedCandidates.length
+      for (const candidate of changedCandidates) {
         nextRecords = upsertVocabularyRecord(nextRecords, {
           candidate,
           source: 'auto',
@@ -1839,6 +2176,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const domKey = createSelectionDomKey(selected)
     if (selectionKey === lastSelectionKey || selectionKey === activeSelectionKey || recentSelectionKeys.has(selectionKey))
       return
+
+    const { settings } = await getStoredState()
+    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled || !settings.selection.autoTranslate)
+      return
+    if (settings.selection.requireModifierKey && !selectionFinalizedWithModifier)
+      return
+
     if (!claimSelectionDomLock(domKey))
       return
 
@@ -1846,12 +2190,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
     removeSelectionBlocksByKey(domKey)
     activeSelectionKey = selectionKey
     rememberSelectionKey(selectionKey)
-
-    const { settings } = await getStoredState()
-    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled || !settings.selection.autoTranslate) {
-      activeSelectionKey = ''
-      return
-    }
 
     try {
       await translateAndRecord(selected, context, range, selectionRequestId, domKey)
@@ -1866,13 +2204,15 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const onPointerDown = () => {
     selectionPointerDown = true
     selectionFinalizedAt = 0
+    selectionFinalizedWithModifier = false
     selectionChangingSince = performance.now()
     window.clearTimeout(selectionTimer)
   }
 
-  const onMouseUp = () => {
+  const onMouseUp = (event: MouseEvent) => {
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
+    selectionFinalizedWithModifier = selectionModifierPressed(event)
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
       if (!disposed && getSelectionSnapshot())
@@ -1880,9 +2220,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }, 80)
   }
 
-  const onPointerUp = () => {
+  const onPointerUp = (event: PointerEvent) => {
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
+    selectionFinalizedWithModifier = selectionModifierPressed(event)
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
       if (!disposed && getSelectionSnapshot())
@@ -1893,6 +2234,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const onKeyUp = (event: KeyboardEvent) => {
     if (event.key.startsWith('Arrow') || event.key === 'Shift') {
       selectionFinalizedAt = performance.now()
+      selectionFinalizedWithModifier = selectionModifierPressed(event)
       scheduleSelectionCheck(420)
     }
   }

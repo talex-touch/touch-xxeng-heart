@@ -213,6 +213,13 @@ onMounted(() => {
           </option>
         </select>
       </label>
+      <label class="mt-3 flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
+        <span>
+          <span class="block">修饰键触发</span>
+          <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl</span>
+        </span>
+        <input v-model="lexiSettings.selection.requireModifierKey" type="checkbox" class="h-4 w-4">
+      </label>
       <label class="mt-3 block">
         <span class="text-12px text-neutral-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
         <input v-model.number="lexiSettings.replacement.density" type="range" min="0.02" max="0.25" step="0.01" class="mt-1 w-full accent-neutral-950">

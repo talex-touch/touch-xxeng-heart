@@ -111,6 +111,7 @@ export const defaultSettings: LexiSettings = {
   selection: {
     enabled: true,
     autoTranslate: true,
+    requireModifierKey: true,
     translationDirection: 'auto',
   },
   study: {

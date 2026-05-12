@@ -120,6 +120,7 @@ export interface ReplacementSettings {
 export interface SelectionSettings {
   enabled: boolean
   autoTranslate: boolean
+  requireModifierKey: boolean
   translationDirection: TranslationDirection
 }
 

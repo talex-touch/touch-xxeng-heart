@@ -385,6 +385,13 @@ function removeSceneRule(index: number) {
               <span class="text-14px font-500">划词自动翻译</span>
               <input v-model="lexiSettings.selection.autoTranslate" type="checkbox" class="h-5 w-5">
             </label>
+            <label class="mt-4 flex items-center justify-between gap-4">
+              <span>
+                <span class="block text-14px font-500">按住修饰键触发划词翻译</span>
+                <span class="text-12px text-neutral-500">macOS 使用 Command，Windows/Linux 使用 Ctrl。</span>
+              </span>
+              <input v-model="lexiSettings.selection.requireModifierKey" type="checkbox" class="h-5 w-5">
+            </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">划词翻译方向</span>
               <select v-model="lexiSettings.selection.translationDirection" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">

@@ -19,6 +19,7 @@ interface AiSelectionDetailResponse {
     term: string
     explanation: string
   }>
+  translationReview?: string
   advice?: string
   aiSuggestion?: string
   candidate?: VocabularyCandidate
@@ -702,8 +703,19 @@ export async function requestReplacementCandidates(
   const data = await postAiJson<AiReplacementResponse>(settings, 'replacement', {
     text,
     context,
-    instruction: 'Return rare or technical Chinese terms with English replacements, meanings, examples, tags and difficulty.',
-  })
+    instruction: [
+      'Extract two kinds of reusable vocabulary entries from the page text.',
+      '1) Chinese programming/AI terms that are useful for learning English: set original to the Chinese term and replacement to a natural English expression.',
+      '2) Product, brand, model, platform, library, framework, CLI or service names such as Codex, ChatGPT, Claude, GitHub Actions, Vite, React, Next.js: record them as product knowledge, but DO NOT translate or rename them. For product entries set original and replacement to the exact same surface name from the page.',
+      'Add tag "product" for product/name entries; add "technical" for general technical terms. You may add more concise tags such as ai, cli, framework, platform.',
+      'Product entries will be reused by Lexi for hover explanations only, not for text replacement.',
+      'Return compact JSON only: {"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}]}',
+    ].join(' '),
+  }, [
+    'You are Lexi vocabulary extractor for programmer English learning.',
+    'Return only valid compact JSON. No markdown, no explanations, no hidden reasoning.',
+    'Preserve product names exactly. Never translate product names; mark them with tag "product".',
+  ].join(' '))
 
   return data?.items?.filter(item => item.original && item.replacement) ?? []
 }
@@ -720,10 +732,11 @@ export async function requestSelectionTranslation(
     [
       getTranslationDirectionInstruction(settings.selection.translationDirection),
       'Translate ONLY the text between <selected> and </selected>.',
-      'Use context only to disambiguate meaning; do not translate or paraphrase the context.',
-      'Return only the translation, with no explanation.',
+      'Use context only to disambiguate meaning, tone, speaker intent and subtext; do not translate or paraphrase the context.',
+      'Make the final translation accurate, natural and human-sounding. Avoid translationese; rewrite sentence order when needed.',
+      'Return only the final polished translation, with no explanation.',
       `<selected>${text}</selected>`,
-      `<context>${context.slice(0, 180)}</context>`,
+      `<context>${context.slice(0, 360)}</context>`,
     ].join('\n'),
     value => onTranslation?.({
       original: text,
@@ -757,13 +770,15 @@ export async function requestSelectionDetail(
     instruction: [
       'Explain only terms that help understand the selected text.',
       'Put each term explanation into terms as one short item.',
-      'Keep explanation, context and advice under 60 Chinese characters each.',
+      'Give a brief context comment about tone, intent, relationship or subtext after considering the surrounding context.',
+      'Give one short translation optimization suggestion: how to make the translation more natural and human-sounding, avoiding translationese.',
+      'Keep explanation, context, translationReview and advice under 60 Chinese characters each.',
       'If the selected text contains a technical term, return a candidate dictionary entry.',
-      'Return JSON: {"explanation":"","terms":[{"term":"","explanation":""}],"context":"","advice":"","candidate":{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}}.',
+      'Return JSON: {"explanation":"","terms":[{"term":"","explanation":""}],"context":"","translationReview":"","advice":"","candidate":{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}}.',
     ].join(' '),
   }, [
     'You are Lexi. Return only compact JSON matching the requested schema.',
-    'Use plain Chinese. Keep term explanations short and useful.',
+    'Use plain Chinese. Keep comments short, specific and useful.',
     'Do not include markdown or hidden reasoning.',
   ].join(' '))
 
@@ -778,7 +793,7 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
   const user = scene === 'selection'
     ? [
         getTranslationDirectionInstruction(settings.selection.translationDirection),
-        'Translate only the selected text.',
+        'Translate only the selected text. Make it natural and human-sounding; avoid translationese.',
         'Selected text: optimistic update',
         'Context: The UI applies an optimistic update before the server confirms the change.',
       ].join('\n')

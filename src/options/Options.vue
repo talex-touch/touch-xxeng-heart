@@ -67,6 +67,7 @@ const filteredVocabularyRecords = computed(() => {
 })
 const recentVocabularyRecords = computed(() => filteredVocabularyRecords.value.slice(0, 120))
 const todayStudySummary = computed(() => createTodayStudySummary(vocabularyRecords.value))
+const productVocabularyCount = computed(() => vocabularyRecords.value.filter(record => record.tags.includes('product')).length)
 const storageStats = computed(() => {
   const items = [
     { label: '词库', bytes: estimateStorageBytes(vocabularyRecords.value) },
@@ -513,10 +514,10 @@ function removeSceneRule(index: number) {
               词库记录
             </h2>
             <p class="mt-1 text-12px text-neutral-500">
-              AI 补充、网页替换和划词翻译都会进入本地记录，后续可用于快速替换。
+              AI 补充、网页替换和划词翻译都会进入本地记录；产品名会标记为 product，只用于 hover 说明，不改写页面文字。
             </p>
           </div>
-          <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · {{ formatBytes(storageStats.items[0].bytes) }}</span>
+          <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · 产品 {{ productVocabularyCount }} · {{ formatBytes(storageStats.items[0].bytes) }}</span>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
           <input
@@ -564,6 +565,9 @@ function removeSceneRule(index: number) {
                   替换/翻译
                 </th>
                 <th class="py-2 pr-3 font-500">
+                  标签
+                </th>
+                <th class="py-2 pr-3 font-500">
                   来源
                 </th>
                 <th class="py-2 pr-3 font-500">
@@ -581,6 +585,14 @@ function removeSceneRule(index: number) {
                 </td>
                 <td class="max-w-64 break-words py-2 pr-3">
                   {{ record.replacement }}
+                </td>
+                <td class="max-w-48 break-words py-2 pr-3 text-neutral-500">
+                  <span v-if="record.tags.length" class="inline-flex flex-wrap gap-1">
+                    <span v-for="tag in record.tags" :key="tag" class="rounded-full bg-neutral-100 px-2 py-0.5" :class="tag === 'product' ? 'bg-purple-50 text-purple-700' : ''">
+                      {{ tag }}
+                    </span>
+                  </span>
+                  <span v-else>-</span>
                 </td>
                 <td class="py-2 pr-3 text-neutral-500">
                   {{ record.source }}

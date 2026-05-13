@@ -6,7 +6,7 @@ import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import { pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
-import { getVocabularyId, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
+import { getVocabularyId, isProductVocabularyCandidate, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
 import type { LexiSettings, PageTranslationBlock, PageTranslationCache, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
 interface EnhancerEvents {
@@ -132,6 +132,7 @@ interface SelectionDetailView {
     term: string
     explanation: string
   }>
+  translationReview?: string
   advice?: string
 }
 
@@ -198,7 +199,7 @@ function getCandidateRecord(index: ReplacementRecordIndex, candidate: Vocabulary
 function createReplacementCandidatePool(settings: LexiSettings, records: VocabularyRecord[]) {
   const maxDifficulty = settings.replacement.difficulty
   const local = programmerVocabulary.filter(item => item.difficulty <= maxDifficulty)
-  const recorded = records.filter(record => record.difficulty <= maxDifficulty)
+  const recorded = records.filter(record => record.difficulty <= maxDifficulty || isProductVocabularyCandidate(record))
   return dedupeReplacementCandidates([...local, ...recorded])
 }
 
@@ -260,23 +261,33 @@ function collectReplacementMatches(
   }
 }
 
-function selectReplacementPlans(plans: ReplacementNodePlan[], maxPerPage: number) {
+function selectReplacementPlans(plans: ReplacementNodePlan[], maxPerPage: number, maxProductAnnotationsPerPage: number) {
   const usedOriginals = new Set<string>()
   const selected = new Map<Text, ReplacementMatch[]>()
   const sortedPlans = [...plans].sort((a, b) => b.score - a.score)
 
-  let count = 0
+  let replacementCount = 0
+  let productAnnotationCount = 0
   for (const plan of sortedPlans) {
-    if (count >= maxPerPage)
+    if (replacementCount >= maxPerPage && productAnnotationCount >= maxProductAnnotationsPerPage)
       break
 
     const fresh = plan.matches.filter(match => !usedOriginals.has(match.candidate.original))
-    const source = fresh.length ? fresh : plan.matches
-    const matches = source
+    const matches = (fresh.length ? fresh : plan.matches)
       .sort((a, b) => b.score - a.score || a.index - b.index)
-      .slice(0, Math.min(plan.limit, maxPerPage - count))
+    let planReplacementCount = 0
+    let planProductAnnotationCount = 0
 
     for (const match of matches) {
+      const isProduct = isProductVocabularyCandidate(match.candidate)
+      if (isProduct) {
+        if (productAnnotationCount >= maxProductAnnotationsPerPage || planProductAnnotationCount >= 2)
+          continue
+      }
+      else if (replacementCount >= maxPerPage || planReplacementCount >= plan.limit) {
+        continue
+      }
+
       const nodeMatches = selected.get(plan.node) ?? []
       if (nodeMatches.some(selectedMatch => replacementMatchesOverlap(selectedMatch, match)))
         continue
@@ -284,7 +295,14 @@ function selectReplacementPlans(plans: ReplacementNodePlan[], maxPerPage: number
       nodeMatches.push(match)
       selected.set(plan.node, nodeMatches)
       usedOriginals.add(match.candidate.original)
-      count += 1
+      if (isProduct) {
+        productAnnotationCount += 1
+        planProductAnnotationCount += 1
+      }
+      else {
+        replacementCount += 1
+        planReplacementCount += 1
+      }
     }
   }
 
@@ -300,9 +318,13 @@ function replacementMatchesOverlap(a: ReplacementMatch, b: ReplacementMatch) {
 function countSelectedReplacements(plans: Map<Text, ReplacementMatch[]>) {
   let count = 0
   for (const matches of plans.values())
-    count += matches.length
+    count += matches.filter(match => !isProductVocabularyCandidate(match.candidate)).length
 
   return count
+}
+
+function getProductAnnotationBudget(maxReplacementsPerPage: number) {
+  return Math.min(12, Math.max(3, Math.ceil(maxReplacementsPerPage * 0.75)))
 }
 
 function normalizeReplacementSeed(text: string) {
@@ -369,6 +391,7 @@ function normalizeSelectionDetail(value: unknown): SelectionDetailView {
     explanation?: unknown
     context?: unknown
     terms?: unknown
+    translationReview?: unknown
     advice?: unknown
     aiSuggestion?: unknown
   }
@@ -379,6 +402,7 @@ function normalizeSelectionDetail(value: unknown): SelectionDetailView {
     terms: Array.isArray(detail.terms)
       ? detail.terms.map(normalizeTerm).filter(item => item != null)
       : [],
+    translationReview: typeof detail.translationReview === 'string' ? detail.translationReview.trim() : undefined,
     advice: typeof detail.advice === 'string'
       ? detail.advice.trim()
       : typeof detail.aiSuggestion === 'string'
@@ -391,8 +415,9 @@ function formatSelectionDetail(detail: SelectionDetailView) {
   const lines = [
     detail.explanation,
     ...detail.terms.map(item => `名词：${item.term} - ${item.explanation}`),
-    detail.context ? `上下文：${detail.context}` : '',
-    detail.advice ? `AI 建议：${detail.advice}` : '',
+    detail.context ? `语境：${detail.context}` : '',
+    detail.translationReview ? `译文优化：${detail.translationReview}` : '',
+    detail.advice ? `建议：${detail.advice}` : '',
   ].filter(Boolean)
 
   return lines.join('\n')
@@ -412,6 +437,7 @@ function createCandidateFromTerm(translation: SelectionTranslation, term: { term
 
 function createToken(candidate: VocabularyCandidate) {
   const token = document.createElement('span')
+  const isProduct = isProductVocabularyCandidate(candidate)
   token.dataset.lexiToken = 'true'
   token.dataset.original = candidate.original
   token.dataset.replacement = candidate.replacement
@@ -419,8 +445,9 @@ function createToken(candidate: VocabularyCandidate) {
   token.dataset.example = candidate.example
   token.dataset.tags = candidate.tags.join(', ')
   token.dataset.pronunciation = candidate.pronunciation ?? ''
-  token.className = 'lexi-token'
-  token.textContent = candidate.replacement
+  token.dataset.lexiProduct = isProduct ? 'true' : 'false'
+  token.className = isProduct ? 'lexi-token lexi-token-product' : 'lexi-token'
+  token.textContent = isProduct ? candidate.original : candidate.replacement
   return token
 }
 
@@ -435,6 +462,15 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-token:hover {
       background: rgba(37, 99, 235, 0.09);
+    }
+
+    .lexi-token-product {
+      border-bottom-color: #9333ea;
+      color: inherit;
+    }
+
+    .lexi-token-product:hover {
+      background: rgba(147, 51, 234, 0.08);
     }
 
     .lexi-token-tooltip {
@@ -1744,7 +1780,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
         collectReplacementSeed(aiReplacementSeeds, node.nodeValue ?? '', getContextText(node))
     }
 
-    const selectedPlans = selectReplacementPlans(replacementPlans, budget.maxPerPage)
+    const selectedPlans = selectReplacementPlans(replacementPlans, budget.maxPerPage, getProductAnnotationBudget(budget.maxPerPage))
     if (countSelectedReplacements(selectedPlans) >= budget.maxPerPage)
       aiReplacementSeeds.length = 0
 
@@ -1766,7 +1802,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       if (!changedCandidates.length)
         continue
 
-      stats.replacements += changedCandidates.length
+      stats.replacements += changedCandidates.filter(candidate => !isProductVocabularyCandidate(candidate)).length
       for (const candidate of changedCandidates) {
         nextRecords = upsertVocabularyRecord(nextRecords, {
           candidate,
@@ -2292,7 +2328,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!tooltip)
       tooltip = createTooltip()
 
-    tooltip.textContent = `${token.dataset.original} · ${token.dataset.meaning}\n${token.dataset.example}`
+    const productPrefix = token.dataset.lexiProduct === 'true' ? '产品 / 工具 · ' : ''
+    const replacementLine = token.dataset.lexiProduct === 'true'
+      ? `${token.dataset.original} · ${productPrefix}${token.dataset.meaning}`
+      : `${token.dataset.original} → ${token.dataset.replacement} · ${token.dataset.meaning}`
+    const tagsLine = token.dataset.tags ? `\n标签：${token.dataset.tags}` : ''
+    tooltip.textContent = `${replacementLine}\n${token.dataset.example}${tagsLine}`
     tooltip.hidden = false
     moveTooltip(tooltip, event)
   }

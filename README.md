@@ -47,6 +47,7 @@ pnpm dev
 ```bash
 pnpm dev          # 开发模式
 pnpm build        # 生产构建
+pnpm version:patch # 升级 patch 版本，发版前使用
 pnpm test         # 单元测试
 pnpm typecheck    # TypeScript 检查
 pnpm lint         # ESLint 检查
@@ -86,12 +87,20 @@ Lexi 会向配置的 endpoint 发送 JSON POST 请求，并在 Header 中以 `Au
 }
 ```
 
-划词场景期望返回：
+划词场景会先请求最终译文，再请求一段简短说明。译文要求结合上下文判断语气、意图和潜台词，表达自然、有人味，避免翻译腔。说明请求期望返回：
 
 ```json
 {
-  "translation": "context",
   "explanation": "上下文可理解为 context。",
+  "terms": [
+    {
+      "term": "上下文",
+      "explanation": "理解文本时依赖的背景信息。"
+    }
+  ],
+  "context": "这里强调模型需要背景信息才能稳定判断。",
+  "translationReview": "英文用 context 比 background 更贴近技术语境。",
+  "advice": "保留技术语气，译文保持简洁自然。",
   "candidate": {
     "original": "上下文",
     "replacement": "context",

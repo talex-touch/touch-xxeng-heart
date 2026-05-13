@@ -8,13 +8,17 @@ const emptyAiConnection = {
 
 const promptDefaults: Record<FeatureScene, string> = {
   replacement: [
-    '从网页文本中挑少量适合程序员英语学习的中文技术词，给出英文替换词。',
-    '只返回 JSON：{"items":[{"original":"","replacement":"","meaning":"","example":"","tags":[],"difficulty":2}]}。',
+    '从网页文本中提取少量适合程序员英语学习的词库项。',
+    '中文技术词给出自然英文替换词。',
+    '产品、品牌、模型、平台、库、框架、CLI 或服务名（如 Codex、ChatGPT、Claude、GitHub Actions、Vite、React、Next.js）只记录知识，不翻译不改名；这类条目的 original 和 replacement 都使用页面里的原始名称，并在 tags 中加入 product。',
+    '普通技术词在 tags 中加入 technical。',
+    '只返回 JSON：{"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}]}。',
     '不要解释，不要输出 Markdown。',
   ].join(' '),
   selection: [
-    '把用户选中的文本翻译成目标语言，表达自然、简洁。',
-    '只输出译文，不要 JSON、标题、解释、备选项或思考过程。',
+    '把用户选中的文本翻译成目标语言，先结合上下文判断语气、意图和潜台词。',
+    '译文要准确、自然、有人味，避免翻译腔；必要时重组句子，让目标语言读者觉得像真人会说的话。',
+    '只输出最终译文，不要 JSON、标题、解释、备选项或思考过程。',
   ].join(' '),
   daily: [
     '生成适合程序员日常学习的英语词汇建议。',

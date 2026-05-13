@@ -709,13 +709,13 @@ export async function requestReplacementCandidates(
       '2) Product, brand, model, platform, library, framework, CLI or service names such as Codex, ChatGPT, Claude, GitHub Actions, Vite, React, Next.js: record them as product knowledge, but DO NOT translate or rename them. For product entries set original and replacement to the exact same surface name from the page.',
       'Add tag "product" for product/name entries; add "technical" for general technical terms. You may add more concise tags such as ai, cli, framework, platform.',
       'Product entries will be reused by Lexi for hover explanations only, not for text replacement.',
-      'Write meaning as a concise Chinese translation/explanation so the hover tooltip is understandable to Chinese readers.',
+      'Write meaning with Chinese first and English if useful, e.g. "反向代理；英文：a server that forwards client requests to backend servers" so the hover tooltip is understandable to Chinese readers.',
       'Return compact JSON only: {"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}]}',
     ].join(' '),
   }, [
     'You are Lexi vocabulary extractor for programmer English learning.',
     'Return only valid compact JSON. No markdown, no explanations, no hidden reasoning.',
-    'Write all meaning fields in concise Chinese.',
+    'Write all meaning fields in Chinese first; include brief English explanation only if useful.',
     'Preserve product names exactly. Never translate product names; mark them with tag "product".',
   ].join(' '))
 
@@ -798,21 +798,32 @@ export async function requestGitHubDigest(
     languages: string[]
     files: string[]
     readme: string
+    pageText?: string
+    mode?: 'quick' | 'detail'
   },
 ) {
+  const isDetail = context.mode === 'detail'
   const data = await postAiJson<Partial<GitHubDigestResult>>(settings, 'daily', {
-    scene: 'github-digest',
+    scene: isDetail ? 'github-digest-detail' : 'github-digest-quick',
     ...context,
-    readme: context.readme.slice(0, 4200),
-    instruction: [
-      'Create a concise GitHub repository digest for a developer reader.',
-      'Summarize what the project does from the repo description, topics, languages, visible files and README excerpt.',
-      'Keep it short and scannable. Use Chinese for oneLine, audience and startHere. Keep techStack and terms as concise technical names when appropriate.',
-      'Return JSON only: {"oneLine":"","audience":[""],"techStack":[""],"startHere":[""],"terms":[""]}.',
-    ].join(' '),
+    readme: context.readme.slice(0, isDetail ? 5200 : 2200),
+    instruction: isDetail
+      ? [
+          'Create a detailed GitHub repository overview for a developer reader.',
+          'Use README plus current page content, topics, languages and visible files.',
+          'Include practical AI-style comments: what looks valuable, possible use cases, what to inspect first, and any caveats or learning angle.',
+          'Keep it concise and scannable. Use Chinese for oneLine, details, audience and startHere. Keep techStack and terms as concise technical names when appropriate.',
+          'Return JSON only: {"oneLine":"","details":"","audience":[""],"techStack":[""],"startHere":[""],"terms":[""]}.',
+        ].join(' ')
+      : [
+          'Create a quick GitHub repository digest for a developer reader.',
+          'Translate and explain the project description in Chinese, infer the project purpose from metadata and README excerpt, and give one short AI-style comment or suggestion in details.',
+          'Keep it very short. Use Chinese for oneLine and details. Keep techStack and terms as concise technical names when appropriate.',
+          'Return JSON only: {"oneLine":"","details":"","audience":[""],"techStack":[""],"startHere":[""],"terms":[""]}.',
+        ].join(' '),
   }, [
     'You are Lexi GitHub Digest. Return only compact JSON matching the requested schema.',
-    'No markdown, no hidden reasoning. Prefer concise Chinese explanations.',
+    'No markdown, no hidden reasoning. Prefer concise Chinese explanations and practical developer-oriented comments.',
   ].join(' '))
 
   if (!data?.oneLine)
@@ -820,6 +831,7 @@ export async function requestGitHubDigest(
 
   return {
     oneLine: data.oneLine,
+    details: typeof data.details === 'string' ? data.details.trim() : undefined,
     audience: Array.isArray(data.audience) ? data.audience.filter(Boolean).slice(0, 4) : [],
     techStack: Array.isArray(data.techStack) ? data.techStack.filter(Boolean).slice(0, 8) : [],
     startHere: Array.isArray(data.startHere) ? data.startHere.filter(Boolean).slice(0, 5) : [],

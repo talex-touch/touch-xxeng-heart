@@ -14,6 +14,7 @@ interface GitHubRepoInfo {
   languages: string[]
   files: string[]
   readme: string
+  pageText: string
   private: boolean
   sourceHash: string
 }
@@ -21,17 +22,18 @@ interface GitHubRepoInfo {
 interface DigestCardState {
   element: HTMLElement
   info: GitHubRepoInfo
-  status: 'idle' | 'loading' | 'ready' | 'error'
-  digest?: GitHubDigestResult
+  status: 'quick-loading' | 'quick-ready' | 'detail-loading' | 'detail-ready' | 'error'
+  quickDigest?: GitHubDigestResult
+  detailDigest?: GitHubDigestResult
   error?: string
-  cached?: boolean
+  cachedQuick?: boolean
+  cachedDetail?: boolean
 }
 
 let cardState: DigestCardState | undefined
 let routeInterval: number | undefined
 let mutationTimer: number | undefined
 let autoTimer: number | undefined
-let hoverTimer: number | undefined
 let lastUrl = ''
 let disposed = false
 
@@ -138,6 +140,11 @@ function getReadmeText() {
   return normalizeText(readme?.textContent).slice(0, 5200)
 }
 
+function getPageText() {
+  const main = document.querySelector<HTMLElement>('main')
+  return normalizeText(main?.textContent ?? document.body.textContent).slice(0, 5200)
+}
+
 function isPrivateRepo() {
   return /\bPrivate\b/i.test(document.querySelector<HTMLElement>('[title="Label: Private"], .Label')?.textContent ?? '')
     || /\bPrivate\b/i.test(document.querySelector<HTMLElement>('[data-testid="repository-header"]')?.textContent ?? '')
@@ -153,7 +160,8 @@ function collectRepoInfo(): GitHubRepoInfo | undefined {
   const languages = getLanguages()
   const files = getVisibleFiles()
   const readme = getReadmeText()
-  const source = JSON.stringify({ description, topics, languages, files, readme: readme.slice(0, 4200) })
+  const pageText = getPageText()
+  const source = JSON.stringify({ description, topics, languages, files, readme: readme.slice(0, 4200), pageText: pageText.slice(0, 1800) })
 
   return {
     ...repoPath,
@@ -163,6 +171,7 @@ function collectRepoInfo(): GitHubRepoInfo | undefined {
     languages,
     files,
     readme,
+    pageText,
     private: isPrivateRepo(),
     sourceHash: simpleHash(source),
   }
@@ -184,42 +193,78 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#039;')
 }
 
-function getBasicSummary(info: GitHubRepoInfo) {
-  const chips = [...info.languages, ...info.topics].slice(0, 8)
+function getFallbackQuickSummary(info: GitHubRepoInfo) {
+  return {
+    oneLine: info.description || `${info.repo} 项目速读生成中。`,
+    details: '正在翻译项目介绍并生成 AI 点评。',
+    audience: [],
+    techStack: [...info.languages, ...info.topics].slice(0, 8),
+    startHere: [],
+    terms: info.topics.slice(0, 8),
+  }
+}
+
+function getDigestSummary(digest: GitHubDigestResult, options: { detail: boolean, cached?: boolean }) {
   return `
-    <p class="lexi-github-digest__desc">${escapeHtml(info.description || '读取 GitHub 右侧介绍和 README 后生成项目速览。')}</p>
-    ${chips.length ? `<div class="lexi-github-digest__chips">${chips.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+    <p class="lexi-github-digest__desc">${escapeHtml(digest.oneLine)}</p>
+    ${digest.details ? `<p class="lexi-github-digest__detail-text">${escapeHtml(digest.details)}</p>` : ''}
+    ${digest.techStack.length ? `<div class="lexi-github-digest__chips">${digest.techStack.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
+    ${options.detail ? `<div class="lexi-github-digest__section"><strong>适合谁</strong>${createList(digest.audience, '暂无受众信息')}</div>` : ''}
+    ${options.detail ? `<div class="lexi-github-digest__section"><strong>先看哪里</strong>${createList(digest.startHere, '暂无入口建议')}</div>` : ''}
+    ${digest.terms.length ? `<div class="lexi-github-digest__terms">术语：${digest.terms.map(escapeHtml).join(' · ')}</div>` : ''}
     <div class="lexi-github-digest__actions">
-      <button data-lexi-github-action="generate">生成速读</button>
-      <button data-lexi-github-action="hide">稍后</button>
+      <button data-lexi-github-action="generate">${options.detail ? '重新生成详细总览' : '生成详细总览'}</button>
+      ${options.detail ? '<button data-lexi-github-action="copy">复制</button>' : ''}
+      <button data-lexi-github-action="collapse">收起</button>
     </div>
-    <p class="lexi-github-digest__hint">停留约 18 秒或悬停卡片也会自动生成。</p>
+    <p class="lexi-github-digest__hint">${options.cached ? '来自本地缓存 · ' : ''}${options.detail ? '详细总览' : '基础速读'} · ${options.detail ? '已结合 README 和当前页面内容' : '停留约 18 秒或点击按钮生成详细总览'}</p>
   `
 }
 
-function getDigestSummary(digest: GitHubDigestResult, cached = false) {
-  return `
-    <p class="lexi-github-digest__desc">${escapeHtml(digest.oneLine)}</p>
-    ${digest.techStack.length ? `<div class="lexi-github-digest__chips">${digest.techStack.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
-    <div class="lexi-github-digest__section"><strong>适合谁</strong>${createList(digest.audience, '暂无受众信息')}</div>
-    <div class="lexi-github-digest__section"><strong>先看哪里</strong>${createList(digest.startHere, '暂无入口建议')}</div>
-    ${digest.terms.length ? `<div class="lexi-github-digest__terms">术语：${digest.terms.map(escapeHtml).join(' · ')}</div>` : ''}
-    <div class="lexi-github-digest__actions">
-      <button data-lexi-github-action="copy">复制</button>
-      <button data-lexi-github-action="refresh">重新生成</button>
-      <button data-lexi-github-action="collapse">收起</button>
-    </div>
-    <p class="lexi-github-digest__hint">${cached ? '来自本地缓存 · ' : ''}GitHub Digest / Lexi 速读</p>
-  `
+function updateCardContent(element: HTMLElement, html: string) {
+  const from = element.getBoundingClientRect()
+  element.innerHTML = html
+  const to = element.getBoundingClientRect()
+  if (!from.height || Math.abs(from.height - to.height) < 1)
+    return
+
+  element.animate([
+    { height: `${from.height}px`, transform: 'scale(0.995)', opacity: 0.92 },
+    { height: `${to.height}px`, transform: 'scale(1)', opacity: 1 },
+  ], {
+    duration: 220,
+    easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+  })
 }
 
 function renderCard() {
   if (!cardState)
     return
 
-  const { element, info, status, digest, error, cached } = cardState
-  const statusLabel = status === 'loading' ? '速读中...' : status === 'ready' ? '已生成' : status === 'error' ? '生成失败' : '就绪'
-  element.innerHTML = `
+  const { element, info, status, quickDigest, detailDigest, error, cachedQuick, cachedDetail } = cardState
+  const statusLabel = status === 'quick-loading'
+    ? '速读中...'
+    : status === 'detail-loading'
+      ? '总览中...'
+      : status === 'detail-ready'
+        ? '详细总览'
+        : status === 'error'
+          ? '生成失败'
+          : '速读'
+  const fallbackQuick = getFallbackQuickSummary(info)
+  const body = status === 'quick-loading'
+    ? `${getDigestSummary(fallbackQuick, { detail: false })}<div class="lexi-github-digest__loading">正在翻译项目介绍、生成 AI 点评...</div>`
+    : status === 'detail-loading'
+      ? `${getDigestSummary(quickDigest ?? fallbackQuick, { detail: false, cached: cachedQuick })}<div class="lexi-github-digest__loading">正在结合 README 和当前页面内容生成详细总览...</div>`
+      : status === 'detail-ready' && detailDigest
+        ? getDigestSummary(detailDigest, { detail: true, cached: cachedDetail })
+        : status === 'quick-ready' && quickDigest
+          ? getDigestSummary(quickDigest, { detail: false, cached: cachedQuick })
+          : status === 'error'
+            ? `<p class="lexi-github-digest__desc">${escapeHtml(error || '生成失败')}</p><div class="lexi-github-digest__actions"><button data-lexi-github-action="generate">重试</button><button data-lexi-github-action="hide">关闭</button></div>`
+            : getDigestSummary(fallbackQuick, { detail: false })
+
+  updateCardContent(element, `
     <div class="lexi-github-digest__head">
       <div>
         <div class="lexi-github-digest__eyebrow">GitHub Digest</div>
@@ -228,14 +273,8 @@ function renderCard() {
       <span>${statusLabel}</span>
     </div>
     <div class="lexi-github-digest__repo">${escapeHtml(info.repo)}${info.private ? ' · Private' : ''}</div>
-    ${status === 'loading'
-    ? '<div class="lexi-github-digest__loading">正在梳理项目介绍、技术栈和阅读入口...</div>'
-    : status === 'ready' && digest
-      ? getDigestSummary(digest, cached)
-      : status === 'error'
-        ? `<p class="lexi-github-digest__desc">${escapeHtml(error || '生成失败')}</p><div class="lexi-github-digest__actions"><button data-lexi-github-action="generate">重试</button><button data-lexi-github-action="hide">关闭</button></div>`
-        : getBasicSummary(info)}
-  `
+    ${body}
+  `)
 }
 
 function ensureStyles() {
@@ -257,6 +296,8 @@ function ensureStyles() {
       color: var(--fgColor-default, var(--color-fg-default, #1f2328));
       padding: 12px;
       font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+      transform-origin: top center;
+      will-change: height, transform, opacity;
     }
     .lexi-github-digest *, .lexi-github-digest *::before, .lexi-github-digest *::after { box-sizing: border-box; }
     .lexi-github-digest--floating { position: fixed; right: 18px; top: 96px; z-index: 2147483647; width: min(340px, calc(100vw - 36px)); }
@@ -266,6 +307,7 @@ function ensureStyles() {
     .lexi-github-digest__title { margin-top: 1px; font-size: 15px; font-weight: 700; }
     .lexi-github-digest__repo { margin-top: 8px; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; word-break: break-word; }
     .lexi-github-digest__desc { margin: 10px 0 0; color: var(--fgColor-default, var(--color-fg-default, #1f2328)); }
+    .lexi-github-digest__detail-text { margin: 8px 0 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; }
     .lexi-github-digest__chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .lexi-github-digest__chips span { border: 1px solid var(--borderColor-accent-muted, var(--color-accent-muted, #b6e3ff)); border-radius: 999px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); padding: 2px 7px; font-size: 11px; }
     .lexi-github-digest__section { margin-top: 11px; }
@@ -273,11 +315,14 @@ function ensureStyles() {
     .lexi-github-digest ul { margin: 0; padding-left: 18px; }
     .lexi-github-digest li { margin: 2px 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); }
     .lexi-github-digest__terms, .lexi-github-digest__hint, .lexi-github-digest__muted { margin: 10px 0 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; }
-    .lexi-github-digest__loading { margin-top: 12px; border-radius: 10px; background: linear-gradient(100deg, var(--bgColor-default, #ffffff), var(--bgColor-accent-muted, #ddf4ff), var(--bgColor-default, #ffffff)); background-size: 220% 100%; padding: 10px; color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); animation: lexi-github-digest-shimmer 1s ease-in-out infinite; }
+    .lexi-github-digest__loading { margin-top: 12px; border-radius: 10px; background: linear-gradient(100deg, rgba(99,102,241,0.12), rgba(14,165,233,0.18), rgba(168,85,247,0.12), rgba(99,102,241,0.12)); background-size: 240% 100%; padding: 10px; color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); animation: lexi-github-digest-ai-gradient 1.15s ease-in-out infinite; }
     .lexi-github-digest__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .lexi-github-digest__actions button { border: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de)); border-radius: 6px; background: var(--bgColor-default, var(--color-canvas-default, #ffffff)); color: var(--fgColor-default, var(--color-fg-default, #1f2328)); cursor: pointer; font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 7px 9px; }
     .lexi-github-digest__actions button:first-child { border-color: var(--button-primary-borderColor-rest, #1f883d); background: var(--button-primary-bgColor-rest, #1f883d); color: var(--button-primary-fgColor-rest, #ffffff); }
-    @keyframes lexi-github-digest-shimmer { from { background-position-x: 110%; } to { background-position-x: -110%; } }
+    @keyframes lexi-github-digest-ai-gradient { from { background-position-x: 120%; filter: saturate(1); } 50% { filter: saturate(1.32); } to { background-position-x: -120%; filter: saturate(1); } }
+    @media (prefers-reduced-motion: reduce) {
+      .lexi-github-digest__loading { animation: none; }
+    }
   `
   document.documentElement.appendChild(style)
 }
@@ -303,27 +348,22 @@ function mountCard(info: GitHubRepoInfo) {
   const element = document.createElement('section')
   element.className = 'lexi-github-digest'
   element.dataset.lexiGithubDigest = 'true'
-  cardState = { element, info, status: 'idle' }
+  cardState = { element, info, status: 'quick-loading' }
 
   placeCard(element)
 
   element.addEventListener('click', onCardClick)
-  element.addEventListener('mouseenter', onCardEnter)
-  element.addEventListener('mouseleave', onCardLeave)
   renderCard()
 }
 
 function removeCard() {
   window.clearTimeout(autoTimer)
-  window.clearTimeout(hoverTimer)
   cardState?.element.removeEventListener('click', onCardClick)
-  cardState?.element.removeEventListener('mouseenter', onCardEnter)
-  cardState?.element.removeEventListener('mouseleave', onCardLeave)
   cardState?.element.remove()
   cardState = undefined
 }
 
-function getCachedDigest(cache: GitHubDigestCache, info: GitHubRepoInfo, settings: LexiSettings) {
+function getCachedEntry(cache: GitHubDigestCache, info: GitHubRepoInfo, settings: LexiSettings) {
   const entry = cache[info.key]
   if (!entry || entry.sourceHash !== info.sourceHash)
     return undefined
@@ -332,8 +372,21 @@ function getCachedDigest(cache: GitHubDigestCache, info: GitHubRepoInfo, setting
   return Date.now() - entry.updatedAt <= ttl ? entry : undefined
 }
 
-async function generateDigest(force = false) {
-  if (!cardState || cardState.status === 'loading')
+function createCacheEntry(info: GitHubRepoInfo, current?: GitHubDigestCacheEntry): GitHubDigestCacheEntry {
+  return {
+    repo: info.repo,
+    description: info.description,
+    topics: info.topics,
+    languages: info.languages,
+    quickDigest: current?.quickDigest,
+    digest: current?.digest,
+    sourceHash: info.sourceHash,
+    updatedAt: Date.now(),
+  }
+}
+
+async function generateQuickDigest(force = false) {
+  if (!cardState || cardState.status === 'quick-loading' || cardState.status === 'detail-loading')
     return
 
   const state = cardState
@@ -342,16 +395,16 @@ async function generateDigest(force = false) {
     return
 
   const cache = await getDigestCache()
-  const cached = !force ? getCachedDigest(cache, state.info, settings) : undefined
+  const cached = !force ? getCachedEntry(cache, state.info, settings)?.quickDigest : undefined
   if (cached) {
-    state.digest = cached.digest
-    state.cached = true
-    state.status = 'ready'
+    state.quickDigest = cached
+    state.cachedQuick = true
+    state.status = 'quick-ready'
     renderCard()
     return
   }
 
-  state.status = 'loading'
+  state.status = 'quick-loading'
   state.error = undefined
   renderCard()
 
@@ -363,24 +416,73 @@ async function generateDigest(force = false) {
       languages: state.info.languages,
       files: state.info.files,
       readme: state.info.readme,
+      pageText: state.info.pageText,
+      mode: 'quick',
     })
     if (!digest)
       throw new Error('AI 未返回有效速读。请确认每日推荐 AI 场景已配置。')
 
-    const entry: GitHubDigestCacheEntry = {
+    const entry = createCacheEntry(state.info, cache[state.info.key])
+    entry.quickDigest = digest
+    cache[state.info.key] = entry
+    await saveDigestCache(cache)
+    state.quickDigest = digest
+    state.cachedQuick = false
+    state.status = 'quick-ready'
+  }
+  catch (error) {
+    state.status = 'error'
+    state.error = error instanceof Error ? error.message : '生成失败'
+  }
+  finally {
+    renderCard()
+  }
+}
+
+async function generateDetailDigest(force = false) {
+  if (!cardState || cardState.status === 'quick-loading' || cardState.status === 'detail-loading')
+    return
+
+  const state = cardState
+  const settings = await getSettings()
+  if (!settings.githubDigest.enabled)
+    return
+
+  const cache = await getDigestCache()
+  const cached = !force ? getCachedEntry(cache, state.info, settings)?.digest : undefined
+  if (cached) {
+    state.detailDigest = cached
+    state.cachedDetail = true
+    state.status = 'detail-ready'
+    renderCard()
+    return
+  }
+
+  state.status = 'detail-loading'
+  state.error = undefined
+  renderCard()
+
+  try {
+    const digest = await requestGitHubDigest(settings, {
       repo: state.info.repo,
       description: state.info.description,
       topics: state.info.topics,
       languages: state.info.languages,
-      digest,
-      sourceHash: state.info.sourceHash,
-      updatedAt: Date.now(),
-    }
+      files: state.info.files,
+      readme: state.info.readme,
+      pageText: state.info.pageText,
+      mode: 'detail',
+    })
+    if (!digest)
+      throw new Error('AI 未返回有效总览。请确认每日推荐 AI 场景已配置。')
+
+    const entry = createCacheEntry(state.info, cache[state.info.key])
+    entry.digest = digest
     cache[state.info.key] = entry
     await saveDigestCache(cache)
-    state.digest = digest
-    state.cached = false
-    state.status = 'ready'
+    state.detailDigest = digest
+    state.cachedDetail = false
+    state.status = 'detail-ready'
   }
   catch (error) {
     state.status = 'error'
@@ -392,10 +494,10 @@ async function generateDigest(force = false) {
 }
 
 async function copyDigest() {
-  if (!cardState?.digest)
+  const digest = cardState?.detailDigest ?? cardState?.quickDigest
+  if (!cardState || !digest)
     return
 
-  const digest = cardState.digest
   const text = [
     `# Lexi 速读：${cardState.info.repo}`,
     '',
@@ -419,34 +521,13 @@ function onCardClick(event: Event) {
 
   const action = target.dataset.lexiGithubAction
   if (action === 'generate')
-    void generateDigest(false)
+    void generateDetailDigest(true)
   else if (action === 'refresh')
-    void generateDigest(true)
+    void generateDetailDigest(true)
   else if (action === 'copy')
     void copyDigest()
   else if (action === 'collapse' || action === 'hide')
     removeCard()
-}
-
-async function onCardEnter() {
-  window.clearTimeout(hoverTimer)
-  const settings = await getSettings()
-  if (!settings.githubDigest.hoverGenerate)
-    return
-
-  hoverTimer = window.setTimeout(() => {
-    if (!cardState || cardState.status !== 'idle')
-      return
-
-    if (cardState.info.private && !settings.githubDigest.allowPrivateAutoGenerate)
-      return
-
-    void generateDigest(false)
-  }, Math.max(800, settings.githubDigest.hoverDelayMs))
-}
-
-function onCardLeave() {
-  window.clearTimeout(hoverTimer)
 }
 
 async function scheduleAutoGenerate(info: GitHubRepoInfo) {
@@ -460,7 +541,7 @@ async function scheduleAutoGenerate(info: GitHubRepoInfo) {
 
   const delay = Math.max(1200, settings.githubDigest.autoDelaySeconds * 1000)
   autoTimer = window.setTimeout(() => {
-    void generateDigest(false)
+    void generateDetailDigest(false)
   }, delay)
 }
 
@@ -486,20 +567,27 @@ async function refresh() {
   if (cardState?.info.key === info.key) {
     cardState.info = info
     placeCard(cardState.element)
-    if (cardState.status === 'idle')
+    if (cardState.status === 'quick-ready' || cardState.status === 'error')
       renderCard()
     return
   }
 
   mountCard(info)
   const cache = await getDigestCache()
-  const cached = getCachedDigest(cache, info, settings)
-  if (cached && cardState) {
-    cardState.digest = cached.digest
-    cardState.cached = true
-    cardState.status = 'ready'
+  const cached = getCachedEntry(cache, info, settings)
+  if (cached?.quickDigest && cardState) {
+    cardState.quickDigest = cached.quickDigest
+    cardState.cachedQuick = true
+    cardState.status = 'quick-ready'
     renderCard()
-    return
+  }
+  else {
+    void generateQuickDigest(false)
+  }
+
+  if (cached?.digest && cardState) {
+    cardState.detailDigest = cached.digest
+    cardState.cachedDetail = true
   }
 
   await scheduleAutoGenerate(info)
@@ -517,7 +605,7 @@ function checkRoute() {
 
 function onVisibilityChange() {
   if (document.visibilityState === 'visible') {
-    if (cardState?.status === 'idle')
+    if (cardState?.status === 'quick-ready')
       void scheduleAutoGenerate(cardState.info)
   }
   else {
@@ -549,7 +637,6 @@ export function startGitHubDigest() {
     window.clearInterval(routeInterval)
     window.clearTimeout(mutationTimer)
     window.clearTimeout(autoTimer)
-    window.clearTimeout(hoverTimer)
     document.removeEventListener('visibilitychange', onVisibilityChange)
     removeCard()
   }

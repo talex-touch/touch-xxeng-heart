@@ -112,6 +112,7 @@ const selectionAnchorSelectors = [
 const maxAiReplacementSeedsPerPage = 3
 const requestedReplacementSeeds = new Set<string>()
 const replacementFreshnessWindowMs = 7 * 24 * 60 * 60 * 1000
+const maxSelectionTranslationLength = 5000
 
 interface ReplacementSeed {
   text: string
@@ -479,13 +480,25 @@ function createCandidateFromTerm(translation: SelectionTranslation, term: { term
   }
 }
 
+function formatCandidateMeaning(candidate: VocabularyCandidate) {
+  const meaning = candidate.meaning.trim()
+  if (!meaning)
+    return ''
+
+  if (!hasCjkText(meaning))
+    return `英文解释：${meaning}`
+
+  const hasEnglishExplanation = /[a-z][a-z\s,.;:'"()/-]{18,}/i.test(meaning)
+  return hasEnglishExplanation ? `中英解释：${meaning}` : meaning
+}
+
 function createToken(candidate: VocabularyCandidate) {
   const token = document.createElement('span')
   const isProduct = isProductVocabularyCandidate(candidate)
   token.dataset.lexiToken = 'true'
   token.dataset.original = candidate.original
   token.dataset.replacement = candidate.replacement
-  token.dataset.meaning = candidate.meaning
+  token.dataset.meaning = formatCandidateMeaning(candidate)
   token.dataset.example = candidate.example
   token.dataset.tags = candidate.tags.join(', ')
   token.dataset.pronunciation = candidate.pronunciation ?? ''
@@ -533,6 +546,27 @@ function getPageStyleContent(customCss = '') {
       padding: 10px 12px;
       font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       pointer-events: none;
+    }
+
+    .lexi-toast {
+      all: initial;
+      box-sizing: border-box;
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      z-index: 2147483647;
+      max-width: min(420px, calc(100vw - 32px));
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: 12px;
+      background: rgba(17, 24, 39, 0.92);
+      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.22);
+      color: #fff;
+      padding: 10px 13px;
+      font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      pointer-events: none;
+      transform: translateX(-50%) translateY(10px);
+      opacity: 0;
+      animation: lexi-toast-enter 180ms ease-out forwards;
     }
 
     .lexi-selection-translation {
@@ -726,6 +760,13 @@ function getPageStyleContent(customCss = '') {
       font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    @keyframes lexi-toast-enter {
+      to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
     }
 
     @keyframes lexi-text-reveal {
@@ -995,6 +1036,17 @@ function createTooltip() {
   tooltip.hidden = true
   document.documentElement.appendChild(tooltip)
   return tooltip
+}
+
+function showLexiToast(message: string, customCss = '') {
+  ensurePageStyles(customCss)
+  document.querySelector<HTMLElement>('[data-lexi-toast]')?.remove()
+  const toast = document.createElement('div')
+  toast.className = 'lexi-toast'
+  toast.dataset.lexiToast = 'true'
+  toast.textContent = message
+  document.documentElement.appendChild(toast)
+  window.setTimeout(() => toast.remove(), 3200)
 }
 
 function moveTooltip(tooltip: HTMLElement, event: MouseEvent) {
@@ -2308,8 +2360,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     const selection = window.getSelection()
     const selected = selection?.toString().trim()
-    if (!selection || !selected || selected.length < 2 || selected.length > 600)
+    if (!selection || !selected || selected.length < 2)
       return
+
+    if (selected.length > maxSelectionTranslationLength) {
+      const { settings } = await getStoredState()
+      showLexiToast(`选择区域过多（${selected.length} 字符），请缩小到 ${maxSelectionTranslationLength} 字符以内再翻译。`, settings.ui.customCss)
+      return
+    }
 
     const range = selection.rangeCount ? selection.getRangeAt(0) : undefined
     if (isSelectionInIgnoredArea(range))
@@ -2477,6 +2535,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const selected = data.text.trim()
     if (!selected)
       return
+
+    if (selected.length > maxSelectionTranslationLength) {
+      const { settings } = await getStoredState()
+      showLexiToast(`选择区域过多（${selected.length} 字符），请缩小到 ${maxSelectionTranslationLength} 字符以内再翻译。`, settings.ui.customCss)
+      return
+    }
 
     const selection = window.getSelection()
     const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined

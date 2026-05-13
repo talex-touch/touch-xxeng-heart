@@ -144,14 +144,13 @@ export interface GitHubDigestSettings {
   enabled: boolean
   autoGenerate: boolean
   autoDelaySeconds: number
-  hoverGenerate: boolean
-  hoverDelayMs: number
   allowPrivateAutoGenerate: boolean
   cacheDays: number
 }
 
 export interface GitHubDigestResult {
   oneLine: string
+  details?: string
   audience: string[]
   techStack: string[]
   startHere: string[]
@@ -163,7 +162,8 @@ export interface GitHubDigestCacheEntry {
   description?: string
   topics: string[]
   languages: string[]
-  digest: GitHubDigestResult
+  quickDigest?: GitHubDigestResult
+  digest?: GitHubDigestResult
   sourceHash: string
   updatedAt: number
 }

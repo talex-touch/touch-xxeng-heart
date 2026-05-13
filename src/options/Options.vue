@@ -424,23 +424,19 @@ function removeSceneRule(index: number) {
                 GitHub Digest / Lexi 速读
               </h3>
               <p class="mt-1 text-12px leading-5 text-neutral-500">
-                在 GitHub 仓库页读取右侧介绍和 README，生成项目速览。使用“每日推荐”AI 场景配置。
+                在 GitHub 仓库页先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。使用“每日推荐”AI 场景配置。
               </p>
               <label class="mt-3 flex items-center justify-between gap-4">
                 <span class="text-14px font-500">显示速读卡片</span>
                 <input v-model="lexiSettings.githubDigest.enabled" type="checkbox" class="h-5 w-5">
               </label>
               <label class="mt-3 flex items-center justify-between gap-4">
-                <span class="text-14px font-500">停留后自动生成</span>
+                <span class="text-14px font-500">停留后自动生成详细总览</span>
                 <input v-model="lexiSettings.githubDigest.autoGenerate" type="checkbox" class="h-5 w-5">
               </label>
               <label class="mt-3 block">
                 <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.githubDigest.autoDelaySeconds }} 秒</span>
                 <input v-model.number="lexiSettings.githubDigest.autoDelaySeconds" type="range" min="8" max="45" step="1" class="mt-2 w-full accent-neutral-950">
-              </label>
-              <label class="mt-3 flex items-center justify-between gap-4">
-                <span class="text-14px font-500">悬停卡片快速生成</span>
-                <input v-model="lexiSettings.githubDigest.hoverGenerate" type="checkbox" class="h-5 w-5">
               </label>
               <label class="mt-3 block">
                 <span class="text-13px font-500">缓存天数</span>

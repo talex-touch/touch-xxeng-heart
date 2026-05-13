@@ -1,0 +1,70 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and publish extension package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit test
+        run: pnpm test
+
+      - name: Build extension
+        run: pnpm build
+
+      - name: Pack extension zip
+        run: pnpm pack:zip
+
+      - name: Rename release asset
+        id: asset
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          ASSET_NAME="touch-xxeng-heart-extension-v${VERSION}.zip"
+          mv extension.zip "$ASSET_NAME"
+          echo "asset_name=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.asset.outputs.asset_name }}
+          path: ${{ steps.asset.outputs.asset_name }}
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.asset.outputs.asset_name }}
+          generate_release_notes: true

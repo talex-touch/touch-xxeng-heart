@@ -195,12 +195,12 @@ function escapeHtml(value: string) {
 
 function getFallbackQuickSummary(info: GitHubRepoInfo) {
   return {
-    oneLine: info.description || `${info.repo} 项目速读生成中。`,
+    oneLine: `${info.repo} 项目速读生成中。`,
     details: '正在翻译项目介绍并生成 AI 点评。',
     audience: [],
-    techStack: [...info.languages, ...info.topics].slice(0, 8),
+    techStack: [],
     startHere: [],
-    terms: info.topics.slice(0, 8),
+    terms: [],
   }
 }
 
@@ -208,14 +208,11 @@ function getDigestSummary(digest: GitHubDigestResult, options: { detail: boolean
   return `
     <p class="lexi-github-digest__desc">${escapeHtml(digest.oneLine)}</p>
     ${digest.details ? `<p class="lexi-github-digest__detail-text">${escapeHtml(digest.details)}</p>` : ''}
-    ${digest.techStack.length ? `<div class="lexi-github-digest__chips">${digest.techStack.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : ''}
     ${options.detail ? `<div class="lexi-github-digest__section"><strong>适合谁</strong>${createList(digest.audience, '暂无受众信息')}</div>` : ''}
     ${options.detail ? `<div class="lexi-github-digest__section"><strong>先看哪里</strong>${createList(digest.startHere, '暂无入口建议')}</div>` : ''}
-    ${digest.terms.length ? `<div class="lexi-github-digest__terms">术语：${digest.terms.map(escapeHtml).join(' · ')}</div>` : ''}
     <div class="lexi-github-digest__actions">
       <button data-lexi-github-action="generate">${options.detail ? '重新生成详细总览' : '生成详细总览'}</button>
       ${options.detail ? '<button data-lexi-github-action="copy">复制</button>' : ''}
-      <button data-lexi-github-action="collapse">收起</button>
     </div>
     <p class="lexi-github-digest__hint">${options.cached ? '来自本地缓存 · ' : ''}${options.detail ? '详细总览' : '基础速读'} · ${options.detail ? '已结合 README 和当前页面内容' : '停留约 18 秒或点击按钮生成详细总览'}</p>
   `
@@ -301,6 +298,7 @@ function ensureStyles() {
     }
     .lexi-github-digest *, .lexi-github-digest *::before, .lexi-github-digest *::after { box-sizing: border-box; }
     .lexi-github-digest--floating { position: fixed; right: 18px; top: 96px; z-index: 2147483647; width: min(340px, calc(100vw - 36px)); }
+    .lexi-github-digest--sticky { position: sticky; top: 16px; z-index: 20; }
     .lexi-github-digest__head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
     .lexi-github-digest__head span { border-radius: 999px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); padding: 2px 7px; font-size: 11px; white-space: nowrap; }
     .lexi-github-digest__eyebrow { color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); font-size: 11px; font-weight: 700; letter-spacing: .02em; }
@@ -327,16 +325,25 @@ function ensureStyles() {
   document.documentElement.appendChild(style)
 }
 
+function updateStickyCardMode(element: HTMLElement) {
+  if (!findRepoSidebar() || element.classList.contains('lexi-github-digest--floating'))
+    return
+
+  element.classList.toggle('lexi-github-digest--sticky', window.scrollY > 160)
+}
+
 function placeCard(element: HTMLElement) {
   const target = findRepoSidebar() ?? findAboutBox()
   if (target) {
     element.classList.remove('lexi-github-digest--floating')
     if (element.parentElement !== target)
       target.prepend(element)
+    updateStickyCardMode(element)
     return
   }
 
   element.classList.add('lexi-github-digest--floating')
+  element.classList.remove('lexi-github-digest--sticky')
   if (element.parentElement !== document.body)
     document.body.appendChild(element)
 }
@@ -613,6 +620,11 @@ function onVisibilityChange() {
   }
 }
 
+function onScroll() {
+  if (cardState)
+    updateStickyCardMode(cardState.element)
+}
+
 export function startGitHubDigest() {
   if (location.hostname !== 'github.com')
     return () => {}
@@ -622,6 +634,7 @@ export function startGitHubDigest() {
   refresh().catch(error => console.warn('[Lexi] GitHub Digest init failed', error))
   routeInterval = window.setInterval(checkRoute, 1000)
   document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('scroll', onScroll, { passive: true })
 
   const observer = new MutationObserver(() => {
     window.clearTimeout(mutationTimer)
@@ -638,6 +651,7 @@ export function startGitHubDigest() {
     window.clearTimeout(mutationTimer)
     window.clearTimeout(autoTimer)
     document.removeEventListener('visibilitychange', onVisibilityChange)
+    window.removeEventListener('scroll', onScroll)
     removeCard()
   }
 }

@@ -4,6 +4,7 @@ import { localTranslateSelection, requestLexiDialogAnswer, requestReplacementCan
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
+import type { SiteDetectionHints } from '~/logic/siteRules'
 import { pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
 import { getVocabularyId, isProductVocabularyCandidate, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
@@ -18,6 +19,16 @@ export interface PageStats {
   records: number
   enabled: boolean
   showFloatingStatus: boolean
+  specialProfile?: PageSpecialProfileStats
+}
+
+export interface PageSpecialProfileStats {
+  id: string
+  label: string
+  kind: string
+  detected: boolean
+  dynamicScan: boolean
+  conservative: boolean
 }
 
 const ignoredSelectors = [
@@ -1027,15 +1038,51 @@ function applyHistoryLimit(records: VocabularyRecord[], settings: LexiSettings) 
     .slice(0, Math.max(1, settings.history.maxRecords))
 }
 
-function pageFeatureEnabled(settings: LexiSettings) {
+function pageFeatureEnabled(settings: LexiSettings, hints = detectSpecialSiteHints()) {
   return isPageEnabled(settings) && (
-    (settings.replacement.enabled && isSceneEnabled(settings, 'replacement'))
-    || (settings.selection.enabled && isSceneEnabled(settings, 'selection'))
+    (settings.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, hints))
+    || (settings.selection.enabled && isSceneEnabled(settings, 'selection', location.href, hints))
   )
 }
 
-function getReplacementBudget(settings: LexiSettings) {
-  const profile = findSpecialSiteProfile(settings)
+function detectSpecialSiteHints(): SiteDetectionHints {
+  const documentElement = document.documentElement
+  const body = document.body
+  const generator = document.querySelector<HTMLMetaElement>('meta[name="generator"]')?.content ?? ''
+  const applicationName = document.querySelector<HTMLMetaElement>('meta[name="application-name"]')?.content ?? ''
+  const discourseManifest = document.querySelector('link[rel="manifest"][href*="manifest.webmanifest"]')
+  const discourseAsset = document.querySelector('[href*="/assets/discourse"], [src*="/assets/discourse"], [href*="discourse-"], [src*="discourse-"]')
+  const discourseRoot = document.querySelector('#data-preloaded, #discourse-modal, #reply-control, .d-header, .topic-list, .topic-post')
+  const discourseGlobal = 'Discourse' in window || '__DISCOURSE_CONFIG__' in window
+  const classText = `${documentElement.className} ${body?.className ?? ''}`
+  const discourse = /discourse/i.test(generator)
+    || /discourse/i.test(applicationName)
+    || /discourse/i.test(classText)
+    || Boolean(discourseManifest && discourseRoot)
+    || Boolean(discourseAsset)
+    || Boolean(discourseRoot && document.querySelector('meta[name="theme-color"], meta[property="og:site_name"]'))
+    || discourseGlobal
+
+  return { discourse }
+}
+
+function getDetectedSpecialProfileStats(settings: LexiSettings, hints = detectSpecialSiteHints()): PageSpecialProfileStats | undefined {
+  const profile = findSpecialSiteProfile(settings, location.href, hints)
+  if (!profile)
+    return undefined
+
+  return {
+    id: profile.id,
+    label: profile.label,
+    kind: profile.kind,
+    detected: profile.id === 'discourse' && hints.discourse === true && profile.domains.includes(location.hostname),
+    dynamicScan: profile.dynamicScan,
+    conservative: profile.conservative,
+  }
+}
+
+function getReplacementBudget(settings: LexiSettings, hints = detectSpecialSiteHints()) {
+  const profile = findSpecialSiteProfile(settings, location.href, hints)
   const maxPerPage = profile?.conservative
     ? Math.min(settings.replacement.maxPerPage, profile.maxPerPage ?? 6)
     : settings.replacement.maxPerPage
@@ -1716,11 +1763,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function refreshStats() {
     const { settings, records } = await getStoredState()
+    const siteHints = detectSpecialSiteHints()
     stats = {
       ...stats,
       records: records.length,
-      enabled: pageFeatureEnabled(settings),
+      enabled: pageFeatureEnabled(settings, siteHints),
       showFloatingStatus: settings.ui.showFloatingStatus,
+      specialProfile: getDetectedSpecialProfileStats(settings, siteHints),
     }
     dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
     events.onStats(stats)
@@ -1728,15 +1777,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function run() {
     const { settings, records } = await getStoredState()
-    const enabled = pageFeatureEnabled(settings)
-    const replacementEnabled = settings.replacement.enabled && isSceneEnabled(settings, 'replacement')
-    const budget = getReplacementBudget(settings)
+    const siteHints = detectSpecialSiteHints()
+    const enabled = pageFeatureEnabled(settings, siteHints)
+    const replacementEnabled = settings.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, siteHints)
+    const budget = getReplacementBudget(settings, siteHints)
     dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
     stats = {
       replacements: 0,
       records: records.length,
       enabled,
       showFloatingStatus: settings.ui.showFloatingStatus,
+      specialProfile: getDetectedSpecialProfileStats(settings, siteHints),
     }
 
     if (!replacementEnabled || budget.maxPerPage < 1 || budget.density <= 0) {
@@ -1831,7 +1882,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       records: stats.records,
     })
 
-    if (settings.ai.replacement.enabled && isSceneEnabled(settings, 'replacement') && aiReplacementSeeds.length) {
+    if (settings.ai.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, siteHints) && aiReplacementSeeds.length) {
       void queueAiReplacementSeeds(settings, aiReplacementSeeds, events)
         .catch(error => console.warn('[Lexi] AI replacement seed queue failed', error))
     }
@@ -1939,7 +1990,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return { ok: true, message: '当前页面自动翻译已启用。', blocks: pageTranslationSources.size }
 
     const { settings } = await getStoredState()
-    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+    const siteHints = detectSpecialSiteHints()
+    if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return { ok: false, message: '划词翻译场景未启用。', blocks: 0 }
 
     const cache = await readPageTranslationCache()
@@ -1994,7 +2046,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function restoreSavedPageTranslation() {
     const { settings } = await getStoredState()
-    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+    const siteHints = detectSpecialSiteHints()
+    if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return
 
     const cache = await restorePageTranslationCache(settings)
@@ -2054,7 +2107,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function translateAndRecord(selected: string, context: string, range: Range | undefined, requestId: number, requestKey: string) {
     const { settings, records } = await getStoredState()
-    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+    const siteHints = detectSpecialSiteHints()
+    if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return
 
     const block = createSelectionTranslationBlock(settings, selected, requestKey, range)
@@ -2214,7 +2268,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     const { settings } = await getStoredState()
-    if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled || !settings.selection.autoTranslate)
+    const siteHints = detectSpecialSiteHints()
+    if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled || !settings.selection.autoTranslate)
       return
     if (settings.selection.requireModifierKey && !selectionFinalizedWithModifier)
       return
@@ -2302,7 +2357,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     event.preventDefault()
     getStoredState()
       .then(({ settings }) => {
-        if (!isSceneEnabled(settings, 'selection') || !settings.selection.enabled)
+        if (!isSceneEnabled(settings, 'selection', location.href, detectSpecialSiteHints()) || !settings.selection.enabled)
           return
 
         dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
@@ -2401,6 +2456,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     return getPageTranslationStatus()
   })
 
+  const removePageStatsListener = onMessage('lexi-page-stats', async () => {
+    await refreshStats()
+    return stats
+  })
+
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {
     if (areaName === 'local' && changes[settingsStorageKey])
       refreshStats()
@@ -2428,7 +2488,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   browser.storage.onChanged.addListener(onStorageChanged)
 
   void getStoredState().then(({ settings }) => {
-    if (!getReplacementBudget(settings).dynamicScan)
+    if (!getReplacementBudget(settings, detectSpecialSiteHints()).dynamicScan)
       return
 
     dynamicObserver = new MutationObserver(() => {
@@ -2454,6 +2514,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     removePageTranslateStartListener()
     removePageTranslateStopListener()
     removePageTranslateStatusListener()
+    removePageStatsListener()
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('pointerup', onPointerUp)

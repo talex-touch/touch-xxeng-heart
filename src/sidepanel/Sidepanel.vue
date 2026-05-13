@@ -3,6 +3,7 @@ import { sendMessage } from 'webext-bridge/popup'
 import { computed, onMounted, ref } from 'vue'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, normalizeImportedRecord } from '~/logic/vocabularyRecords'
+import type { PageStats } from '~/contentScripts/pageEnhancer'
 import type { TranslationDirection, VocabularyRecord } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
@@ -34,6 +35,12 @@ const pageTranslationStatus = ref({
   blocks: 0,
   cached: false,
   bytes: 0,
+})
+const pageStats = ref<PageStats>({
+  replacements: 0,
+  records: 0,
+  enabled: false,
+  showFloatingStatus: false,
 })
 
 const difficulty = computed(() => getProgressDifficulty(
@@ -69,9 +76,15 @@ async function getActiveTabId() {
   return tab.id
 }
 
+async function refreshPageStats(tabId?: number) {
+  const targetTabId = tabId ?? await getActiveTabId()
+  pageStats.value = await sendMessage('lexi-page-stats', {}, { context: 'content-script', tabId: targetTabId })
+}
+
 async function refreshPageTranslationStatus() {
   try {
     const tabId = await getActiveTabId()
+    await refreshPageStats(tabId)
     const status = await sendMessage('lexi-page-translate-status', {}, { context: 'content-script', tabId })
     pageTranslationStatus.value = status
     pageTranslationMessage.value = status.cached
@@ -85,6 +98,12 @@ async function refreshPageTranslationStatus() {
       blocks: 0,
       cached: false,
       bytes: 0,
+    }
+    pageStats.value = {
+      replacements: 0,
+      records: 0,
+      enabled: false,
+      showFloatingStatus: false,
     }
     pageTranslationMessage.value = formatBridgeError(error)
   }
@@ -190,7 +209,7 @@ onMounted(() => {
     <header class="flex items-start justify-between gap-3 border-b border-neutral-200 pb-4">
       <div>
         <div class="text-18px font-700">
-          程序员英语
+          Lexical
         </div>
         <div class="mt-1 text-12px text-neutral-500">
           难度 {{ difficulty }} · 已记录 {{ vocabularyRecords.length }} · {{ storageSize }}
@@ -216,6 +235,24 @@ onMounted(() => {
     </nav>
 
     <section v-if="activeTab === 'common'" class="mt-4 space-y-4">
+      <section v-if="pageStats.specialProfile" class="rounded-3 border border-purple-200 bg-purple-50 px-3 py-3 text-purple-950">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 class="text-14px font-700">
+              当前站点：{{ pageStats.specialProfile.label }}
+            </h2>
+            <p class="mt-1 text-12px leading-5 text-purple-700">
+              {{ pageStats.specialProfile.detected ? '已自动识别特殊站点策略。' : '已命中特殊站点策略。' }}
+              {{ pageStats.specialProfile.dynamicScan ? '动态扫描已启用。' : '动态扫描未启用。' }}
+              {{ pageStats.specialProfile.conservative ? '使用保守替换密度。' : '' }}
+            </p>
+          </div>
+          <span class="shrink-0 rounded-full bg-white px-2 py-1 text-11px text-purple-700">
+            {{ pageStats.specialProfile.kind }}
+          </span>
+        </div>
+      </section>
+
       <section class="rounded-3 border border-neutral-200 bg-neutral-50 px-3 py-3">
         <div class="flex items-center justify-between gap-3">
           <div>

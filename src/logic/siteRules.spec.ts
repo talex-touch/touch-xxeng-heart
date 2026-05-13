@@ -47,4 +47,17 @@ describe('site rules', () => {
     expect(isSceneEnabled(defaultSettings, 'selection', 'https://x.com/home')).toBe(true)
     expect(isSceneEnabled(defaultSettings, 'selection', 'https://mobile.twitter.com/home')).toBe(true)
   })
+
+  it('detects self-hosted Discourse sites from page hints', () => {
+    const profile = findSpecialSiteProfile(defaultSettings, 'https://forum.example.dev/t/topic/1', { discourse: true })
+
+    expect(profile).toMatchObject({
+      id: 'discourse',
+      kind: 'forum-feed',
+      dynamicScan: true,
+      conservative: true,
+      domains: ['forum.example.dev'],
+    })
+    expect(isSceneEnabled(defaultSettings, 'replacement', 'https://forum.example.dev/t/topic/1', { discourse: true })).toBe(true)
+  })
 })

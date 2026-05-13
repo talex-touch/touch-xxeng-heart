@@ -18,7 +18,7 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
 test('side panel shows daily learning workspace', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
 
-  await expect(page.getByText('程序员英语')).toBeVisible()
+  await expect(page.getByText('Lexical')).toBeVisible()
   await expect(page.getByText('今日推荐')).toBeVisible()
   await expect(page.getByText('待复盘')).toBeVisible()
 })

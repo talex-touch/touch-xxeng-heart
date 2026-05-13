@@ -30,10 +30,13 @@ onUnmounted(() => {
     >
       <div class="flex items-center gap-2">
         <span class="h-2 w-2 rounded-full" :class="stats.enabled ? 'bg-neutral-950' : 'bg-neutral-300'" />
-        <span>Lexi {{ stats.enabled ? '已启用' : '未启用' }}</span>
+        <span>Lexical {{ stats.enabled ? '已启用' : '未启用' }}</span>
       </div>
       <div v-if="stats.enabled" class="mt-1 text-neutral-500">
         替换 {{ stats.replacements }} · 记录 {{ stats.records }}
+      </div>
+      <div v-if="stats.enabled && stats.specialProfile" class="mt-1 text-neutral-500">
+        {{ stats.specialProfile.label }}{{ stats.specialProfile.detected ? ' · 自动识别' : '' }}
       </div>
     </div>
   </div>

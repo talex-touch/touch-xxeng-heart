@@ -1,5 +1,9 @@
 import type { FeatureScene, LexiSettings, SiteSceneRule, SpecialSiteProfile } from './types'
 
+export interface SiteDetectionHints {
+  discourse?: boolean
+}
+
 function normalizeDomain(domain: string) {
   return domain
     .trim()
@@ -56,18 +60,39 @@ function findSceneRule(rules: SiteSceneRule[], url = location.href) {
   return rules.find(rule => rule.domain && domainMatches(hostname, rule.domain))
 }
 
-export function findSpecialSiteProfile(settings: LexiSettings, url = location.href): SpecialSiteProfile | undefined {
+export function findSpecialSiteProfile(
+  settings: LexiSettings,
+  url = location.href,
+  hints: SiteDetectionHints = {},
+): SpecialSiteProfile | undefined {
   const hostname = getHostname(url)
-  return settings.siteRules.specialProfiles.find(profile =>
+  const matchedProfile = settings.siteRules.specialProfiles.find(profile =>
     profile.domains.some(domain => domainMatches(hostname, domain)),
   )
+  if (matchedProfile)
+    return matchedProfile
+
+  if (hints.discourse)
+    return createDetectedDiscourseProfile(settings, hostname)
 }
 
-export function isSceneEnabled(settings: LexiSettings, scene: FeatureScene, url = location.href) {
+function createDetectedDiscourseProfile(settings: LexiSettings, hostname: string): SpecialSiteProfile | undefined {
+  const baseProfile = settings.siteRules.specialProfiles.find(profile => profile.id === 'discourse')
+  if (!baseProfile || !hostname)
+    return undefined
+
+  return {
+    ...baseProfile,
+    label: `${baseProfile.label}（自动识别）`,
+    domains: [hostname],
+  }
+}
+
+export function isSceneEnabled(settings: LexiSettings, scene: FeatureScene, url = location.href, hints: SiteDetectionHints = {}) {
   if (!isPageEnabled(settings, url))
     return false
 
-  const profile = findSpecialSiteProfile(settings, url)
+  const profile = findSpecialSiteProfile(settings, url, hints)
   if (profile && !profile.enabled)
     return false
 

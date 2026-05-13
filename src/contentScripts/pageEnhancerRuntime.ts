@@ -1,3 +1,4 @@
+import { startGitHubDigest } from './githubDigest'
 import { startPageEnhancer } from './pageEnhancer'
 import type { PageStats } from './pageEnhancer'
 
@@ -22,6 +23,7 @@ export function ensurePageEnhancer() {
       listeners.forEach(listener => listener(stats))
     },
   })
+  startGitHubDigest()
 }
 
 export function subscribePageStats(listener: (stats: PageStats) => void) {

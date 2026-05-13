@@ -9,6 +9,7 @@ export default defineConfig({
   define: {
     '__DEV__': isDev,
     '__NAME__': JSON.stringify(packageJson.name),
+    '__VERSION__': JSON.stringify(packageJson.version),
     '__FIREFOX__': isFirefox,
     // https://github.com/vitejs/vite/issues/9320
     // https://github.com/vitejs/vite/issues/9186

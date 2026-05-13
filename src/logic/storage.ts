@@ -1,6 +1,6 @@
 import { defaultSettings, mergeSettings } from './defaults'
-import { aiCallLogsStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
-import type { AiCallLog, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
+import { aiCallLogsStorageKey, githubDigestStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
+import type { AiCallLog, GitHubDigestCache, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
 import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
 
 export const { data: lexiSettings, dataReady: lexiSettingsReady } = useWebExtensionStorage<LexiSettings>(
@@ -24,4 +24,9 @@ export const { data: aiCallLogs, dataReady: aiCallLogsReady } = useWebExtensionS
 export const { data: pageVisitLogs, dataReady: pageVisitLogsReady } = useWebExtensionStorage<PageVisitLog[]>(
   pageVisitLogsStorageKey,
   [],
+)
+
+export const { data: githubDigestCache, dataReady: githubDigestCacheReady } = useWebExtensionStorage<GitHubDigestCache>(
+  githubDigestStorageKey,
+  {},
 )

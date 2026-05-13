@@ -2,6 +2,8 @@
 import { computed } from 'vue'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 
+const appVersion = __VERSION__
+
 function openOptionsPage() {
   browser.runtime.openOptionsPage()
 }
@@ -21,7 +23,7 @@ const enabled = computed({
           Lexi
         </div>
         <div class="mt-1 text-12px text-neutral-500">
-          网页英语渐进学习
+          网页英语渐进学习 · v{{ appVersion }}
         </div>
       </div>
       <label class="relative inline-flex cursor-pointer items-center">
@@ -68,7 +70,7 @@ const enabled = computed({
     </div>
 
     <p class="mt-3 text-12px leading-5 text-neutral-500">
-      开启后会在当前网页中把少量中文术语替换为英文，并记录划词学习历史。
+      开启后会在当前网页中把少量中文术语替换为英文，并记录划词学习历史。GitHub 仓库页会显示 Lexi 速读。
     </p>
   </main>
 </template>

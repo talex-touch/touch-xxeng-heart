@@ -63,6 +63,7 @@ const ignoredSelectors = [
   '[data-lexi-selection-translation]',
   '[data-lexi-page-translation]',
   '[data-lexi-dialog]',
+  '[data-lexi-github-digest]',
 ]
 
 const blockSelectors = [
@@ -351,6 +352,34 @@ function candidateExists(records: VocabularyRecord[], candidate: VocabularyCandi
   return records.some(record => record.id === id)
 }
 
+function hasCjkText(text: string) {
+  return /[\u3400-\u9FFF]/.test(text)
+}
+
+function countCjkCharacters(text: string) {
+  return Array.from(text).filter(char => /[\u3400-\u9FFF]/.test(char)).length
+}
+
+function isConciseEnglishReplacement(original: string, replacement: string) {
+  const normalized = replacement.replace(/\s+/g, ' ').trim()
+  if (!normalized || hasCjkText(normalized))
+    return false
+
+  if (/Selected on page|[。！？；]/i.test(normalized))
+    return false
+
+  const maxLength = Math.max(32, countCjkCharacters(original) * 8)
+  const wordCount = normalized.split(/[\s/]+/).filter(Boolean).length
+  return normalized.length <= maxLength && wordCount <= 6
+}
+
+function canAutoReplaceCandidate(candidate: VocabularyCandidate) {
+  if (isProductVocabularyCandidate(candidate))
+    return candidate.original.trim() === candidate.replacement.trim()
+
+  return hasCjkText(candidate.original) && isConciseEnglishReplacement(candidate.original, candidate.replacement)
+}
+
 function collectReplacementSeed(seeds: ReplacementSeed[], text: string, context: string) {
   const normalized = normalizeReplacementSeed(text)
   if (seeds.length >= maxAiReplacementSeedsPerPage || normalized.length < 24)
@@ -434,11 +463,15 @@ function formatSelectionDetail(detail: SelectionDetailView) {
   return lines.join('\n')
 }
 
-function createCandidateFromTerm(translation: SelectionTranslation, term: { term: string, explanation: string }): VocabularyCandidate {
-  const isChineseTerm = /[\u4E00-\u9FA5]/.test(term.term)
+function createCandidateFromTerm(translation: SelectionTranslation, term: { term: string, explanation: string }): VocabularyCandidate | undefined {
+  const isChineseTerm = hasCjkText(term.term)
+  const replacement = isChineseTerm ? translation.translation : term.term
+  if (isChineseTerm && !isConciseEnglishReplacement(term.term, replacement))
+    return undefined
+
   return {
     original: isChineseTerm ? term.term : translation.original,
-    replacement: isChineseTerm ? translation.translation : term.term,
+    replacement,
     meaning: term.explanation,
     example: `Selected on page: ${translation.original}`,
     tags: ['technical', 'selection'],
@@ -490,9 +523,12 @@ function getPageStyleContent(customCss = '') {
       z-index: 2147483647;
       max-width: min(360px, calc(100vw - 32px));
       white-space: pre-wrap;
-      border: 1px solid #d1d5db;
-      border-radius: 8px;
-      background: #fff;
+      border: 1px solid rgba(203, 213, 225, 0.82);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+      backdrop-filter: blur(14px) saturate(1.12);
+      -webkit-backdrop-filter: blur(14px) saturate(1.12);
       color: #1f2937;
       padding: 10px 12px;
       font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -506,10 +542,13 @@ function getPageStyleContent(customCss = '') {
       position: relative;
       max-width: min(100%, 64rem);
       margin: 0.85em 0;
-      border: 1px solid #d7e3f8;
+      border: 1px solid rgba(215, 227, 248, 0.86);
       border-left: 4px solid #2563eb;
-      border-radius: 4px;
-      background: rgba(255, 255, 255, 0.96);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.48) inset;
+      backdrop-filter: blur(14px) saturate(1.12);
+      -webkit-backdrop-filter: blur(14px) saturate(1.12);
       padding: 0.7em 0.85em;
       color: #111827;
       font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -525,15 +564,15 @@ function getPageStyleContent(customCss = '') {
       display: inline-flex;
       width: fit-content;
       max-width: min(100%, 22rem);
-      border: 1px solid #bfdbfe;
+      border: 1px solid rgba(191, 219, 254, 0.88);
       border-radius: 999px;
-      background: #eff6ff;
+      background: rgba(239, 246, 255, 0.82);
       padding: 0;
       color: #1e3a8a;
     }
 
     .lexi-selection-translation[data-lexi-loading="true"] {
-      background: linear-gradient(100deg, #ffffff 0%, #f1f7ff 48%, #ffffff 100%);
+      background: linear-gradient(100deg, rgba(255, 255, 255, 0.86) 0%, rgba(241, 247, 255, 0.84) 48%, rgba(255, 255, 255, 0.86) 100%);
       background-size: 220% 100%;
       animation: lexi-card-enter 180ms ease-out both, lexi-shimmer-surface 1000ms ease-in-out infinite;
     }
@@ -1506,13 +1545,16 @@ function getPageContext(range?: Range) {
 function createDialogContext(lastTranslation?: LastTranslationState) {
   const selection = window.getSelection()
   const selected = selection?.toString().trim()
-  const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+  const range = selection?.rangeCount && selected ? selection.getRangeAt(0) : undefined
+  const page = selected
+    ? getPageContext(range) || lastTranslation?.context || ''
+    : getPageContext()
 
   return {
     selected: selected || lastTranslation?.selected || '',
-    translation: lastTranslation?.translation || '',
-    detail: lastTranslation?.detail || '',
-    page: getPageContext(range) || lastTranslation?.context || '',
+    translation: selected ? lastTranslation?.translation || '' : '',
+    detail: selected ? lastTranslation?.detail || '' : '',
+    page,
   }
 }
 
@@ -1615,7 +1657,9 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   close.type = 'button'
   close.textContent = '×'
   contextBlock.textContent = renderDialogContext(context) || '当前页面暂无可用上下文。'
-  answer.textContent = '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。'
+  answer.textContent = context.selected
+    ? '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。'
+    : '未检测到选区。现在会基于整个页面内容回答，你可以直接提问。'
   input.placeholder = context.selected ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
   input.rows = 2
   button.type = 'submit'
@@ -1818,6 +1862,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const aiReplacementSeeds: ReplacementSeed[] = []
     const recordIndex = createReplacementRecordIndex(records)
     const candidatePool = createReplacementCandidatePool(settings, records)
+      .filter(canAutoReplaceCandidate)
     const replacementPlans: ReplacementNodePlan[] = []
 
     for (const node of textNodes) {
@@ -2078,6 +2123,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
           if (!candidate.original || !candidate.replacement || candidateExists(records, candidate))
             continue
 
+          if (!canAutoReplaceCandidate(candidate))
+            continue
+
           if (!settings.history.enabled)
             continue
 
@@ -2166,8 +2214,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!settings.history.enabled)
       return
 
-    const candidate = detailCandidate
-      ?? (detailView.terms[0] ? createCandidateFromTerm(translation, detailView.terms[0]) : undefined)
+    const validDetailCandidate = detailCandidate && canAutoReplaceCandidate(detailCandidate)
+      ? detailCandidate
+      : undefined
+    const termCandidates = detailView.terms
+      .map(term => createCandidateFromTerm(translation, term))
+      .filter((candidate): candidate is VocabularyCandidate => candidate != null)
+    const candidate = validDetailCandidate
+      ?? termCandidates[0]
       ?? (looksTechnicalTerm(selected) ? createTechnicalCandidate(translation, detailText) : createManualCandidate(translation))
     let nextRecords = upsertVocabularyRecord(records, {
       candidate,
@@ -2177,9 +2231,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
       context,
     })
 
-    for (const term of detailView.terms.slice(1, 4)) {
+    for (const termCandidate of termCandidates.slice(1, 4)) {
       nextRecords = upsertVocabularyRecord(nextRecords, {
-        candidate: createCandidateFromTerm(translation, term),
+        candidate: termCandidate,
         source: 'manual',
         pageUrl: location.href,
         pageTitle: document.title,

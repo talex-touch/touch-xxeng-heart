@@ -131,6 +131,15 @@ export const defaultSettings: LexiSettings = {
     dialogShortcut: 'mod+k',
     customCss: '',
   },
+  githubDigest: {
+    enabled: true,
+    autoGenerate: true,
+    autoDelaySeconds: 18,
+    hoverGenerate: true,
+    hoverDelayMs: 2500,
+    allowPrivateAutoGenerate: false,
+    cacheDays: 7,
+  },
   ai: {
     global: { ...emptyAiConnection },
     replacement: createAiSceneConfig('replacement'),
@@ -169,6 +178,10 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
     ui: {
       ...defaultSettings.ui,
       ...value?.ui,
+    },
+    githubDigest: {
+      ...defaultSettings.githubDigest,
+      ...value?.githubDigest,
     },
     ai: {
       global: {

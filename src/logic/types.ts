@@ -140,6 +140,36 @@ export interface UiSettings {
   customCss: string
 }
 
+export interface GitHubDigestSettings {
+  enabled: boolean
+  autoGenerate: boolean
+  autoDelaySeconds: number
+  hoverGenerate: boolean
+  hoverDelayMs: number
+  allowPrivateAutoGenerate: boolean
+  cacheDays: number
+}
+
+export interface GitHubDigestResult {
+  oneLine: string
+  audience: string[]
+  techStack: string[]
+  startHere: string[]
+  terms: string[]
+}
+
+export interface GitHubDigestCacheEntry {
+  repo: string
+  description?: string
+  topics: string[]
+  languages: string[]
+  digest: GitHubDigestResult
+  sourceHash: string
+  updatedAt: number
+}
+
+export type GitHubDigestCache = Record<string, GitHubDigestCacheEntry>
+
 export interface LexiSettings {
   siteRules: SiteRules
   replacement: ReplacementSettings
@@ -147,6 +177,7 @@ export interface LexiSettings {
   study: StudySettings
   history: HistorySettings
   ui: UiSettings
+  githubDigest: GitHubDigestSettings
   ai: AiSettings
 }
 

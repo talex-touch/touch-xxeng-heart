@@ -1,6 +1,6 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
 import { recordAiCall } from './analytics'
-import type { AiTestResult, FeatureScene, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+import type { AiTestResult, FeatureScene, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
 
 interface AiReplacementResponse {
   items?: VocabularyCandidate[]
@@ -709,11 +709,13 @@ export async function requestReplacementCandidates(
       '2) Product, brand, model, platform, library, framework, CLI or service names such as Codex, ChatGPT, Claude, GitHub Actions, Vite, React, Next.js: record them as product knowledge, but DO NOT translate or rename them. For product entries set original and replacement to the exact same surface name from the page.',
       'Add tag "product" for product/name entries; add "technical" for general technical terms. You may add more concise tags such as ai, cli, framework, platform.',
       'Product entries will be reused by Lexi for hover explanations only, not for text replacement.',
+      'Write meaning as a concise Chinese translation/explanation so the hover tooltip is understandable to Chinese readers.',
       'Return compact JSON only: {"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}]}',
     ].join(' '),
   }, [
     'You are Lexi vocabulary extractor for programmer English learning.',
     'Return only valid compact JSON. No markdown, no explanations, no hidden reasoning.',
+    'Write all meaning fields in concise Chinese.',
     'Preserve product names exactly. Never translate product names; mark them with tag "product".',
   ].join(' '))
 
@@ -770,10 +772,12 @@ export async function requestSelectionDetail(
     instruction: [
       'Explain only terms that help understand the selected text.',
       'Put each term explanation into terms as one short item.',
+      'For Chinese terms, terms[].term must be the short Chinese term from the selected text; the matching English expression must be in candidate.replacement, not in terms[].term.',
+      'For English terms, terms[].term must be the short English term itself, never the whole selected sentence.',
       'Give a brief context comment about tone, intent, relationship or subtext after considering the surrounding context.',
       'Give one short translation optimization suggestion: how to make the translation more natural and human-sounding, avoiding translationese.',
       'Keep explanation, context, translationReview and advice under 60 Chinese characters each.',
-      'If the selected text contains a technical term, return a candidate dictionary entry.',
+      'If the selected text contains a reusable technical term, return a candidate dictionary entry. candidate.original must be the exact short source term, and candidate.replacement must be a concise translation/name, not a full sentence.',
       'Return JSON: {"explanation":"","terms":[{"term":"","explanation":""}],"context":"","translationReview":"","advice":"","candidate":{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}}.',
     ].join(' '),
   }, [
@@ -783,6 +787,44 @@ export async function requestSelectionDetail(
   ].join(' '))
 
   return data
+}
+
+export async function requestGitHubDigest(
+  settings: LexiSettings,
+  context: {
+    repo: string
+    description?: string
+    topics: string[]
+    languages: string[]
+    files: string[]
+    readme: string
+  },
+) {
+  const data = await postAiJson<Partial<GitHubDigestResult>>(settings, 'daily', {
+    scene: 'github-digest',
+    ...context,
+    readme: context.readme.slice(0, 4200),
+    instruction: [
+      'Create a concise GitHub repository digest for a developer reader.',
+      'Summarize what the project does from the repo description, topics, languages, visible files and README excerpt.',
+      'Keep it short and scannable. Use Chinese for oneLine, audience and startHere. Keep techStack and terms as concise technical names when appropriate.',
+      'Return JSON only: {"oneLine":"","audience":[""],"techStack":[""],"startHere":[""],"terms":[""]}.',
+    ].join(' '),
+  }, [
+    'You are Lexi GitHub Digest. Return only compact JSON matching the requested schema.',
+    'No markdown, no hidden reasoning. Prefer concise Chinese explanations.',
+  ].join(' '))
+
+  if (!data?.oneLine)
+    return undefined
+
+  return {
+    oneLine: data.oneLine,
+    audience: Array.isArray(data.audience) ? data.audience.filter(Boolean).slice(0, 4) : [],
+    techStack: Array.isArray(data.techStack) ? data.techStack.filter(Boolean).slice(0, 8) : [],
+    startHere: Array.isArray(data.startHere) ? data.startHere.filter(Boolean).slice(0, 5) : [],
+    terms: Array.isArray(data.terms) ? data.terms.filter(Boolean).slice(0, 8) : [],
+  }
 }
 
 export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {

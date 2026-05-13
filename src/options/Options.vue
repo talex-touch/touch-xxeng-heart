@@ -24,6 +24,7 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
   { value: 'en-to-zh', label: '英译中' },
 ]
 
+const appVersion = __VERSION__
 const activeTab = ref<OptionsTab>('settings')
 const newSceneRuleDomain = ref('')
 const vocabularySearchQuery = ref('')
@@ -254,10 +255,10 @@ function removeSceneRule(index: number) {
       <header class="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-neutral-200 pb-5">
         <div>
           <div class="text-24px font-700 tracking-0">
-            Lexi
+            Lexi <span class="align-middle text-13px font-500 text-neutral-400">v{{ appVersion }}</span>
           </div>
           <p class="mt-2 max-w-2xl text-14px leading-6 text-neutral-600">
-            配置网页启用范围、替换密度、渐进难度，以及不同场景的 AI 后端。
+            配置网页启用范围、替换密度、渐进难度、GitHub Digest / Lexi 速读，以及不同场景的 AI 后端。
           </p>
         </div>
         <div class="text-right">
@@ -411,12 +412,48 @@ function removeSceneRule(index: number) {
             <label class="mt-4 block">
               <span class="text-13px font-500">快捷对话键</span>
               <input v-model.trim="lexiSettings.ui.dialogShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="mod+k">
-              <span class="mt-1 block text-12px text-neutral-500">支持 mod+k、ctrl+k、meta+k、alt+l、shift+mod+k。</span>
+              <span class="mt-1 block text-12px text-neutral-500">支持 mod+k、ctrl+k、meta+k、alt+l、shift+mod+k。无选区时会基于整页内容提问。</span>
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">每日推荐数量</span>
               <input v-model.number="lexiSettings.study.dailyGoal" type="number" min="1" max="30" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
             </label>
+
+            <div class="mt-5 border-t border-neutral-100 pt-5">
+              <h3 class="text-14px font-600">
+                GitHub Digest / Lexi 速读
+              </h3>
+              <p class="mt-1 text-12px leading-5 text-neutral-500">
+                在 GitHub 仓库页读取右侧介绍和 README，生成项目速览。使用“每日推荐”AI 场景配置。
+              </p>
+              <label class="mt-3 flex items-center justify-between gap-4">
+                <span class="text-14px font-500">显示速读卡片</span>
+                <input v-model="lexiSettings.githubDigest.enabled" type="checkbox" class="h-5 w-5">
+              </label>
+              <label class="mt-3 flex items-center justify-between gap-4">
+                <span class="text-14px font-500">停留后自动生成</span>
+                <input v-model="lexiSettings.githubDigest.autoGenerate" type="checkbox" class="h-5 w-5">
+              </label>
+              <label class="mt-3 block">
+                <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.githubDigest.autoDelaySeconds }} 秒</span>
+                <input v-model.number="lexiSettings.githubDigest.autoDelaySeconds" type="range" min="8" max="45" step="1" class="mt-2 w-full accent-neutral-950">
+              </label>
+              <label class="mt-3 flex items-center justify-between gap-4">
+                <span class="text-14px font-500">悬停卡片快速生成</span>
+                <input v-model="lexiSettings.githubDigest.hoverGenerate" type="checkbox" class="h-5 w-5">
+              </label>
+              <label class="mt-3 block">
+                <span class="text-13px font-500">缓存天数</span>
+                <input v-model.number="lexiSettings.githubDigest.cacheDays" type="number" min="1" max="60" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+              </label>
+              <label class="mt-3 flex items-center justify-between gap-4">
+                <span>
+                  <span class="block text-14px font-500">私有仓库也允许自动生成</span>
+                  <span class="text-12px text-neutral-500">默认关闭；仍可手动点击生成。</span>
+                </span>
+                <input v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" type="checkbox" class="h-5 w-5">
+              </label>
+            </div>
             <label class="mt-4 block">
               <span class="text-13px font-500">自定义样式 CSS</span>
               <textarea
@@ -817,6 +854,9 @@ function removeSceneRule(index: number) {
           关于 Lexi
         </h2>
         <div class="mt-4 space-y-3 text-14px leading-6 text-neutral-700">
+          <p>
+            当前版本：v{{ appVersion }}
+          </p>
           <p>
             Lexi 由 TalexDreamSoul 开发。
           </p>

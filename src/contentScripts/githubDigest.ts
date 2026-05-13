@@ -221,7 +221,7 @@ function createList(items: string[], emptyText: string) {
   if (!items.length)
     return `<p class="lexi-github-digest__muted">${emptyText}</p>`
 
-  return `<ul>${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+  return `<ul>${items.map(item => `<li class="lexi-github-digest__typewriter">${escapeHtml(item)}</li>`).join('')}</ul>`
 }
 
 function escapeHtml(value: string) {
@@ -246,8 +246,8 @@ function getFallbackQuickSummary(info: GitHubRepoInfo) {
 
 function getDigestSummary(digest: GitHubDigestResult, options: { detail: boolean, cached?: boolean }) {
   return `
-    <p class="lexi-github-digest__desc">${escapeHtml(digest.oneLine)}</p>
-    ${digest.details ? `<p class="lexi-github-digest__detail-text">${escapeHtml(digest.details)}</p>` : ''}
+    <p class="lexi-github-digest__desc lexi-github-digest__typewriter">${escapeHtml(digest.oneLine)}</p>
+    ${digest.details ? `<p class="lexi-github-digest__detail-text lexi-github-digest__typewriter">${escapeHtml(digest.details)}</p>` : ''}
     ${options.detail ? `<div class="lexi-github-digest__section"><strong>适合谁</strong>${createList(digest.audience, '暂无受众信息')}</div>` : ''}
     ${options.detail ? `<div class="lexi-github-digest__section"><strong>先看哪里</strong>${createList(digest.startHere, '暂无入口建议')}</div>` : ''}
     <div class="lexi-github-digest__actions">
@@ -267,9 +267,34 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   })
 }
 
+function runTypewriterAnimation(element: HTMLElement) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    return
+
+  const targets = Array.from(element.querySelectorAll<HTMLElement>('.lexi-github-digest__typewriter'))
+  let groupDelay = 0
+  for (const target of targets) {
+    const text = target.textContent ?? ''
+    if (!text.trim())
+      continue
+
+    target.textContent = ''
+    target.setAttribute('aria-label', text)
+    Array.from(text).forEach((char, index) => {
+      const span = document.createElement('span')
+      span.className = 'lexi-github-digest__char'
+      span.textContent = char
+      span.style.animationDelay = `${groupDelay + Math.min(index * 16, 1200)}ms`
+      target.append(span)
+    })
+    groupDelay += Math.min(520, Math.max(180, text.length * 10))
+  }
+}
+
 function updateCardContent(element: HTMLElement, html: string) {
   const from = element.getBoundingClientRect()
   element.innerHTML = html
+  runTypewriterAnimation(element)
   const to = element.getBoundingClientRect()
   if (!from.height || Math.abs(from.height - to.height) < 1)
     return
@@ -362,13 +387,15 @@ function ensureStyles() {
     .lexi-github-digest ul { margin: 0; padding-left: 18px; }
     .lexi-github-digest li { margin: 2px 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); }
     .lexi-github-digest__terms, .lexi-github-digest__hint, .lexi-github-digest__muted { margin: 10px 0 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; }
+    .lexi-github-digest__char { display: inline-block; opacity: 0; filter: blur(2px); transform: translateY(2px); animation: lexi-github-digest-char-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards; white-space: pre-wrap; }
     .lexi-github-digest__loading { margin-top: 12px; border-radius: 10px; background: linear-gradient(100deg, rgba(99,102,241,0.12), rgba(14,165,233,0.18), rgba(168,85,247,0.12), rgba(99,102,241,0.12)); background-size: 240% 100%; padding: 10px; color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); animation: lexi-github-digest-ai-gradient 1.15s ease-in-out infinite; }
     .lexi-github-digest__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .lexi-github-digest__actions button { border: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de)); border-radius: 6px; background: var(--bgColor-default, var(--color-canvas-default, #ffffff)); color: var(--fgColor-default, var(--color-fg-default, #1f2328)); cursor: pointer; font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 7px 9px; }
     .lexi-github-digest__actions button:first-child { border-color: var(--button-primary-borderColor-rest, #1f883d); background: var(--button-primary-bgColor-rest, #1f883d); color: var(--button-primary-fgColor-rest, #ffffff); }
+    @keyframes lexi-github-digest-char-in { to { opacity: 1; filter: blur(0); transform: translateY(0); } }
     @keyframes lexi-github-digest-ai-gradient { from { background-position-x: 120%; filter: saturate(1); } 50% { filter: saturate(1.32); } to { background-position-x: -120%; filter: saturate(1); } }
     @media (prefers-reduced-motion: reduce) {
-      .lexi-github-digest__loading { animation: none; }
+      .lexi-github-digest__char, .lexi-github-digest__loading { animation: none; opacity: 1; filter: none; transform: none; }
     }
   `
   document.documentElement.appendChild(style)

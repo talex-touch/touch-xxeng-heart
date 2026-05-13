@@ -1,7 +1,7 @@
 {
   "name": "touch-xxeng-heart",
   "displayName": "Lexi",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "private": true,
   "packageManager": "pnpm@9.7.1",
   "description": "Chrome extension for contextual programmer English learning on web pages.",

@@ -511,14 +511,14 @@ function createToken(candidate: VocabularyCandidate) {
 function getPageStyleContent(customCss = '') {
   return `
     .lexi-token {
-      border-bottom: 1px dashed #2563eb;
-      color: #1d4ed8;
+      border-bottom: 1px dashed #155dfc;
+      color: #155dfc;
       cursor: help;
       text-decoration: none;
     }
 
     .lexi-token:hover {
-      background: rgba(37, 99, 235, 0.09);
+      background: rgba(21, 93, 252, 0.12);
     }
 
     .lexi-token-product {
@@ -641,7 +641,7 @@ function getPageStyleContent(customCss = '') {
       display: inline-block;
       box-sizing: border-box;
       margin: 0;
-      background: #2563eb;
+      background: #155dfc;
       color: #fff;
       font-weight: 600;
       font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -748,7 +748,7 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-selection-translation__collapsed-icon {
       all: initial;
-      color: #2563eb;
+      color: #155dfc;
       font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
@@ -2487,7 +2487,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       closeLexiDialog(currentDialog)
   }
 
-  const onPointerOver = (event: PointerEvent) => {
+  const onPointerOver = (event: MouseEvent | PointerEvent) => {
     const token = getTokenFromEvent(event)
     if (!token)
       return
@@ -2505,12 +2505,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     moveTooltip(tooltip, event)
   }
 
-  const onPointerMove = (event: PointerEvent) => {
+  const onPointerMove = (event: MouseEvent | PointerEvent) => {
     if (tooltip && !tooltip.hidden)
       moveTooltip(tooltip, event)
   }
 
-  const onPointerOut = (event: PointerEvent) => {
+  const onPointerOut = (event: MouseEvent | PointerEvent) => {
     const token = getTokenFromEvent(event)
     if (!token || !tooltip)
       return
@@ -2600,9 +2600,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
   document.addEventListener('selectionchange', onSelectionChange)
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('keydown', onEscape)
-  document.addEventListener('pointerover', onPointerOver)
-  document.addEventListener('pointermove', onPointerMove)
-  document.addEventListener('pointerout', onPointerOut)
+  document.addEventListener('pointerover', onPointerOver, true)
+  document.addEventListener('pointermove', onPointerMove, true)
+  document.addEventListener('pointerout', onPointerOut, true)
+  document.addEventListener('mouseover', onPointerOver, true)
+  document.addEventListener('mousemove', onPointerMove, true)
+  document.addEventListener('mouseout', onPointerOut, true)
   browser.storage.onChanged.addListener(onStorageChanged)
 
   void getStoredState().then(({ settings }) => {
@@ -2642,9 +2645,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     document.removeEventListener('selectionchange', onSelectionChange)
     document.removeEventListener('keydown', onKeyDown)
     document.removeEventListener('keydown', onEscape)
-    document.removeEventListener('pointerover', onPointerOver)
-    document.removeEventListener('pointermove', onPointerMove)
-    document.removeEventListener('pointerout', onPointerOut)
+    document.removeEventListener('pointerover', onPointerOver, true)
+    document.removeEventListener('pointermove', onPointerMove, true)
+    document.removeEventListener('pointerout', onPointerOut, true)
+    document.removeEventListener('mouseover', onPointerOver, true)
+    document.removeEventListener('mousemove', onPointerMove, true)
+    document.removeEventListener('mouseout', onPointerOut, true)
     window.removeEventListener('scroll', onPageTranslationScroll)
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()

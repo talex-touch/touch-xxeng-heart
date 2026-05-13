@@ -5,7 +5,7 @@ import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, normalizeImportedRecord } from '~/logic/vocabularyRecords'
 import type { TranslationDirection, VocabularyRecord } from '~/logic/types'
 
-type SidepanelTab = 'common' | 'history'
+type SidepanelTab = 'common' | 'advanced' | 'history'
 
 function openOptionsPage() {
   browser.runtime.openOptionsPage()
@@ -13,6 +13,7 @@ function openOptionsPage() {
 
 const tabItems: Array<{ value: SidepanelTab, label: string, description: string }> = [
   { value: 'common', label: '常用操作', description: '开关与当前页' },
+  { value: 'advanced', label: '高级设置', description: '密度与触发' },
   { value: 'history', label: '历史复盘', description: '记录与推荐' },
 ]
 const activeTab = ref<SidepanelTab>('common')
@@ -46,6 +47,13 @@ const autoRecords = computed(() => vocabularyRecords.value.filter(record => reco
 const storageBytes = computed(() => new Blob([JSON.stringify(vocabularyRecords.value)]).size)
 const storageSize = computed(() => {
   return formatBytes(storageBytes.value)
+})
+const replacementDensityPercent = computed(() => Math.round(lexiSettings.value.replacement.density * 100))
+const pageTranslationStateLabel = computed(() => pageTranslationStatus.value.enabled ? '运行中' : '已停止')
+const pageTranslationStorageLabel = computed(() => {
+  return pageTranslationStatus.value.cached
+    ? `可恢复 · ${formatBytes(pageTranslationStatus.value.bytes)}`
+    : '暂无缓存'
 })
 const dailyRecommendations = computed(() => getTodayRecommendations(
   vocabularyRecords.value,
@@ -185,15 +193,15 @@ onMounted(() => {
           程序员英语
         </div>
         <div class="mt-1 text-12px text-neutral-500">
-          难度 {{ difficulty }} · 已记录 {{ vocabularyRecords.length }}
+          难度 {{ difficulty }} · 已记录 {{ vocabularyRecords.length }} · {{ storageSize }}
         </div>
       </div>
-      <button class="rounded-2 border border-neutral-200 bg-white px-3 py-1.5 text-12px cursor-pointer hover:bg-neutral-50" @click="openOptionsPage">
-        配置
+      <button class="shrink-0 rounded-2 border border-neutral-200 bg-white px-3 py-1.5 text-12px cursor-pointer hover:bg-neutral-50" @click="openOptionsPage">
+        完整配置
       </button>
     </header>
 
-    <nav class="mt-4 grid grid-cols-2 gap-2 rounded-3 bg-neutral-100 p-1" aria-label="侧边栏标签页">
+    <nav class="mt-4 grid grid-cols-3 gap-2 rounded-3 bg-neutral-100 p-1" aria-label="侧边栏标签页">
       <button
         v-for="tab in tabItems"
         :key="tab.value"
@@ -208,111 +216,213 @@ onMounted(() => {
     </nav>
 
     <section v-if="activeTab === 'common'" class="mt-4 space-y-4">
-      <section class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3">
+      <section class="rounded-3 border border-neutral-200 bg-neutral-50 px-3 py-3">
         <div class="flex items-center justify-between gap-3">
-          <h2 class="text-14px font-600">
-            快速配置
-          </h2>
-          <button class="border-0 bg-transparent p-0 text-12px text-neutral-500 underline cursor-pointer" @click="openOptionsPage">
-            完整配置
-          </button>
+          <div>
+            <h2 class="text-14px font-700">
+              常用开关
+            </h2>
+            <p class="mt-1 text-12px text-neutral-500">
+              最常用的启停、翻译方向和历史保存。
+            </p>
+          </div>
+          <span class="rounded-full px-2 py-1 text-11px" :class="lexiSettings.siteRules.enabled ? 'bg-blue-50 text-blue-600' : 'bg-neutral-200 text-neutral-500'">
+            {{ lexiSettings.siteRules.enabled ? '已启用' : '已关闭' }}
+          </span>
         </div>
-        <div class="mt-3 grid grid-cols-2 gap-3">
-          <label class="flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
-            <span>总开关</span>
-            <input v-model="lexiSettings.siteRules.enabled" type="checkbox" class="h-4 w-4">
-          </label>
-          <label class="flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
-            <span>网页替换</span>
-            <input v-model="lexiSettings.replacement.enabled" type="checkbox" class="h-4 w-4">
-          </label>
-          <label class="flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
-            <span>划词翻译</span>
-            <input v-model="lexiSettings.selection.enabled" type="checkbox" class="h-4 w-4">
-          </label>
-          <label class="flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
-            <span>状态浮标</span>
-            <input v-model="lexiSettings.ui.showFloatingStatus" type="checkbox" class="h-4 w-4">
-          </label>
-          <label class="flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
-            <span>保存历史</span>
-            <input v-model="lexiSettings.history.enabled" type="checkbox" class="h-4 w-4">
-          </label>
+
+        <div class="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
+            <span>
+              <span class="block font-500">启用 Lexi</span>
+              <span class="text-11px text-neutral-500">控制当前站点功能</span>
+            </span>
+            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.siteRules.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.siteRules.enabled" @click="lexiSettings.siteRules.enabled = !lexiSettings.siteRules.enabled">
+              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.siteRules.enabled ? 'left-5' : 'left-0.5'" />
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
+            <span>
+              <span class="block font-500">替换网页文本</span>
+              <span class="text-11px text-neutral-500">将部分中文替换为英文</span>
+            </span>
+            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.replacement.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.replacement.enabled" @click="lexiSettings.replacement.enabled = !lexiSettings.replacement.enabled">
+              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.replacement.enabled ? 'left-5' : 'left-0.5'" />
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
+            <span>
+              <span class="block font-500">划词翻译</span>
+              <span class="text-11px text-neutral-500">选中文本后快速翻译</span>
+            </span>
+            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.selection.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.selection.enabled" @click="lexiSettings.selection.enabled = !lexiSettings.selection.enabled">
+              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.selection.enabled ? 'left-5' : 'left-0.5'" />
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
+            <span>
+              <span class="block font-500">保存历史</span>
+              <span class="text-11px text-neutral-500">用于复盘和导出</span>
+            </span>
+            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.history.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.history.enabled" @click="lexiSettings.history.enabled = !lexiSettings.history.enabled">
+              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.history.enabled ? 'left-5' : 'left-0.5'" />
+            </button>
+          </div>
         </div>
+
         <label class="mt-3 block">
-          <span class="text-12px text-neutral-500">翻译方向</span>
+          <span class="text-12px text-neutral-500">划词翻译方向</span>
           <select v-model="lexiSettings.selection.translationDirection" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
             <option v-for="item in translationDirections" :key="item.value" :value="item.value">
               {{ item.label }}
             </option>
           </select>
         </label>
-        <label class="mt-3 flex items-center justify-between gap-2 rounded-2 bg-white px-3 py-2 text-12px">
-          <span>
-            <span class="block">修饰键触发</span>
-            <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl</span>
-          </span>
-          <input v-model="lexiSettings.selection.requireModifierKey" type="checkbox" class="h-4 w-4">
-        </label>
-        <label class="mt-3 block">
-          <span class="text-12px text-neutral-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
-          <input v-model.number="lexiSettings.replacement.density" type="range" min="0.02" max="0.25" step="0.01" class="mt-1 w-full accent-neutral-950">
-        </label>
-        <div class="mt-3 grid grid-cols-2 gap-3">
-          <label class="block">
-            <span class="text-12px text-neutral-500">难度</span>
-            <input v-model.number="lexiSettings.replacement.difficulty" type="number" min="1" max="5" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
-          </label>
-          <label class="block">
-            <span class="text-12px text-neutral-500">单页上限</span>
-            <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="40" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
-          </label>
-        </div>
-        <label class="mt-3 block">
-          <span class="text-12px text-neutral-500">最多保存记录</span>
-          <input v-model.number="lexiSettings.history.maxRecords" type="number" min="50" max="5000" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
-        </label>
       </section>
 
-      <section class="mt-4 border border-neutral-200 bg-white px-3 py-3">
-        <div class="flex items-center justify-between gap-3">
+      <section class="rounded-3 border border-neutral-200 bg-white px-3 py-3">
+        <div class="flex items-start justify-between gap-3">
           <div>
-            <h2 class="text-14px font-600">
+            <h2 class="text-14px font-700">
               当前页面自动翻译
             </h2>
-            <p class="mt-1 text-12px text-neutral-500">
+            <p class="mt-1 text-12px leading-5 text-neutral-500">
               自动保存当前页翻译，下次打开同一链接会读取并恢复。
             </p>
           </div>
-          <span class="shrink-0 text-12px" :class="pageTranslationStatus.enabled ? 'text-blue-600' : 'text-neutral-500'">
-            {{ pageTranslationStatus.enabled ? '启用' : '停止' }}
+          <span class="shrink-0 rounded-full px-2 py-1 text-11px" :class="pageTranslationStatus.enabled ? 'bg-blue-50 text-blue-600' : 'bg-neutral-100 text-neutral-500'">
+            {{ pageTranslationStateLabel }}
           </span>
         </div>
+
         <div class="mt-3 grid grid-cols-3 gap-2">
-          <button class="border border-neutral-950 bg-neutral-950 px-2 py-1.5 text-12px text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50" :disabled="pageTranslationLoading" @click="controlPageTranslation('start')">
+          <button class="rounded-2 border border-neutral-950 px-2 py-2 text-12px cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" :class="pageTranslationStatus.enabled ? 'bg-white text-neutral-950 hover:bg-neutral-50' : 'bg-neutral-950 text-white'" :disabled="pageTranslationLoading || pageTranslationStatus.enabled" @click="controlPageTranslation('start')">
             启用
           </button>
-          <button class="border border-neutral-200 bg-white px-2 py-1.5 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="pageTranslationLoading" @click="controlPageTranslation('stop')">
+          <button class="rounded-2 border px-2 py-2 text-12px cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" :class="pageTranslationStatus.enabled ? 'border-neutral-950 bg-neutral-950 text-white' : 'border-neutral-200 bg-white text-neutral-950 hover:bg-neutral-50'" :disabled="pageTranslationLoading || !pageTranslationStatus.enabled" @click="controlPageTranslation('stop')">
             停止
           </button>
-          <button class="border border-neutral-200 bg-white px-2 py-1.5 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="pageTranslationLoading" @click="refreshPageTranslationStatus">
+          <button class="rounded-2 border border-neutral-200 bg-white px-2 py-2 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" @click="refreshPageTranslationStatus">
             刷新
           </button>
         </div>
-        <div class="mt-3 flex items-center justify-between gap-3 border-t border-neutral-100 pt-3 text-12px text-neutral-500">
-          <span>已缓存 {{ pageTranslationStatus.blocks }} 段</span>
-          <span>{{ pageTranslationStatus.cached ? `可恢复 · ${formatBytes(pageTranslationStatus.bytes)}` : '未保存' }}</span>
+
+        <div class="mt-3 grid grid-cols-2 gap-2 text-center">
+          <div class="rounded-2 bg-neutral-50 px-2 py-2">
+            <div class="text-15px font-700">
+              {{ pageTranslationStatus.blocks }}
+            </div>
+            <div class="text-11px text-neutral-500">
+              已缓存段落
+            </div>
+          </div>
+          <div class="rounded-2 bg-neutral-50 px-2 py-2">
+            <div class="text-15px font-700">
+              {{ pageTranslationStatus.cached ? formatBytes(pageTranslationStatus.bytes) : '—' }}
+            </div>
+            <div class="text-11px text-neutral-500">
+              {{ pageTranslationStorageLabel }}
+            </div>
+          </div>
         </div>
-        <p v-if="pageTranslationMessage" class="mt-2 text-12px leading-5 text-neutral-500">
+
+        <p v-if="pageTranslationMessage" class="mt-2 rounded-2 bg-neutral-50 px-3 py-2 text-12px leading-5 text-neutral-500">
           {{ pageTranslationMessage }}
         </p>
       </section>
+
+      <section class="rounded-3 border border-neutral-200 bg-neutral-50 px-3 py-3">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h2 class="text-14px font-700">
+              快速入口
+            </h2>
+            <p class="mt-1 text-12px text-neutral-500">
+              最近翻译 {{ manualRecords.length }} 条，待复盘 {{ dueRecords.length }} 条。
+            </p>
+          </div>
+          <button class="rounded-2 border border-neutral-200 bg-white px-3 py-1.5 text-12px cursor-pointer hover:bg-neutral-50" @click="activeTab = 'history'">
+            查看历史
+          </button>
+        </div>
+      </section>
     </section>
 
-    <section v-else-if="activeTab === 'history'" class="mt-4 space-y-5">
-      <section class="mt-5">
+    <section v-else-if="activeTab === 'advanced'" class="mt-4 space-y-4">
+      <section class="rounded-3 border border-neutral-200 bg-neutral-50 px-3 py-3">
         <div class="flex items-center justify-between gap-3">
-          <h2 class="text-14px font-600">
+          <div>
+            <h2 class="text-14px font-700">
+              替换参数
+            </h2>
+            <p class="mt-1 text-12px text-neutral-500">
+              控制网页文本替换的强度和数量。
+            </p>
+          </div>
+          <button class="border-0 bg-transparent p-0 text-12px text-neutral-500 underline cursor-pointer" @click="openOptionsPage">
+            更多设置
+          </button>
+        </div>
+
+        <label class="mt-4 block">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-12px font-500 text-neutral-600">替换密度</span>
+            <span class="rounded-full bg-white px-2 py-1 text-12px text-neutral-700">{{ replacementDensityPercent }}%</span>
+          </div>
+          <input v-model.number="lexiSettings.replacement.density" type="range" min="0.02" max="0.45" step="0.01" class="mt-2 w-full accent-neutral-950">
+          <p class="mt-1 text-11px text-neutral-500">
+            建议 10% - 25%，阅读压力过大时可降低。
+          </p>
+        </label>
+
+        <div class="mt-3 grid grid-cols-2 gap-3">
+          <label class="block">
+            <span class="text-12px text-neutral-500">难度等级 1-5</span>
+            <input v-model.number="lexiSettings.replacement.difficulty" type="number" min="1" max="5" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+          </label>
+          <label class="block">
+            <span class="text-12px text-neutral-500">单页最大替换数</span>
+            <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="40" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+          </label>
+        </div>
+      </section>
+
+      <section class="rounded-3 border border-neutral-200 bg-white px-3 py-3">
+        <h2 class="text-14px font-700">
+          交互与显示
+        </h2>
+        <div class="mt-3 space-y-2">
+          <div class="flex items-center justify-between gap-3 rounded-2 bg-neutral-50 px-3 py-2 text-12px">
+            <span>
+              <span class="block font-500">显示状态浮标</span>
+              <span class="text-11px text-neutral-500">在页面上展示 Lexi 运行状态</span>
+            </span>
+            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.ui.showFloatingStatus ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.ui.showFloatingStatus" @click="lexiSettings.ui.showFloatingStatus = !lexiSettings.ui.showFloatingStatus">
+              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.ui.showFloatingStatus ? 'left-5' : 'left-0.5'" />
+            </button>
+          </div>
+          <div class="flex items-center justify-between gap-3 rounded-2 bg-neutral-50 px-3 py-2 text-12px">
+            <span>
+              <span class="block font-500">按修饰键触发划词</span>
+              <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl</span>
+            </span>
+            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.selection.requireModifierKey ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.selection.requireModifierKey" @click="lexiSettings.selection.requireModifierKey = !lexiSettings.selection.requireModifierKey">
+              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.selection.requireModifierKey ? 'left-5' : 'left-0.5'" />
+            </button>
+          </div>
+        </div>
+
+        <label class="mt-3 block">
+          <span class="text-12px text-neutral-500">历史记录上限（条）</span>
+          <input v-model.number="lexiSettings.history.maxRecords" type="number" min="50" max="5000" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+        </label>
+      </section>
+    </section>
+
+    <section v-else class="mt-4 space-y-5">
+      <section class="rounded-3 border border-neutral-200 bg-white px-3 py-3">
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-14px font-700">
             历史与存储
           </h2>
           <span class="text-12px text-neutral-500">{{ storageSize }}</span>
@@ -343,21 +453,25 @@ onMounted(() => {
             导入
             <input type="file" accept="application/json" class="hidden" @change="importRecords">
           </label>
-          <button class="rounded-2 border border-neutral-200 bg-white px-3 py-1.5 text-12px cursor-pointer hover:bg-neutral-50" @click="cleanupOldRecords">
-            清理 {{ cleanupDays }} 天前
-          </button>
           <button class="rounded-2 border border-red-200 bg-white px-3 py-1.5 text-12px text-red-600 cursor-pointer hover:bg-red-50" @click="clearRecords">
             清空
           </button>
         </div>
-        <input v-model.number="cleanupDays" type="number" min="1" max="365" class="mt-2 h-8 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+        <div class="mt-3 flex items-center gap-2 rounded-2 bg-neutral-50 px-3 py-2">
+          <span class="text-12px text-neutral-500">清理超过</span>
+          <input v-model.number="cleanupDays" type="number" min="1" max="365" class="h-8 w-18 rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+          <span class="text-12px text-neutral-500">天的记录</span>
+          <button class="ml-auto rounded-2 border border-neutral-200 bg-white px-3 py-1.5 text-12px cursor-pointer hover:bg-neutral-50" @click="cleanupOldRecords">
+            清理
+          </button>
+        </div>
         <p v-if="importMessage" class="mt-2 text-12px text-neutral-500">
           {{ importMessage }}
         </p>
       </section>
 
-      <section class="mt-5">
-        <h2 class="text-14px font-600">
+      <section>
+        <h2 class="text-14px font-700">
           最近翻译
         </h2>
         <div v-if="manualRecords.length" class="mt-3 space-y-2">
@@ -383,8 +497,8 @@ onMounted(() => {
         </p>
       </section>
 
-      <section class="mt-5">
-        <h2 class="text-14px font-600">
+      <section>
+        <h2 class="text-14px font-700">
           最近替换
         </h2>
         <div v-if="autoRecords.length" class="mt-3 space-y-2">
@@ -403,8 +517,8 @@ onMounted(() => {
         </p>
       </section>
 
-      <section class="mt-5">
-        <h2 class="text-14px font-600">
+      <section>
+        <h2 class="text-14px font-700">
           今日推荐
         </h2>
         <div class="mt-3 space-y-3">
@@ -427,8 +541,8 @@ onMounted(() => {
         </div>
       </section>
 
-      <section class="mt-6">
-        <h2 class="text-14px font-600">
+      <section>
+        <h2 class="text-14px font-700">
           待复盘
         </h2>
         <div v-if="dueRecords.length" class="mt-3 space-y-2">

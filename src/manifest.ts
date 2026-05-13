@@ -3,6 +3,12 @@ import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
 import { isDev, isFirefox, port, r } from '../scripts/utils'
 
+type ChromiumManifest = Manifest.WebExtensionManifest & {
+  side_panel?: {
+    default_path: string
+  }
+}
+
 const extensionIcons = {
   16: 'assets/icon-16.png',
   48: 'assets/icon-48.png',
@@ -41,8 +47,8 @@ export async function getManifest() {
       'tabs',
       'storage',
       'activeTab',
-      'sidePanel',
       'contextMenus',
+      ...isFirefox ? [] : ['sidePanel'],
     ],
     host_permissions: ['*://*/*'],
     content_scripts: [
@@ -77,7 +83,7 @@ export async function getManifest() {
   }
   else {
     // the sidebar_action does not work for chromium based
-    (manifest as any).side_panel = {
+    ;(manifest as ChromiumManifest).side_panel = {
       default_path: 'dist/sidepanel/index.html',
     }
   }

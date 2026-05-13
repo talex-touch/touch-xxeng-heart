@@ -2,7 +2,7 @@
 import { sendMessage } from 'webext-bridge/popup'
 import { computed, onMounted, ref } from 'vue'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
-import { getDueRecords, getProgressDifficulty, getTodayRecommendations } from '~/logic/vocabularyRecords'
+import { getDueRecords, getProgressDifficulty, getTodayRecommendations, normalizeImportedRecord } from '~/logic/vocabularyRecords'
 import type { TranslationDirection, VocabularyRecord } from '~/logic/types'
 
 function openOptionsPage() {
@@ -16,6 +16,7 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
 ]
 const cleanupDays = ref(30)
 const importMessage = ref('')
+const maxImportBytes = 2 * 1024 * 1024
 const pageTranslationLoading = ref(false)
 const pageTranslationMessage = ref('')
 const pageTranslationStatus = ref({
@@ -132,18 +133,28 @@ async function importRecords(event: Event) {
     return
 
   try {
-    const text = await input.files[0].text()
+    const file = input.files[0]
+    if (file.size > maxImportBytes)
+      throw new Error('导入文件过大，请控制在 2 MB 以内')
+
+    const text = await file.text()
     const records = JSON.parse(text) as VocabularyRecord[]
     if (!Array.isArray(records))
       throw new Error('导入文件不是数组')
 
+    const normalizedRecords = records
+      .slice(0, lexiSettings.value.history.maxRecords)
+      .map(record => normalizeImportedRecord(record))
+      .filter((record): record is VocabularyRecord => Boolean(record))
+
     const merged = new Map(vocabularyRecords.value.map(record => [record.id, record]))
-    for (const record of records) {
-      if (record?.id && record?.original && record?.replacement)
-        merged.set(record.id, record)
-    }
-    vocabularyRecords.value = [...merged.values()].sort((a, b) => b.updatedAt - a.updatedAt)
-    importMessage.value = `已导入 ${records.length} 条`
+    for (const record of normalizedRecords)
+      merged.set(record.id, record)
+
+    vocabularyRecords.value = [...merged.values()]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, lexiSettings.value.history.maxRecords)
+    importMessage.value = `已导入 ${normalizedRecords.length} 条，跳过 ${records.length - normalizedRecords.length} 条无效记录`
   }
   catch (error) {
     importMessage.value = error instanceof Error ? error.message : '导入失败'

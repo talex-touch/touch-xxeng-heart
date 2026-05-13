@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { programmerVocabulary } from './vocabularyBank'
-import { getProgressDifficulty, getTodayRecommendations, upsertVocabularyRecord } from './vocabularyRecords'
+import { getProgressDifficulty, getTodayRecommendations, isProductVocabularyCandidate, normalizeImportedRecord, upsertVocabularyRecord } from './vocabularyRecords'
 
 describe('vocabulary records', () => {
   it('creates and updates records by original and replacement', () => {
@@ -45,5 +45,42 @@ describe('vocabulary records', () => {
 
     expect(recommendations).toHaveLength(4)
     expect(recommendations[0].original).not.toBe(programmerVocabulary[0].original)
+  })
+
+  it('normalizes imported records and rejects invalid rows', () => {
+    expect(normalizeImportedRecord(null)).toBeUndefined()
+    expect(normalizeImportedRecord({ original: '', replacement: 'context' })).toBeUndefined()
+
+    const record = normalizeImportedRecord({
+      original: '  上下文  ',
+      replacement: ' Context ',
+      meaning: 'A'.repeat(800),
+      tags: [' Technical Term ', 'Technical Term', 123],
+      difficulty: 99,
+      source: 'unknown',
+      seenCount: -1,
+      selectedCount: 2.8,
+      learnedLevel: 99,
+      createdAt: -1,
+    }, 1000)
+
+    expect(record).toMatchObject({
+      id: '上下文:context',
+      original: '上下文',
+      replacement: 'Context',
+      tags: ['technical-term'],
+      difficulty: 5,
+      source: 'manual',
+      seenCount: 0,
+      selectedCount: 2,
+      learnedLevel: 8,
+      createdAt: 1000,
+    })
+    expect(record?.meaning).toHaveLength(600)
+  })
+
+  it('detects product vocabulary tags', () => {
+    expect(isProductVocabularyCandidate({ tags: ['ai', 'Product'] })).toBe(true)
+    expect(isProductVocabularyCandidate({ tags: ['technical'] })).toBe(false)
   })
 })

@@ -1,6 +1,5 @@
-import { onMessage, sendMessage } from 'webext-bridge/background'
+import { sendMessage } from 'webext-bridge/background'
 import browser from 'webextension-polyfill'
-import type { Tabs } from 'webextension-polyfill'
 
 // only on dev mode
 if (import.meta.hot) {
@@ -10,11 +9,8 @@ if (import.meta.hot) {
   import('./contentScriptHMR')
 }
 
-// remove or turn this off if you don't use side panel
-const USE_SIDE_PANEL = true
-
 // to toggle the sidepanel with the action button in chromium:
-if (USE_SIDE_PANEL) {
+if (!__FIREFOX__) {
   // @ts-expect-error missing types
   browser.sidePanel
     .setPanelBehavior({ openPanelOnActionClick: true })
@@ -22,8 +18,6 @@ if (USE_SIDE_PANEL) {
 }
 
 browser.runtime.onInstalled.addListener((): void => {
-  // eslint-disable-next-line no-console
-  console.log('Extension installed')
   browser.contextMenus.create({
     id: 'lexi-translate-selection',
     title: '使用 Lexi 翻译',
@@ -40,43 +34,4 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
     pageUrl: tab.url,
     pageTitle: tab.title,
   }, { context: 'content-script', tabId: tab.id }).catch((error: unknown) => console.error(error))
-})
-
-let previousTabId = 0
-
-// communication example: send previous tab title from background page
-// see shim.d.ts for type declaration
-browser.tabs.onActivated.addListener(async ({ tabId }) => {
-  if (!previousTabId) {
-    previousTabId = tabId
-    return
-  }
-
-  let tab: Tabs.Tab
-
-  try {
-    tab = await browser.tabs.get(previousTabId)
-    previousTabId = tabId
-  }
-  catch {
-    return
-  }
-
-  // eslint-disable-next-line no-console
-  console.log('previous tab', tab)
-  sendMessage('tab-prev', { title: tab.title }, { context: 'content-script', tabId })
-})
-
-onMessage('get-current-tab', async () => {
-  try {
-    const tab = await browser.tabs.get(previousTabId)
-    return {
-      title: tab?.title,
-    }
-  }
-  catch {
-    return {
-      title: undefined,
-    }
-  }
 })

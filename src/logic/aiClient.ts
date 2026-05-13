@@ -346,6 +346,19 @@ function shouldRetryWithoutStream(status: number, error: string) {
   return status === 400 && /stream|temperature|unsupported|not support|does not support|invalid parameter/i.test(error)
 }
 
+function normalizeAiErrorMessage(status: number | undefined, error: string) {
+  if (/insufficient[_\s-]*(?:user[_\s-]*)?quota|quota|余额不足|额度不足|剩余额度|balance/i.test(error))
+    return `AI 额度不足，请充值或更换 API Key。${error}`
+
+  if (status === 401 || /unauthorized|invalid[_\s-]*api[_\s-]*key|incorrect[_\s-]*api[_\s-]*key|认证|鉴权|api key/i.test(error))
+    return `AI API Key 无效或未授权，请检查配置。${error}`
+
+  if (status === 429 || /rate[_\s-]*limit|too many requests|请求过多/i.test(error))
+    return `AI 请求过于频繁，请稍后重试。${error}`
+
+  return error
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
@@ -487,7 +500,8 @@ async function postAiJson<T>(
     }
 
     if (!response.ok) {
-      const error = firstError ?? await readErrorText(response)
+      const rawError = firstError ?? await readErrorText(response)
+      const error = normalizeAiErrorMessage(response.status, rawError)
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -500,7 +514,7 @@ async function postAiJson<T>(
         error: retryError ? `${retryError}; retry: ${error}` : error,
         durationMs: Math.round(performance.now() - request.startedAt),
       })
-      throw new Error(`AI request failed: ${response.status}`)
+      throw new Error(error)
     }
 
     let data: T
@@ -518,7 +532,7 @@ async function postAiJson<T>(
       response = await fetchChatCompletion(request, system, user, false)
       if (!response.ok) {
         const responseError = await readErrorText(response)
-        throw new Error(`${retryError}; retry: ${responseError}`)
+        throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
       }
 
       const result = await readAiResponseJson<T>(response)
@@ -589,7 +603,8 @@ async function postAiText(
     }
 
     if (!response.ok) {
-      const error = firstError ?? await readErrorText(response)
+      const rawError = firstError ?? await readErrorText(response)
+      const error = normalizeAiErrorMessage(response.status, rawError)
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -602,7 +617,7 @@ async function postAiText(
         error: retryError ? `${retryError}; retry: ${error}` : error,
         durationMs: Math.round(performance.now() - request.startedAt),
       })
-      throw new Error(`AI request failed: ${response.status}`)
+      throw new Error(error)
     }
 
     let translated: string
@@ -622,7 +637,7 @@ async function postAiText(
       response = await fetchChatCompletion(request, system, text, false)
       if (!response.ok) {
         const responseError = await readErrorText(response)
-        throw new Error(`${retryError}; retry: ${responseError}`)
+        throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
       }
 
       const result = await readAiResponseTextWithUsage(response, `${system}\n${text}`, onText)

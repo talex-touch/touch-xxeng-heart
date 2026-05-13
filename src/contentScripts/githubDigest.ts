@@ -45,8 +45,47 @@ function isGitHubRepoPage() {
   if (parts.length < 2)
     return false
 
-  const blocked = new Set(['settings', 'notifications', 'pulls', 'issues', 'explore', 'marketplace', 'topics', 'collections', 'sponsors', 'orgs', 'enterprises'])
-  return !blocked.has(parts[0]) && !blocked.has(parts[1])
+  const blockedOwners = new Set([
+    'about',
+    'account',
+    'apps',
+    'codespaces',
+    'collections',
+    'contact',
+    'customer-stories',
+    'dashboard',
+    'enterprise',
+    'enterprises',
+    'events',
+    'explore',
+    'features',
+    'issues',
+    'login',
+    'logout',
+    'marketplace',
+    'new',
+    'notifications',
+    'orgs',
+    'organizations',
+    'pricing',
+    'pulls',
+    'search',
+    'security',
+    'sessions',
+    'settings',
+    'signup',
+    'site',
+    'sponsors',
+    'topics',
+  ])
+  if (blockedOwners.has(parts[0]))
+    return false
+
+  const repoSection = parts[2]
+  if (!repoSection)
+    return true
+
+  return ['issues', 'pull', 'pulls'].includes(repoSection)
 }
 
 function getRepoPath() {
@@ -103,7 +142,8 @@ async function saveDigestCache(cache: GitHubDigestCache) {
 }
 
 function findRepoSidebar() {
-  return document.querySelector<HTMLElement>('.Layout-sidebar, [data-testid="repository-sidebar"], aside')
+  return document.querySelector<HTMLElement>('.Layout-sidebar, [data-testid="repository-sidebar"]')
+    ?? document.querySelector<HTMLElement>('aside[aria-label*="Repository"], aside.Layout-sidebar')
 }
 
 function findAboutBox() {
@@ -214,8 +254,17 @@ function getDigestSummary(digest: GitHubDigestResult, options: { detail: boolean
       <button data-lexi-github-action="generate">${options.detail ? '重新生成详细总览' : '生成详细总览'}</button>
       ${options.detail ? '<button data-lexi-github-action="copy">复制</button>' : ''}
     </div>
-    <p class="lexi-github-digest__hint">${options.cached ? '来自本地缓存 · ' : ''}${options.detail ? '详细总览' : '基础速读'} · ${options.detail ? '已结合 README 和当前页面内容' : '停留约 18 秒或点击按钮生成详细总览'}</p>
+    ${options.cached ? '<p class="lexi-github-digest__hint">来自本地缓存</p>' : ''}
   `
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise
+      .then(resolve, reject)
+      .finally(() => window.clearTimeout(timer))
+  })
 }
 
 function updateCardContent(element: HTMLElement, html: string) {
@@ -355,7 +404,7 @@ function mountCard(info: GitHubRepoInfo) {
   const element = document.createElement('section')
   element.className = 'lexi-github-digest'
   element.dataset.lexiGithubDigest = 'true'
-  cardState = { element, info, status: 'quick-loading' }
+  cardState = { element, info, status: 'quick-ready' }
 
   placeCard(element)
 
@@ -416,7 +465,7 @@ async function generateQuickDigest(force = false) {
   renderCard()
 
   try {
-    const digest = await requestGitHubDigest(settings, {
+    const digest = await withTimeout(requestGitHubDigest(settings, {
       repo: state.info.repo,
       description: state.info.description,
       topics: state.info.topics,
@@ -425,7 +474,7 @@ async function generateQuickDigest(force = false) {
       readme: state.info.readme,
       pageText: state.info.pageText,
       mode: 'quick',
-    })
+    }), 25000, '速读生成超时，请稍后重试或检查 AI 后端。')
     if (!digest)
       throw new Error('AI 未返回有效速读。请确认每日推荐 AI 场景已配置。')
 
@@ -470,7 +519,7 @@ async function generateDetailDigest(force = false) {
   renderCard()
 
   try {
-    const digest = await requestGitHubDigest(settings, {
+    const digest = await withTimeout(requestGitHubDigest(settings, {
       repo: state.info.repo,
       description: state.info.description,
       topics: state.info.topics,
@@ -479,7 +528,7 @@ async function generateDetailDigest(force = false) {
       readme: state.info.readme,
       pageText: state.info.pageText,
       mode: 'detail',
-    })
+    }), 45000, '详细总览生成超时，请稍后重试或检查 AI 后端。')
     if (!digest)
       throw new Error('AI 未返回有效总览。请确认每日推荐 AI 场景已配置。')
 

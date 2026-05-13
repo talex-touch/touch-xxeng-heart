@@ -165,12 +165,28 @@ interface DialogAnchor {
   height: number
 }
 
+const discourseTitleSelectors = [
+  '.topic-list .main-link',
+  '.topic-list .title',
+  '.topic-list-item .title',
+  '.latest-topic-list-item .main-link',
+  '.latest-topic-list-item .title',
+  '.topic-title',
+  '.fancy-title',
+  '[data-topic-id] .title',
+  '[itemprop="headline"]',
+].join(',')
+
+function isDiscourseTitleElement(element: Element) {
+  return detectSpecialSiteHints().discourse && Boolean(element.closest(discourseTitleSelectors))
+}
+
 function textNodeAllowed(node: Text) {
   const parent = node.parentElement
   if (!parent)
     return false
 
-  return !isLexiIgnoredElement(parent)
+  return !isLexiIgnoredElement(parent) && !isDiscourseTitleElement(parent)
 }
 
 function isLexiIgnoredElement(element: Element) {
@@ -511,14 +527,14 @@ function createToken(candidate: VocabularyCandidate) {
 function getPageStyleContent(customCss = '') {
   return `
     .lexi-token {
-      border-bottom: 1px dashed #155dfc;
-      color: #155dfc;
+      border-bottom: 1px dashed #0ea5e9;
+      color: #0ea5e9;
       cursor: help;
       text-decoration: none;
     }
 
     .lexi-token:hover {
-      background: rgba(21, 93, 252, 0.12);
+      background: rgba(14, 165, 233, 0.14);
     }
 
     .lexi-token-product {
@@ -641,7 +657,7 @@ function getPageStyleContent(customCss = '') {
       display: inline-block;
       box-sizing: border-box;
       margin: 0;
-      background: #155dfc;
+      background: #0ea5e9;
       color: #fff;
       font-weight: 600;
       font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -748,7 +764,7 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-selection-translation__collapsed-icon {
       all: initial;
-      color: #155dfc;
+      color: #0ea5e9;
       font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 

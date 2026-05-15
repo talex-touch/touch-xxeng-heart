@@ -28,6 +28,7 @@ interface DigestCardState {
   error?: string
   cachedQuick?: boolean
   cachedDetail?: boolean
+  lastRenderedHtml?: string
 }
 
 let cardState: DigestCardState | undefined
@@ -322,6 +323,9 @@ function renderCard() {
         : status === 'error'
           ? '生成失败'
           : '速读'
+  const statusClass = status === 'error'
+    ? 'lexi-github-digest__status lexi-github-digest__status--error'
+    : 'lexi-github-digest__status'
   const fallbackQuick = getFallbackQuickSummary(info)
   const body = status === 'quick-loading'
     ? `${getDigestSummary(fallbackQuick, { detail: false })}<div class="lexi-github-digest__loading">正在翻译项目介绍、生成 AI 点评...</div>`
@@ -332,20 +336,26 @@ function renderCard() {
         : status === 'quick-ready' && quickDigest
           ? getDigestSummary(quickDigest, { detail: false, cached: cachedQuick })
           : status === 'error'
-            ? `<p class="lexi-github-digest__desc">${escapeHtml(error || '生成失败')}</p><div class="lexi-github-digest__actions"><button data-lexi-github-action="generate">重试</button><button data-lexi-github-action="hide">关闭</button></div>`
+            ? `<p class="lexi-github-digest__desc lexi-github-digest__error">${escapeHtml(error || '生成失败')}</p><div class="lexi-github-digest__actions"><button data-lexi-github-action="generate">重试</button><button data-lexi-github-action="hide">关闭</button></div>`
             : getDigestSummary(fallbackQuick, { detail: false })
 
-  updateCardContent(element, `
+  const html = `
     <div class="lexi-github-digest__head">
       <div>
         <div class="lexi-github-digest__eyebrow">GitHub Digest</div>
         <div class="lexi-github-digest__title">Lexi 速读</div>
       </div>
-      <span>${statusLabel}</span>
+      <span class="${statusClass}">${statusLabel}</span>
     </div>
     <div class="lexi-github-digest__repo">${escapeHtml(info.repo)}${info.private ? ' · Private' : ''}</div>
     ${body}
-  `)
+  `
+
+  if (cardState.lastRenderedHtml === html)
+    return
+
+  cardState.lastRenderedHtml = html
+  updateCardContent(element, html)
 }
 
 function ensureStyles() {
@@ -374,11 +384,13 @@ function ensureStyles() {
     .lexi-github-digest--floating { position: fixed; right: 18px; top: 96px; z-index: 2147483647; width: min(340px, calc(100vw - 36px)); }
     .lexi-github-digest--sticky { position: sticky; top: 16px; z-index: 20; }
     .lexi-github-digest__head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
-    .lexi-github-digest__head span { border-radius: 999px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); padding: 2px 7px; font-size: 11px; white-space: nowrap; }
+    .lexi-github-digest__status { border-radius: 999px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); padding: 2px 7px; font-size: 11px; white-space: nowrap; }
+    .lexi-github-digest__status--error { background: var(--bgColor-danger-muted, var(--color-danger-subtle, #ffebe9)); color: var(--fgColor-danger, var(--color-danger-fg, #cf222e)); }
     .lexi-github-digest__eyebrow { color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); font-size: 11px; font-weight: 700; letter-spacing: .02em; }
     .lexi-github-digest__title { margin-top: 1px; font-size: 15px; font-weight: 700; }
     .lexi-github-digest__repo { margin-top: 8px; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; word-break: break-word; }
     .lexi-github-digest__desc { margin: 10px 0 0; color: var(--fgColor-default, var(--color-fg-default, #1f2328)); }
+    .lexi-github-digest__error { color: var(--fgColor-danger, var(--color-danger-fg, #cf222e)); }
     .lexi-github-digest__detail-text { margin: 8px 0 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; }
     .lexi-github-digest__chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .lexi-github-digest__chips span { border: 1px solid var(--borderColor-accent-muted, var(--color-accent-muted, #b6e3ff)); border-radius: 999px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); padding: 2px 7px; font-size: 11px; }
@@ -650,8 +662,6 @@ async function refresh() {
   if (cardState?.info.key === info.key) {
     cardState.info = info
     placeCard(cardState.element)
-    if (cardState.status === 'quick-ready' || cardState.status === 'error')
-      renderCard()
     return
   }
 

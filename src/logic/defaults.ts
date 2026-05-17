@@ -1,4 +1,4 @@
-import type { FeatureScene, LexiSettings } from './types'
+import type { AiProviderConfig, FeatureScene, LexiSettings, PageTranslationSettings } from './types'
 
 const emptyAiConnection = {
   endpoint: '',
@@ -32,7 +32,29 @@ function createAiSceneConfig(scene: FeatureScene) {
     enabled: false,
     ...emptyAiConnection,
     prompt: promptDefaults[scene],
+    providerIds: [],
   }
+}
+
+function createDefaultProvider(): AiProviderConfig {
+  return {
+    id: 'default',
+    label: '默认 Provider',
+    enabled: true,
+    priority: 1,
+    delayMs: 0,
+    ...emptyAiConnection,
+  }
+}
+
+const defaultPageTranslationSettings: PageTranslationSettings = {
+  scope: 'url',
+  regex: '',
+  maxBlocksPerPage: 80,
+  maxBlocksPerSite: 240,
+  prefetchBlocks: 10,
+  batchSize: 3,
+  cacheDays: 14,
 }
 
 export const featureLabels: Record<FeatureScene, string> = {
@@ -118,6 +140,7 @@ export const defaultSettings: LexiSettings = {
     autoTranslate: true,
     requireModifierKey: true,
     translationDirection: 'auto',
+    pageTranslation: defaultPageTranslationSettings,
   },
   study: {
     dailyGoal: 8,
@@ -141,13 +164,33 @@ export const defaultSettings: LexiSettings = {
   },
   ai: {
     global: { ...emptyAiConnection },
+    providers: [createDefaultProvider()],
     replacement: createAiSceneConfig('replacement'),
     selection: createAiSceneConfig('selection'),
     daily: createAiSceneConfig('daily'),
   },
 }
 
+function normalizeProviders(value?: Partial<LexiSettings>): AiProviderConfig[] {
+  const sourceProviders = value?.ai?.providers?.length
+    ? value.ai.providers
+    : value?.ai?.global && (value.ai.global.endpoint || value.ai.global.model || value.ai.global.apiKey)
+      ? [{ ...createDefaultProvider(), ...value.ai.global }]
+      : defaultSettings.ai.providers
+
+  return sourceProviders.map((provider, index) => ({
+    ...createDefaultProvider(),
+    ...provider,
+    id: provider.id || `provider-${index + 1}`,
+    label: provider.label || `Provider ${index + 1}`,
+    priority: Number.isFinite(provider.priority) ? provider.priority : index + 1,
+    delayMs: Number.isFinite(provider.delayMs) ? provider.delayMs : index * 450,
+  }))
+}
+
 export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
+  const providers = normalizeProviders(value)
+
   return {
     ...defaultSettings,
     ...value,
@@ -165,6 +208,10 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
     selection: {
       ...defaultSettings.selection,
       ...value?.selection,
+      pageTranslation: {
+        ...defaultSettings.selection.pageTranslation,
+        ...value?.selection?.pageTranslation,
+      },
     },
     study: {
       ...defaultSettings.study,
@@ -187,17 +234,21 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
         ...defaultSettings.ai.global,
         ...value?.ai?.global,
       },
+      providers,
       replacement: {
         ...defaultSettings.ai.replacement,
         ...value?.ai?.replacement,
+        providerIds: value?.ai?.replacement?.providerIds ?? defaultSettings.ai.replacement.providerIds,
       },
       selection: {
         ...defaultSettings.ai.selection,
         ...value?.ai?.selection,
+        providerIds: value?.ai?.selection?.providerIds ?? defaultSettings.ai.selection.providerIds,
       },
       daily: {
         ...defaultSettings.ai.daily,
         ...value?.ai?.daily,
+        providerIds: value?.ai?.daily?.providerIds ?? defaultSettings.ai.daily.providerIds,
       },
     },
   }

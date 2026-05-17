@@ -5,7 +5,7 @@ import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
-import type { AiTestResult, FeatureScene, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
+import type { AiProviderConfig, AiTestResult, FeatureScene, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
@@ -22,6 +22,11 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
   { value: 'auto', label: '自动判断' },
   { value: 'zh-to-en', label: '中译英' },
   { value: 'en-to-zh', label: '英译中' },
+]
+const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string }> = [
+  { value: 'url', label: '当前链接' },
+  { value: 'site', label: '当前站点' },
+  { value: 'regex', label: '自定义 Regex' },
 ]
 
 const appVersion = __VERSION__
@@ -102,6 +107,46 @@ function ensureSpecialProfiles() {
 }
 
 watchEffect(ensureSpecialProfiles)
+
+function createProvider(): AiProviderConfig {
+  return {
+    id: `provider-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    label: '新 Provider',
+    enabled: true,
+    endpoint: '',
+    apiKey: '',
+    model: '',
+    priority: lexiSettings.value.ai.providers.length + 1,
+    delayMs: Math.max(0, lexiSettings.value.ai.providers.length * 350),
+  }
+}
+
+function addProvider() {
+  lexiSettings.value.ai.providers = [...lexiSettings.value.ai.providers, createProvider()]
+}
+
+function removeProvider(id: string) {
+  if (lexiSettings.value.ai.providers.length <= 1)
+    return
+
+  lexiSettings.value.ai.providers = lexiSettings.value.ai.providers.filter(provider => provider.id !== id)
+  for (const scene of scenes)
+    lexiSettings.value.ai[scene].providerIds = lexiSettings.value.ai[scene].providerIds.filter(providerId => providerId !== id)
+}
+
+function providerSelected(scene: FeatureScene, providerId: string) {
+  return lexiSettings.value.ai[scene].providerIds.includes(providerId)
+}
+
+function toggleSceneProvider(scene: FeatureScene, providerId: string, enabled: boolean) {
+  const current = new Set(lexiSettings.value.ai[scene].providerIds)
+  if (enabled)
+    current.add(providerId)
+  else
+    current.delete(providerId)
+
+  lexiSettings.value.ai[scene].providerIds = [...current]
+}
 
 function formatTime(value: number) {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -402,6 +447,45 @@ function removeSceneRule(index: number) {
                 </option>
               </select>
             </label>
+
+            <div class="mt-5 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
+              <h3 class="text-14px font-600">
+                页面自动翻译
+              </h3>
+              <p class="mt-1 text-12px leading-5 text-neutral-500">
+                启用后可按当前链接、站点或自定义 Regex 自动恢复；滚动停止后的可视区域优先翻译，其余内容预加载并缓存。
+              </p>
+              <label class="mt-3 block">
+                <span class="text-13px font-500">启用范围</span>
+                <select v-model="lexiSettings.selection.pageTranslation.scope" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
+                  <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
+                    {{ item.label }}
+                  </option>
+                </select>
+              </label>
+              <label v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-3 block">
+                <span class="text-13px font-500">URL Regex</span>
+                <input v-model.trim="lexiSettings.selection.pageTranslation.regex" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 font-mono text-13px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
+              </label>
+              <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                <label class="block">
+                  <span class="text-13px font-500">合并请求段数</span>
+                  <input v-model.number="lexiSettings.selection.pageTranslation.batchSize" type="number" min="1" max="8" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+                </label>
+                <label class="block">
+                  <span class="text-13px font-500">预加载段数</span>
+                  <input v-model.number="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" min="0" max="40" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+                </label>
+                <label class="block">
+                  <span class="text-13px font-500">单页缓存上限</span>
+                  <input v-model.number="lexiSettings.selection.pageTranslation.maxBlocksPerPage" type="number" min="10" max="300" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+                </label>
+                <label class="block">
+                  <span class="text-13px font-500">缓存天数</span>
+                  <input v-model.number="lexiSettings.selection.pageTranslation.cacheDays" type="number" min="1" max="90" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+                </label>
+              </div>
+            </div>
             <label class="mt-4 flex items-center justify-between">
               <span>
                 <span class="block text-14px font-500">右下角状态浮标</span>
@@ -661,23 +745,84 @@ function removeSceneRule(index: number) {
         </div>
 
         <div class="mt-4 rounded-2 border border-neutral-200 p-4">
-          <h3 class="text-14px font-600">
-            全局连接
-          </h3>
-          <div class="mt-3 grid gap-3 lg:grid-cols-3">
-            <label class="block">
-              <span class="text-12px font-500 text-neutral-600">Endpoint</span>
-              <input v-model="lexiSettings.ai.global.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1">
-            </label>
-            <label class="block">
-              <span class="text-12px font-500 text-neutral-600">Model</span>
-              <input v-model="lexiSettings.ai.global.model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
-            </label>
-            <label class="block">
-              <span class="text-12px font-500 text-neutral-600">API Key</span>
-              <input v-model="lexiSettings.ai.global.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
-            </label>
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="text-14px font-600">
+                Provider 列表
+              </h3>
+              <p class="mt-1 text-12px leading-5 text-neutral-500">
+                可配置多个 OpenAI 兼容后端。调用时按优先级和延迟进行竞速，先返回的结果会被采用。
+              </p>
+            </div>
+            <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="addProvider">
+              添加 Provider
+            </button>
           </div>
+
+          <div class="mt-4 grid gap-3">
+            <article v-for="provider in lexiSettings.ai.providers" :key="provider.id" class="rounded-2 border border-neutral-200 p-3">
+              <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_8rem_8rem_auto]">
+                <label class="block">
+                  <span class="text-12px font-500 text-neutral-600">名称</span>
+                  <input v-model="provider.label" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="OpenAI / Groq / 自建网关">
+                </label>
+                <label class="block">
+                  <span class="text-12px font-500 text-neutral-600">优先级</span>
+                  <input v-model.number="provider.priority" type="number" min="1" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950">
+                </label>
+                <label class="block">
+                  <span class="text-12px font-500 text-neutral-600">延迟 ms</span>
+                  <input v-model.number="provider.delayMs" type="number" min="0" step="50" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950">
+                </label>
+                <div class="flex items-end gap-3">
+                  <label class="flex h-10 items-center gap-2 text-12px text-neutral-600">
+                    <input v-model="provider.enabled" type="checkbox">
+                    启用
+                  </label>
+                  <button class="h-10 border-0 bg-transparent text-12px text-red-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" :disabled="lexiSettings.ai.providers.length <= 1" @click="removeProvider(provider.id)">
+                    删除
+                  </button>
+                </div>
+              </div>
+              <div class="mt-3 grid gap-3 lg:grid-cols-3">
+                <label class="block">
+                  <span class="text-12px font-500 text-neutral-600">Endpoint</span>
+                  <input v-model="provider.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1">
+                </label>
+                <label class="block">
+                  <span class="text-12px font-500 text-neutral-600">Model</span>
+                  <input v-model="provider.model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
+                </label>
+                <label class="block">
+                  <span class="text-12px font-500 text-neutral-600">API Key</span>
+                  <input v-model="provider.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
+                </label>
+              </div>
+            </article>
+          </div>
+
+          <details class="mt-4 rounded-2 bg-neutral-50 p-3">
+            <summary class="text-13px font-600 cursor-pointer">
+              兼容旧版全局连接 / 场景覆盖
+            </summary>
+            <p class="mt-2 text-12px leading-5 text-neutral-500">
+              这些字段可作为 Provider 和场景的补全值。一般建议直接把 Endpoint / Model / API Key 写在 Provider 中。
+            </p>
+            <div class="mt-3 grid gap-3 lg:grid-cols-3">
+              <label class="block">
+                <span class="text-12px font-500 text-neutral-600">Endpoint</span>
+                <input v-model="lexiSettings.ai.global.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1">
+              </label>
+              <label class="block">
+                <span class="text-12px font-500 text-neutral-600">Model</span>
+                <input v-model="lexiSettings.ai.global.model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
+              </label>
+              <label class="block">
+                <span class="text-12px font-500 text-neutral-600">API Key</span>
+                <input v-model="lexiSettings.ai.global.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
+              </label>
+            </div>
+          </details>
         </div>
 
         <div class="mt-4 grid gap-4 lg:grid-cols-3">
@@ -686,9 +831,23 @@ function removeSceneRule(index: number) {
               <span class="text-14px font-600">{{ featureLabels[scene] }}</span>
               <input v-model="lexiSettings.ai[scene].enabled" type="checkbox" class="h-5 w-5">
             </label>
+            <div class="mt-4 rounded-2 bg-neutral-50 p-3">
+              <div class="text-12px font-500 text-neutral-600">
+                绑定 Provider
+              </div>
+              <p class="mt-1 text-11px leading-4 text-neutral-500">
+                不勾选时使用全部启用 Provider；勾选后只在所选 Provider 间竞速。
+              </p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <label v-for="provider in lexiSettings.ai.providers" :key="`${scene}-${provider.id}`" class="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-11px text-neutral-600">
+                  <input type="checkbox" :checked="providerSelected(scene, provider.id)" @change="toggleSceneProvider(scene, provider.id, ($event.target as HTMLInputElement).checked)">
+                  <span>{{ provider.label || provider.id }}</span>
+                </label>
+              </div>
+            </div>
             <label class="mt-4 block">
               <span class="text-12px font-500 text-neutral-600">Endpoint 覆盖</span>
-              <input v-model="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
+              <input v-model="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承 Provider / 全局">
             </label>
             <label class="mt-3 block">
               <span class="text-12px font-500 text-neutral-600">Model 覆盖</span>

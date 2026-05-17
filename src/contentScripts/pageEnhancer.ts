@@ -1,14 +1,14 @@
 import browser from 'webextension-polyfill'
 import { onMessage } from 'webext-bridge/content-script'
-import { localTranslateSelection, requestLexiDialogAnswer, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
+import { localTranslateSelection, requestLexiDialogAnswer, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import type { SiteDetectionHints } from '~/logic/siteRules'
-import { pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
+import { pageTranslationActivationsStorageKey, pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
 import { getVocabularyId, isProductVocabularyCandidate, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
-import type { LexiSettings, PageTranslationBlock, PageTranslationCache, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
+import type { LexiSettings, PageTranslationActivation, PageTranslationBlock, PageTranslationCache, PageTranslationMemory, PageTranslationScope, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
 interface EnhancerEvents {
   onStats: (stats: PageStats) => void
@@ -865,14 +865,84 @@ function getPageStyleContent(customCss = '') {
       all: initial;
       box-sizing: border-box;
       display: block;
+      position: relative;
       margin: 0.55em 0;
+      border: 1px solid rgba(14, 165, 233, 0.22);
       border-left: 3px solid #0ea5e9;
+      border-radius: 9px;
       background: rgba(14, 165, 233, 0.08);
+      box-shadow: 0 10px 26px rgba(14, 165, 233, 0.08);
       padding: 0.55em 0.7em;
       color: #0f172a;
       font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       white-space: pre-wrap;
+      overflow: hidden;
       overflow-wrap: anywhere;
+      animation: lexi-page-translation-enter 180ms ease-out both;
+    }
+
+    .lexi-page-translation[data-lexi-loading="true"] {
+      border-color: transparent;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)) padding-box,
+        linear-gradient(110deg, #2563eb, #06b6d4, #a855f7, #2563eb) border-box;
+      background-size: 100% 100%, 240% 100%;
+      color: rgba(30, 64, 175, 0.78);
+      animation: lexi-page-translation-enter 180ms ease-out both, lexi-ai-border-flow var(--lexi-page-translation-speed, 1100ms) linear infinite, lexi-priority-opacity var(--lexi-page-translation-pulse, 1200ms) ease-in-out infinite;
+    }
+
+    .lexi-page-translation[data-lexi-loading="true"]::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(105deg, transparent 8%, rgba(59, 130, 246, 0.12) 45%, transparent 72%);
+      transform: translateX(-120%);
+      animation: lexi-page-translation-sweep var(--lexi-page-translation-speed, 1100ms) ease-in-out infinite;
+      pointer-events: none;
+    }
+
+    .lexi-page-translation[data-lexi-priority="viewport"] {
+      --lexi-page-translation-speed: 520ms;
+      --lexi-page-translation-pulse: 760ms;
+      border-left-color: #2563eb;
+    }
+
+    .lexi-page-translation[data-lexi-priority="near"] {
+      --lexi-page-translation-speed: 860ms;
+      --lexi-page-translation-pulse: 1040ms;
+      border-left-color: #0891b2;
+    }
+
+    .lexi-page-translation[data-lexi-priority="prefetch"] {
+      --lexi-page-translation-speed: 1350ms;
+      --lexi-page-translation-pulse: 1480ms;
+      opacity: 0.82;
+    }
+
+    @keyframes lexi-page-translation-enter {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes lexi-ai-border-flow {
+      to { background-position: 0 0, -240% 0; }
+    }
+
+    @keyframes lexi-priority-opacity {
+      0%, 100% { opacity: 0.54; }
+      50% { opacity: 0.98; }
+    }
+
+    @keyframes lexi-page-translation-sweep {
+      to { transform: translateX(120%); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .lexi-page-translation,
+      .lexi-page-translation[data-lexi-loading="true"],
+      .lexi-page-translation[data-lexi-loading="true"]::before {
+        animation: none;
+      }
     }
 
     .lexi-dialog {
@@ -1262,33 +1332,236 @@ function insertAfterSelectionAnchor(anchor: Element, block: HTMLElement) {
   anchor.insertAdjacentElement('afterend', block)
 }
 
-function getPageTranslationCacheKey() {
-  return `${pageTranslationsStorageKey}:${location.href}`
+type PageTranslationPriority = NonNullable<PageTranslationBlock['priority']>
+
+interface PageTranslationTarget {
+  element: HTMLElement
+  text: string
+  id: string
+  memoryKey: string
+  priority: PageTranslationPriority
+  distance: number
+  score: number
+}
+
+type PageTranslationActivations = Record<string, PageTranslationActivation>
+
+function normalizePageTranslationUrl(url = location.href) {
+  try {
+    const parsed = new URL(url)
+    parsed.hash = ''
+    return parsed.toString()
+  }
+  catch {
+    return url.split('#')[0]
+  }
+}
+
+function getPageTranslationCacheKey(url = location.href) {
+  return `${pageTranslationsStorageKey}:${normalizePageTranslationUrl(url)}`
+}
+
+function getPageTranslationScopeIdentity(scope: PageTranslationScope, regex = '') {
+  if (scope === 'site')
+    return location.hostname
+
+  if (scope === 'regex')
+    return regex.trim()
+
+  return normalizePageTranslationUrl()
+}
+
+function createPageTranslationMemoryKey(settings: LexiSettings, text: string) {
+  const pageSettings = settings.selection.pageTranslation
+  const scope = pageSettings.scope
+  const identity = getPageTranslationScopeIdentity(scope, pageSettings.regex)
+  return [scope, identity, settings.selection.translationDirection, createPageTranslationBlockId(text)].join(':')
 }
 
 function createPageTranslationBlockId(text: string) {
   return createSelectionDomKey(text)
 }
 
-function createPageTranslationElement(block: PageTranslationBlock) {
+function createPageTranslationActivation(settings: LexiSettings): PageTranslationActivation | undefined {
+  const pageSettings = settings.selection.pageTranslation
+  const scope = pageSettings.scope
+  const regex = pageSettings.regex.trim()
+  if (scope === 'regex') {
+    if (!regex)
+      return undefined
+
+    try {
+      RegExp(regex)
+    }
+    catch {
+      return undefined
+    }
+  }
+
+  return {
+    enabled: true,
+    scope,
+    url: normalizePageTranslationUrl(),
+    host: location.hostname,
+    regex,
+    updatedAt: Date.now(),
+  }
+}
+
+function getPageTranslationActivationKey(activation: PageTranslationActivation) {
+  if (activation.scope === 'site')
+    return `site:${activation.host}`
+
+  if (activation.scope === 'regex')
+    return `regex:${activation.regex}`
+
+  return `url:${normalizePageTranslationUrl(activation.url)}`
+}
+
+function pageTranslationActivationMatches(activation: PageTranslationActivation, url = location.href) {
+  if (!activation.enabled)
+    return false
+
+  const normalizedUrl = normalizePageTranslationUrl(url)
+  if (activation.scope === 'url')
+    return normalizePageTranslationUrl(activation.url) === normalizedUrl
+
+  if (activation.scope === 'site')
+    return activation.host === location.hostname
+
+  if (!activation.regex.trim())
+    return false
+
+  try {
+    return new RegExp(activation.regex).test(url)
+  }
+  catch {
+    return false
+  }
+}
+
+async function readPageTranslationActivations() {
+  const stored = await browser.storage.local.get(pageTranslationActivationsStorageKey)
+  return readJsonValue<PageTranslationActivations>(stored[pageTranslationActivationsStorageKey], {})
+}
+
+async function savePageTranslationActivations(activations: PageTranslationActivations) {
+  await browser.storage.local.set({ [pageTranslationActivationsStorageKey]: JSON.stringify(activations) })
+}
+
+async function findMatchingPageTranslationActivation() {
+  const activations = await readPageTranslationActivations()
+  return Object.values(activations)
+    .filter(activation => pageTranslationActivationMatches(activation))
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+}
+
+async function savePageTranslationActivation(activation: PageTranslationActivation) {
+  const activations = await readPageTranslationActivations()
+  activations[getPageTranslationActivationKey(activation)] = activation
+  await savePageTranslationActivations(activations)
+}
+
+async function removePageTranslationActivation(activation: PageTranslationActivation) {
+  const activations = await readPageTranslationActivations()
+  delete activations[getPageTranslationActivationKey(activation)]
+  await savePageTranslationActivations(activations)
+}
+
+async function readPageTranslationMemory() {
+  const stored = await browser.storage.local.get(pageTranslationMemoryStorageKey)
+  return readJsonValue<PageTranslationMemory>(stored[pageTranslationMemoryStorageKey], {})
+}
+
+async function savePageTranslationMemory(memory: PageTranslationMemory) {
+  await browser.storage.local.set({ [pageTranslationMemoryStorageKey]: JSON.stringify(memory) })
+}
+
+function prunePageTranslationMemory(memory: PageTranslationMemory, settings: LexiSettings) {
+  const pageSettings = settings.selection.pageTranslation
+  const ttl = Math.max(1, pageSettings.cacheDays) * 24 * 60 * 60 * 1000
+  const now = Date.now()
+  const hostCounts = new Map<string, number>()
+  const next: PageTranslationMemory = {}
+
+  const entries = Object.entries(memory)
+    .filter(([, entry]) => now - (entry.updatedAt ?? 0) <= ttl)
+    .sort((a, b) => (b[1].updatedAt ?? 0) - (a[1].updatedAt ?? 0))
+
+  for (const [key, entry] of entries) {
+    const count = hostCounts.get(entry.host) ?? 0
+    if (count >= Math.max(20, pageSettings.maxBlocksPerSite))
+      continue
+
+    hostCounts.set(entry.host, count + 1)
+    next[key] = entry
+    if (Object.keys(next).length >= 1200)
+      break
+  }
+
+  return next
+}
+
+function createPageTranslationElement(
+  block: PageTranslationBlock,
+  options: { loading?: boolean, priority?: PageTranslationPriority } = {},
+) {
   const element = document.createElement('div')
   element.dataset.lexiPageTranslation = 'true'
   element.dataset.lexiPageTranslationId = block.id
+  element.dataset.lexiPriority = options.priority ?? block.priority ?? 'prefetch'
+  if (options.loading)
+    element.dataset.lexiLoading = 'true'
   element.className = 'lexi-page-translation'
   element.textContent = block.translation
   return element
 }
 
-function hasPageTranslationElementAfter(element: HTMLElement, blockId: string) {
-  return element.nextElementSibling instanceof HTMLElement
-    && element.nextElementSibling.dataset.lexiPageTranslationId === blockId
-}
+function updatePageTranslationElement(element: HTMLElement, block: PageTranslationBlock) {
+  const from = element.getBoundingClientRect()
+  element.dataset.lexiPriority = block.priority ?? element.dataset.lexiPriority ?? 'prefetch'
+  delete element.dataset.lexiLoading
+  element.removeAttribute('aria-busy')
+  element.textContent = block.translation
 
-function insertPageTranslationElement(target: HTMLElement, block: PageTranslationBlock) {
-  if (hasPageTranslationElementAfter(target, block.id))
+  if (prefersReducedMotion())
     return
 
-  target.insertAdjacentElement('afterend', createPageTranslationElement(block))
+  const to = element.getBoundingClientRect()
+  element.animate([
+    { opacity: 0.48, filter: 'blur(2px)', transform: `translateY(${Math.min(8, Math.max(2, from.height - to.height))}px)` },
+    { opacity: 1, filter: 'blur(0)', transform: 'translateY(0)' },
+  ], {
+    duration: block.priority === 'viewport' ? 210 : 280,
+    easing: 'cubic-bezier(0.2, 0.7, 0.2, 1)',
+  })
+}
+
+function getPageTranslationElementAfter(element: HTMLElement, blockId: string) {
+  return element.nextElementSibling instanceof HTMLElement
+    && element.nextElementSibling.dataset.lexiPageTranslationId === blockId
+    ? element.nextElementSibling
+    : undefined
+}
+
+function hasPageTranslationElementAfter(element: HTMLElement, blockId: string) {
+  return Boolean(getPageTranslationElementAfter(element, blockId))
+}
+
+function insertPageTranslationElement(
+  target: HTMLElement,
+  block: PageTranslationBlock,
+  options: { loading?: boolean, priority?: PageTranslationPriority } = {},
+) {
+  const existing = getPageTranslationElementAfter(target, block.id)
+  if (existing)
+    return existing
+
+  const element = createPageTranslationElement(block, options)
+  if (options.loading)
+    element.setAttribute('aria-busy', 'true')
+  target.insertAdjacentElement('afterend', element)
+  return element
 }
 
 function removePageTranslationElements() {
@@ -1297,23 +1570,44 @@ function removePageTranslationElements() {
     .forEach(element => element.remove())
 }
 
-function getPageTranslationTargets(limit = 12) {
+function getPageTranslationPriority(element: HTMLElement): Pick<PageTranslationTarget, 'priority' | 'distance' | 'score'> {
+  const rect = element.getBoundingClientRect()
+  const viewportHeight = Math.max(1, window.innerHeight)
+  const inViewport = rect.bottom >= 0 && rect.top <= viewportHeight
+  const distance = inViewport
+    ? 0
+    : rect.top > viewportHeight
+      ? rect.top - viewportHeight
+      : Math.abs(rect.bottom)
+  const priority: PageTranslationPriority = inViewport
+    ? 'viewport'
+    : distance <= viewportHeight * 1.35
+      ? 'near'
+      : 'prefetch'
+  const priorityRank = priority === 'viewport' ? 0 : priority === 'near' ? 1 : 2
+  const topTieBreaker = inViewport ? Math.max(0, rect.top) / 10000 : 0
+
+  return {
+    priority,
+    distance,
+    score: priorityRank * 100000 + distance + topTieBreaker,
+  }
+}
+
+function getPageTranslationTargets(settings: LexiSettings, limit = 12) {
   const selectors = location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
     ? '[data-testid="tweetText"], article div[lang]'
     : 'article p, article div[lang], main p, main li, p, li'
-  const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors))
+  const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors)).slice(0, 420)
   const seen = new Set<string>()
-  const targets: Array<{ element: HTMLElement, text: string, id: string }> = []
+  const targets: PageTranslationTarget[] = []
 
   for (const element of elements) {
-    if (targets.length >= limit)
-      break
-
     if (isLexiIgnoredElement(element))
       continue
 
     const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? ''
-    if (text.length < 24 || text.length > 600 || seen.has(text))
+    if (text.length < 24 || text.length > 900 || seen.has(text))
       continue
 
     const id = createPageTranslationBlockId(text)
@@ -1321,14 +1615,19 @@ function getPageTranslationTargets(limit = 12) {
       continue
 
     seen.add(text)
+    const priority = getPageTranslationPriority(element)
     targets.push({
       element,
       text,
       id,
+      memoryKey: createPageTranslationMemoryKey(settings, text),
+      ...priority,
     })
   }
 
   return targets
+    .sort((a, b) => a.score - b.score)
+    .slice(0, Math.max(1, limit))
 }
 
 async function readPageTranslationCache() {
@@ -1340,20 +1639,20 @@ async function savePageTranslationCache(cache: PageTranslationCache) {
   await browser.storage.local.set({ [getPageTranslationCacheKey()]: JSON.stringify(cache) })
 }
 
-async function restorePageTranslationCache(settings: LexiSettings) {
+async function restorePageTranslationCache(settings: LexiSettings, force = false) {
   const cache = await readPageTranslationCache()
-  if (!cache?.enabled || !cache.blocks.length)
-    return
+  if ((!force && !cache?.enabled) || !cache?.blocks.length)
+    return cache
 
   ensurePageStyles(settings.ui.customCss)
   removePageTranslationElements()
-  const targets = getPageTranslationTargets(cache.blocks.length + 4)
+  const targets = getPageTranslationTargets(settings, cache.blocks.length + 8)
   for (const block of cache.blocks) {
     const target = targets.find(item => item.id === block.id || item.text === block.source)
     if (!target)
       continue
 
-    insertPageTranslationElement(target.element, block)
+    insertPageTranslationElement(target.element, block, { priority: block.priority ?? target.priority })
   }
 
   return cache
@@ -1864,7 +2163,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let pageTranslationObserver: MutationObserver | undefined
   let pageTranslationScanPending = false
   let pageTranslationRunId = 0
+  let pageTranslationActivation: PageTranslationActivation | undefined
   const pageTranslationSources = new Map<string, PageTranslationBlock>()
+  const pageTranslationInFlight = new Set<string>()
   const recentSelectionKeys = new Set<string>()
   let stats: PageStats = {
     replacements: 0,
@@ -2001,15 +2302,113 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   }
 
-  async function savePageTranslationSnapshot() {
+  async function savePageTranslationSnapshot(settings?: LexiSettings) {
+    const maxBlocks = Math.max(1, settings?.selection.pageTranslation.maxBlocksPerPage ?? 120)
     const blocks = [...pageTranslationSources.values()]
+      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+      .slice(0, maxBlocks)
     await savePageTranslationCache({
-      url: location.href,
+      url: normalizePageTranslationUrl(),
       title: document.title,
+      host: location.hostname,
       enabled: pageTranslationEnabled,
       blocks,
       updatedAt: Date.now(),
     })
+  }
+
+  function getPageTranslationLimit(settings: LexiSettings) {
+    const pageSettings = settings.selection.pageTranslation
+    const viewportLimit = Math.max(3, pageSettings.batchSize * 3)
+    const prefetchLimit = Math.max(0, pageSettings.prefetchBlocks)
+    return Math.min(
+      Math.max(1, pageSettings.maxBlocksPerPage),
+      viewportLimit + prefetchLimit,
+    )
+  }
+
+  function updateTranslationLoadingState(targets: PageTranslationTarget[]) {
+    for (const target of targets) {
+      if (pageTranslationSources.has(target.id) || pageTranslationInFlight.has(target.id))
+        continue
+
+      const placeholder = insertPageTranslationElement(target.element, {
+        id: target.id,
+        source: target.text,
+        translation: target.priority === 'viewport' ? '正在优先翻译当前可视区域...' : '预加载翻译中...',
+        priority: target.priority,
+        updatedAt: Date.now(),
+      }, { loading: true, priority: target.priority })
+      placeholder.dataset.lexiPriority = target.priority
+    }
+  }
+
+  function getPageTranslationContext(targets: PageTranslationTarget[]) {
+    const nearest = [...targets]
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 6)
+      .map(target => target.text)
+      .join('\n')
+    return nearest || document.body.textContent?.replace(/\s+/g, ' ').slice(0, 1200) || ''
+  }
+
+  async function translatePageTargetBatch(settings: LexiSettings, targets: PageTranslationTarget[], memory: PageTranslationMemory) {
+    const uniqueTargets = targets.filter(target => !pageTranslationSources.has(target.id) && !pageTranslationInFlight.has(target.id))
+    if (!uniqueTargets.length)
+      return
+
+    uniqueTargets.forEach(target => pageTranslationInFlight.add(target.id))
+    updateTranslationLoadingState(uniqueTargets)
+
+    try {
+      const results = await requestPageTranslationBatch(
+        settings,
+        uniqueTargets.map(target => ({ id: target.id, text: target.text })),
+        getPageTranslationContext(uniqueTargets),
+      )
+      const byId = new Map(results.map(item => [item.id, item.translation]))
+
+      for (const target of uniqueTargets) {
+        if (!pageTranslationEnabled || disposed)
+          break
+
+        const translatedText = byId.get(target.id)
+        if (!translatedText)
+          continue
+
+        const block: PageTranslationBlock = {
+          id: target.id,
+          source: target.text,
+          translation: translatedText,
+          priority: target.priority,
+          updatedAt: Date.now(),
+        }
+        const element = getPageTranslationElementAfter(target.element, target.id)
+          ?? insertPageTranslationElement(target.element, block, { priority: target.priority })
+        updatePageTranslationElement(element, block)
+        pageTranslationSources.set(block.id, block)
+        memory[target.memoryKey] = {
+          ...block,
+          url: normalizePageTranslationUrl(),
+          host: location.hostname,
+          direction: settings.selection.translationDirection,
+          updatedAt: Date.now(),
+        }
+      }
+
+      await savePageTranslationSnapshot(settings)
+      await savePageTranslationMemory(prunePageTranslationMemory(memory, settings))
+    }
+    finally {
+      uniqueTargets.forEach((target) => {
+        pageTranslationInFlight.delete(target.id)
+        if (!pageTranslationSources.has(target.id)) {
+          const element = getPageTranslationElementAfter(target.element, target.id)
+          if (element?.dataset.lexiLoading === 'true')
+            element.remove()
+        }
+      })
+    }
   }
 
   async function runPageTranslation(settings: LexiSettings, runId: number) {
@@ -2021,41 +2420,65 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationScanPending = false
 
     try {
-      const targets = getPageTranslationTargets(16)
+      const remainingPageBudget = Math.max(0, settings.selection.pageTranslation.maxBlocksPerPage - pageTranslationSources.size - pageTranslationInFlight.size)
+      if (remainingPageBudget <= 0)
+        return
+
+      const limit = Math.min(getPageTranslationLimit(settings), remainingPageBudget)
+      const targets = getPageTranslationTargets(settings, limit)
+      if (!targets.length)
+        return
+
+      const memory = await readPageTranslationMemory()
+      const uncachedTargets: PageTranslationTarget[] = []
+
       for (const target of targets) {
         if (!pageTranslationEnabled || runId !== pageTranslationRunId)
           break
 
         const cached = pageTranslationSources.get(target.id)
         if (cached) {
-          insertPageTranslationElement(target.element, cached)
+          insertPageTranslationElement(target.element, { ...cached, priority: target.priority }, { priority: target.priority })
           continue
         }
 
-        if (hasPageTranslationElementAfter(target.element, target.id))
+        const memoryEntry = memory[target.memoryKey]
+        if (memoryEntry?.translation) {
+          const block: PageTranslationBlock = {
+            id: target.id,
+            source: target.text,
+            translation: memoryEntry.translation,
+            priority: target.priority,
+            updatedAt: memoryEntry.updatedAt,
+          }
+          pageTranslationSources.set(target.id, block)
+          insertPageTranslationElement(target.element, block, { priority: target.priority })
           continue
+        }
 
-        const placeholderElement = createPageTranslationElement({
-          id: target.id,
-          source: target.text,
-          translation: '翻译中...',
-        })
-        target.element.insertAdjacentElement('afterend', placeholderElement)
+        uncachedTargets.push(target)
+      }
 
-        const translation = await translateSelection(settings, target.text, target.text)
-        if (!pageTranslationEnabled || runId !== pageTranslationRunId) {
-          placeholderElement.remove()
+      const pageSettings = settings.selection.pageTranslation
+      const viewportTargets = uncachedTargets.filter(target => target.priority === 'viewport')
+      const nearTargets = uncachedTargets.filter(target => target.priority === 'near')
+      const prefetchTargets = uncachedTargets.filter(target => target.priority === 'prefetch')
+      const orderedTargets = [
+        ...viewportTargets,
+        ...nearTargets.slice(0, Math.max(0, pageSettings.batchSize - viewportTargets.length)),
+        ...prefetchTargets.slice(0, Math.max(0, pageSettings.prefetchBlocks)),
+      ].slice(0, Math.max(1, pageSettings.batchSize + pageSettings.prefetchBlocks))
+
+      if (!orderedTargets.length)
+        return
+
+      const batchSize = Math.max(1, pageSettings.batchSize)
+      for (let index = 0; index < orderedTargets.length; index += batchSize) {
+        if (!pageTranslationEnabled || runId !== pageTranslationRunId)
           break
-        }
 
-        const block: PageTranslationBlock = {
-          id: target.id,
-          source: target.text,
-          translation: translation.translation,
-        }
-        placeholderElement.textContent = block.translation
-        pageTranslationSources.set(block.id, block)
-        await savePageTranslationSnapshot()
+        const batch = orderedTargets.slice(index, index + batchSize)
+        await translatePageTargetBatch(settings, batch, memory)
       }
     }
     finally {
@@ -2063,7 +2486,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
 
     if (pageTranslationScanPending && pageTranslationEnabled && runId === pageTranslationRunId)
-      schedulePageTranslationScan(settings, 300)
+      schedulePageTranslationScan(settings, 260)
   }
 
   function schedulePageTranslationScan(settings: LexiSettings, delay = 700) {
@@ -2107,18 +2530,25 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return { ok: false, message: '划词翻译场景未启用。', blocks: 0 }
 
-    const cache = await readPageTranslationCache()
+    const activation = createPageTranslationActivation(settings)
+    if (!activation)
+      return { ok: false, message: '自动翻译 Regex 无效或为空，请在设置中修正。', blocks: 0 }
+
+    const cache = await restorePageTranslationCache(settings, true)
     pageTranslationSources.clear()
     for (const block of cache?.blocks ?? [])
       pageTranslationSources.set(block.id, block)
 
+    pageTranslationActivation = activation
     pageTranslationEnabled = true
     pageTranslationRunId += 1
-    await savePageTranslationSnapshot()
+    await savePageTranslationActivation(activation)
+    await savePageTranslationSnapshot(settings)
     ensurePageTranslationWatcher(settings)
     schedulePageTranslationScan(settings, 0)
 
-    return { ok: true, message: '已启用当前页面自动翻译，结果会逐段插入并保存。', blocks: 0 }
+    const scopeLabel = activation.scope === 'site' ? '当前站点' : activation.scope === 'regex' ? 'Regex 匹配页面' : '当前链接'
+    return { ok: true, message: `已启用${scopeLabel}自动翻译：可视区域优先，后续滚动会预加载。`, blocks: pageTranslationSources.size }
   }
 
   async function stopPageTranslation() {
@@ -2126,6 +2556,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationEnabled = false
     pageTranslationRunning = false
     pageTranslationScanPending = false
+    pageTranslationInFlight.clear()
     window.clearTimeout(pageTranslationTimer)
     pageTranslationObserver?.disconnect()
     window.removeEventListener('scroll', onPageTranslationScroll)
@@ -2136,21 +2567,28 @@ export function startPageEnhancer(events: EnhancerEvents) {
       pageTranslationSources.set(block.id, block)
 
     await savePageTranslationCache({
-      url: location.href,
+      url: normalizePageTranslationUrl(),
       title: document.title,
+      host: location.hostname,
       enabled: false,
       blocks: [...pageTranslationSources.values()],
       updatedAt: Date.now(),
     })
 
-    return { ok: true, message: '已停止当前页面自动翻译。' }
+    if (pageTranslationActivation)
+      await removePageTranslationActivation(pageTranslationActivation)
+    pageTranslationActivation = undefined
+
+    return { ok: true, message: '已停止当前自动翻译范围。' }
   }
 
   async function getPageTranslationStatus() {
     const cache = await readPageTranslationCache()
+    const activation = pageTranslationActivation ?? await findMatchingPageTranslationActivation()
     return {
       ok: true,
-      enabled: Boolean(pageTranslationEnabled || cache?.enabled),
+      enabled: Boolean(pageTranslationEnabled || activation || cache?.enabled),
+      scope: pageTranslationEnabled ? pageTranslationActivation?.scope : activation?.scope,
       blocks: pageTranslationSources.size || cache?.blocks.length || 0,
       cached: Boolean(pageTranslationSources.size || cache?.blocks.length),
       bytes: cache ? new Blob([JSON.stringify(cache)]).size : 0,
@@ -2163,18 +2601,20 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return
 
-    const cache = await restorePageTranslationCache(settings)
-    if (!cache?.enabled)
+    const activation = await findMatchingPageTranslationActivation()
+    const cache = await restorePageTranslationCache(settings, Boolean(activation))
+    if (!activation && !cache?.enabled)
       return
 
     pageTranslationSources.clear()
-    for (const block of cache.blocks)
+    for (const block of cache?.blocks ?? [])
       pageTranslationSources.set(block.id, block)
 
+    pageTranslationActivation = activation ?? createPageTranslationActivation(settings)
     pageTranslationEnabled = true
     pageTranslationRunId += 1
     ensurePageTranslationWatcher(settings)
-    schedulePageTranslationScan(settings, 500)
+    schedulePageTranslationScan(settings, 220)
   }
 
   async function queueAiReplacementSeeds(settings: LexiSettings, seeds: ReplacementSeed[], currentEvents: EnhancerEvents) {
@@ -2543,7 +2983,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     getStoredState()
-      .then(({ settings }) => schedulePageTranslationScan(settings, 500))
+      .then(({ settings }) => schedulePageTranslationScan(settings, 180))
       .catch(error => console.warn('[Lexi] page translation scroll scan failed', error))
   }
 

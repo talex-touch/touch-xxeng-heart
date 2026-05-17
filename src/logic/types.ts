@@ -7,13 +7,23 @@ export interface AiConnectionConfig {
   model: string
 }
 
+export interface AiProviderConfig extends AiConnectionConfig {
+  id: string
+  label: string
+  enabled: boolean
+  priority: number
+  delayMs: number
+}
+
 export interface AiSceneConfig extends AiConnectionConfig {
   enabled: boolean
   prompt: string
+  providerIds: string[]
 }
 
 export type AiSettings = Record<FeatureScene, AiSceneConfig> & {
   global: AiConnectionConfig
+  providers: AiProviderConfig[]
 }
 
 export interface AiTestResult {
@@ -63,19 +73,52 @@ export interface PageVisitLog {
   createdAt: number
 }
 
+export type PageTranslationScope = 'url' | 'site' | 'regex'
+
+export interface PageTranslationSettings {
+  scope: PageTranslationScope
+  regex: string
+  maxBlocksPerPage: number
+  maxBlocksPerSite: number
+  prefetchBlocks: number
+  batchSize: number
+  cacheDays: number
+}
+
+export interface PageTranslationActivation {
+  enabled: boolean
+  scope: PageTranslationScope
+  url: string
+  host: string
+  regex: string
+  updatedAt: number
+}
+
 export interface PageTranslationBlock {
   id: string
   source: string
   translation: string
+  priority?: 'viewport' | 'near' | 'prefetch'
+  updatedAt?: number
 }
 
 export interface PageTranslationCache {
   url: string
   title: string
+  host: string
   enabled: boolean
   blocks: PageTranslationBlock[]
   updatedAt: number
 }
+
+export interface PageTranslationMemoryEntry extends PageTranslationBlock {
+  url: string
+  host: string
+  direction: TranslationDirection
+  updatedAt: number
+}
+
+export type PageTranslationMemory = Record<string, PageTranslationMemoryEntry>
 
 export interface SiteRules {
   enabled: boolean
@@ -122,6 +165,7 @@ export interface SelectionSettings {
   autoTranslate: boolean
   requireModifierKey: boolean
   translationDirection: TranslationDirection
+  pageTranslation: PageTranslationSettings
 }
 
 export interface StudySettings {
@@ -159,6 +203,8 @@ export interface GitHubDigestResult {
 
 export interface GitHubDigestCacheEntry {
   repo: string
+  owner?: string
+  name?: string
   description?: string
   topics: string[]
   languages: string[]

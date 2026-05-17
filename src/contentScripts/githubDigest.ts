@@ -206,7 +206,7 @@ function collectRepoInfo(): GitHubRepoInfo | undefined {
 
   return {
     ...repoPath,
-    key: `github.com:${repoPath.repo}`,
+    key: `github.com:${repoPath.owner}/${repoPath.name}`.toLowerCase(),
     description,
     topics,
     languages,
@@ -382,7 +382,7 @@ function ensureStyles() {
     }
     .lexi-github-digest *, .lexi-github-digest *::before, .lexi-github-digest *::after { box-sizing: border-box; }
     .lexi-github-digest--floating { position: fixed; right: 18px; top: 96px; z-index: 2147483647; width: min(340px, calc(100vw - 36px)); }
-    .lexi-github-digest--sticky { position: sticky; top: 16px; z-index: 20; }
+    .lexi-github-digest--sticky { position: sticky; top: 16px; z-index: 20; align-self: flex-start; }
     .lexi-github-digest__head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
     .lexi-github-digest__status { border-radius: 999px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); padding: 2px 7px; font-size: 11px; white-space: nowrap; }
     .lexi-github-digest__status--error { background: var(--bgColor-danger-muted, var(--color-danger-subtle, #ffebe9)); color: var(--fgColor-danger, var(--color-danger-fg, #cf222e)); }
@@ -417,7 +417,7 @@ function updateStickyCardMode(element: HTMLElement) {
   if (!findRepoSidebar() || element.classList.contains('lexi-github-digest--floating'))
     return
 
-  element.classList.toggle('lexi-github-digest--sticky', window.scrollY > 160)
+  element.classList.add('lexi-github-digest--sticky')
 }
 
 function placeCard(element: HTMLElement) {
@@ -458,8 +458,19 @@ function removeCard() {
   cardState = undefined
 }
 
+function getLegacyCacheKeys(info: GitHubRepoInfo) {
+  return [
+    info.key,
+    `github.com:${info.repo}`,
+    `github.com:${info.repo}`.toLowerCase(),
+    info.repo,
+    info.repo.toLowerCase(),
+    info.name,
+  ].filter(Boolean)
+}
+
 function getCachedEntry(cache: GitHubDigestCache, info: GitHubRepoInfo, settings: LexiSettings) {
-  const entry = cache[info.key]
+  const entry = getLegacyCacheKeys(info).map(key => cache[key]).find(Boolean)
   if (!entry || entry.sourceHash !== info.sourceHash)
     return undefined
 
@@ -470,6 +481,8 @@ function getCachedEntry(cache: GitHubDigestCache, info: GitHubRepoInfo, settings
 function createCacheEntry(info: GitHubRepoInfo, current?: GitHubDigestCacheEntry): GitHubDigestCacheEntry {
   return {
     repo: info.repo,
+    owner: info.owner,
+    name: info.name,
     description: info.description,
     topics: info.topics,
     languages: info.languages,
@@ -517,7 +530,7 @@ async function generateQuickDigest(force = false) {
     if (!digest)
       throw new Error('AI 未返回有效速读。请确认每日推荐 AI 场景已配置。')
 
-    const entry = createCacheEntry(state.info, cache[state.info.key])
+    const entry = createCacheEntry(state.info, getCachedEntry(cache, state.info, settings))
     entry.quickDigest = digest
     cache[state.info.key] = entry
     await saveDigestCache(cache)
@@ -571,7 +584,7 @@ async function generateDetailDigest(force = false) {
     if (!digest)
       throw new Error('AI 未返回有效总览。请确认每日推荐 AI 场景已配置。')
 
-    const entry = createCacheEntry(state.info, cache[state.info.key])
+    const entry = createCacheEntry(state.info, getCachedEntry(cache, state.info, settings))
     entry.digest = digest
     cache[state.info.key] = entry
     await saveDigestCache(cache)

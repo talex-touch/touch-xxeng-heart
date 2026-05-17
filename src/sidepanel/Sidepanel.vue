@@ -4,7 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, normalizeImportedRecord } from '~/logic/vocabularyRecords'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
-import type { TranslationDirection, VocabularyRecord } from '~/logic/types'
+import type { PageTranslationScope, TranslationDirection, VocabularyRecord } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
 
@@ -32,6 +32,7 @@ const pageTranslationMessage = ref('')
 const pageTranslationStatus = ref({
   ok: false,
   enabled: false,
+  scope: undefined as PageTranslationScope | undefined,
   blocks: 0,
   cached: false,
   bytes: 0,
@@ -56,7 +57,16 @@ const storageSize = computed(() => {
   return formatBytes(storageBytes.value)
 })
 const replacementDensityPercent = computed(() => Math.round(lexiSettings.value.replacement.density * 100))
+const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string, description: string }> = [
+  { value: 'url', label: '当前链接', description: '只在当前 URL 自动恢复' },
+  { value: 'site', label: '整个站点', description: '同一域名下都自动翻译' },
+  { value: 'regex', label: 'Regex', description: 'URL 命中正则时自动翻译' },
+]
 const pageTranslationStateLabel = computed(() => pageTranslationStatus.value.enabled ? '运行中' : '已停止')
+const pageTranslationScopeLabel = computed(() => {
+  const scope = pageTranslationStatus.value.scope ?? lexiSettings.value.selection.pageTranslation.scope
+  return pageTranslationScopes.find(item => item.value === scope)?.label ?? '当前链接'
+})
 const pageTranslationStorageLabel = computed(() => {
   return pageTranslationStatus.value.cached
     ? `可恢复 · ${formatBytes(pageTranslationStatus.value.bytes)}`
@@ -95,6 +105,7 @@ async function refreshPageTranslationStatus() {
     pageTranslationStatus.value = {
       ok: false,
       enabled: false,
+      scope: undefined,
       blocks: 0,
       cached: false,
       bytes: 0,
@@ -324,12 +335,37 @@ onMounted(() => {
               当前页面自动翻译
             </h2>
             <p class="mt-1 text-12px leading-5 text-neutral-500">
-              自动保存当前页翻译，下次打开同一链接会读取并恢复。
+              可按链接、站点或 Regex 启用；滚动停止后的可视区域会最高优先级翻译，远处内容预加载。
             </p>
           </div>
           <span class="shrink-0 rounded-full px-2 py-1 text-11px" :class="pageTranslationStatus.enabled ? 'bg-blue-50 text-blue-600' : 'bg-neutral-100 text-neutral-500'">
-            {{ pageTranslationStateLabel }}
+            {{ pageTranslationStateLabel }} · {{ pageTranslationScopeLabel }}
           </span>
+        </div>
+
+        <div class="mt-3 grid gap-2">
+          <label class="block">
+            <span class="text-12px text-neutral-500">启用范围</span>
+            <select v-model="lexiSettings.selection.pageTranslation.scope" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+              <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
+                {{ item.label }} · {{ item.description }}
+              </option>
+            </select>
+          </label>
+          <label v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="block">
+            <span class="text-12px text-neutral-500">URL Regex</span>
+            <input v-model.trim="lexiSettings.selection.pageTranslation.regex" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 font-mono text-12px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
+          </label>
+          <div class="grid grid-cols-2 gap-2">
+            <label class="block">
+              <span class="text-12px text-neutral-500">合并请求段数</span>
+              <input v-model.number="lexiSettings.selection.pageTranslation.batchSize" type="number" min="1" max="8" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+            </label>
+            <label class="block">
+              <span class="text-12px text-neutral-500">预加载段数</span>
+              <input v-model.number="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" min="0" max="40" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+            </label>
+          </div>
         </div>
 
         <div class="mt-3 grid grid-cols-3 gap-2">

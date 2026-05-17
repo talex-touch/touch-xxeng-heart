@@ -1,6 +1,6 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
 import { recordAiCall } from './analytics'
-import type { AiTestResult, FeatureScene, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+import type { AiConnectionConfig, AiTestResult, FeatureScene, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
 
 interface AiReplacementResponse {
   items?: VocabularyCandidate[]
@@ -23,6 +23,13 @@ interface AiSelectionDetailResponse {
   advice?: string
   aiSuggestion?: string
   candidate?: VocabularyCandidate
+}
+
+interface AiPageTranslationBatchResponse {
+  items?: Array<{
+    id?: string
+    translation?: string
+  }>
 }
 
 interface OpenAiChatResponse {
@@ -52,6 +59,10 @@ interface OpenAiChatStreamChunk {
 }
 
 interface AiRequestContext {
+  providerId: string
+  providerLabel: string
+  priority: number
+  delayMs: number
   endpoint: string
   headers: Record<string, string>
   apiKey: string
@@ -60,21 +71,70 @@ interface AiRequestContext {
   prompt: string
 }
 
-function getAiConfig(settings: LexiSettings, scene: FeatureScene) {
+interface ResolvedAiConfig extends AiConnectionConfig {
+  providerId: string
+  providerLabel: string
+  priority: number
+  delayMs: number
+  prompt: string
+}
+
+function mergeConnection(...connections: Array<Partial<AiConnectionConfig> | undefined>): AiConnectionConfig {
+  const result: AiConnectionConfig = {
+    endpoint: '',
+    apiKey: '',
+    model: '',
+  }
+
+  for (const connection of connections) {
+    if (!connection)
+      continue
+
+    if (connection.endpoint?.trim())
+      result.endpoint = connection.endpoint.trim()
+    if (connection.apiKey?.trim())
+      result.apiKey = connection.apiKey.trim()
+    if (connection.model?.trim())
+      result.model = connection.model.trim()
+  }
+
+  return result
+}
+
+function getAiConfigs(settings: LexiSettings, scene: FeatureScene) {
   const config = settings.ai[scene]
   if (!config.enabled)
     return undefined
 
-  const endpoint = config.endpoint.trim() || settings.ai.global.endpoint.trim()
-  if (!endpoint)
-    return undefined
+  const enabledProviders = (settings.ai.providers ?? []).filter(provider => provider.enabled)
+  const selectedProviderIds = new Set(config.providerIds ?? [])
+  const providers = selectedProviderIds.size
+    ? enabledProviders.filter(provider => selectedProviderIds.has(provider.id))
+    : enabledProviders
 
-  return {
-    ...config,
-    endpoint,
-    apiKey: config.apiKey.trim() || settings.ai.global.apiKey.trim(),
-    model: config.model.trim() || settings.ai.global.model.trim(),
-  }
+  const sourceProviders = providers.length
+    ? providers
+    : [{ id: 'legacy', label: 'Legacy / Global', enabled: true, priority: 1, delayMs: 0, ...settings.ai.global }]
+
+  const resolved = sourceProviders
+    .map((provider, index): ResolvedAiConfig | undefined => {
+      const connection = mergeConnection(settings.ai.global, provider, config)
+      if (!connection.endpoint)
+        return undefined
+
+      return {
+        ...connection,
+        providerId: provider.id || `provider-${index + 1}`,
+        providerLabel: provider.label || `Provider ${index + 1}`,
+        priority: Number.isFinite(provider.priority) ? provider.priority : index + 1,
+        delayMs: Math.max(0, Number.isFinite(provider.delayMs) ? provider.delayMs : index * 450),
+        prompt: config.prompt,
+      }
+    })
+    .filter((item): item is ResolvedAiConfig => item != null)
+    .sort((a, b) => a.priority - b.priority || a.delayMs - b.delayMs)
+
+  return resolved.length ? resolved : undefined
 }
 
 function resolveEndpoint(endpoint: string) {
@@ -97,11 +157,7 @@ function getKeyHint(apiKey: string) {
   return normalized ? `...${normalized.slice(-4)}` : undefined
 }
 
-function createAiRequestContext(settings: LexiSettings, scene: FeatureScene): AiRequestContext | undefined {
-  const config = getAiConfig(settings, scene)
-  if (!config)
-    return undefined
-
+function createRequestContextFromConfig(config: ResolvedAiConfig): AiRequestContext {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
   }
@@ -111,6 +167,10 @@ function createAiRequestContext(settings: LexiSettings, scene: FeatureScene): Ai
     headers.authorization = `Bearer ${apiKey}`
 
   return {
+    providerId: config.providerId,
+    providerLabel: config.providerLabel,
+    priority: config.priority,
+    delayMs: config.delayMs,
     endpoint: resolveEndpoint(config.endpoint),
     headers,
     apiKey,
@@ -118,6 +178,19 @@ function createAiRequestContext(settings: LexiSettings, scene: FeatureScene): Ai
     model: config.model,
     prompt: config.prompt,
   }
+}
+
+function createAiRequestContext(settings: LexiSettings, scene: FeatureScene): AiRequestContext | undefined {
+  const config = getAiConfigs(settings, scene)?.[0]
+  return config ? createRequestContextFromConfig(config) : undefined
+}
+
+function createAiRequestContexts(settings: LexiSettings, scene: FeatureScene): AiRequestContext[] {
+  return getAiConfigs(settings, scene)?.map(createRequestContextFromConfig) ?? []
+}
+
+function createProviderErrorPrefix(request: AiRequestContext) {
+  return request.providerLabel ? `${request.providerLabel}: ` : ''
 }
 
 const reasoningModelPattern = /(?:^|[\W_])(?:o1|o3|o4|r1|reasoner|reasoning|thinking)(?:$|[\W_])/i
@@ -329,10 +402,11 @@ function normalizeTranslationText(value: string) {
   return content.replace(/^(译文|翻译|translation)\s*[:：]\s*/i, '').trim()
 }
 
-async function fetchChatCompletion(request: AiRequestContext, system: string, user: string, stream: boolean) {
+async function fetchChatCompletion(request: AiRequestContext, system: string, user: string, stream: boolean, signal?: AbortSignal) {
   return fetch(request.endpoint, {
     method: 'POST',
     headers: request.headers,
+    signal,
     body: buildChatBody(
       request.model,
       system,
@@ -361,6 +435,11 @@ function normalizeAiErrorMessage(status: number | undefined, error: string) {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isAbortError(error: unknown) {
+  return (error instanceof DOMException && error.name === 'AbortError')
+    || (error instanceof Error && error.name === 'AbortError')
 }
 
 function getRawAiText(value: unknown) {
@@ -472,21 +551,86 @@ async function readAiResponseTextWithUsage(response: Response, promptText: strin
   }
 }
 
-async function postAiJson<T>(
-  settings: LexiSettings,
+async function delayProviderStart(delayMs: number, signal: AbortSignal) {
+  if (delayMs <= 0)
+    return
+
+  await new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(resolve, delayMs)
+    signal.addEventListener('abort', () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('Provider race aborted', 'AbortError'))
+    }, { once: true })
+  })
+}
+
+async function runProviderRace<T>(
+  requests: AiRequestContext[],
+  runner: (request: AiRequestContext, signal: AbortSignal, index: number) => Promise<T>,
+): Promise<T | undefined> {
+  if (!requests.length)
+    return undefined
+
+  if (requests.length === 1) {
+    const controller = new AbortController()
+    return runner(requests[0], controller.signal, 0)
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const controllers = requests.map(() => new AbortController())
+    const errors: string[] = []
+    let failed = 0
+    let settled = false
+
+    requests.forEach((request, index) => {
+      const controller = controllers[index]
+      const startedAt = performance.now()
+      delayProviderStart(request.delayMs, controller.signal)
+        .then(() => {
+          request.startedAt = performance.now()
+          return runner(request, controller.signal, index)
+        })
+        .then((result) => {
+          if (settled)
+            return
+
+          settled = true
+          controllers.forEach((item, itemIndex) => {
+            if (itemIndex !== index)
+              item.abort()
+          })
+          resolve(result)
+        })
+        .catch((error) => {
+          if (settled || isAbortError(error))
+            return
+
+          failed += 1
+          const elapsed = Math.round(performance.now() - startedAt)
+          errors.push(`${createProviderErrorPrefix(request)}${getErrorMessage(error)} (${elapsed}ms)`)
+          if (failed >= requests.length) {
+            settled = true
+            reject(new Error(errors.join('；') || '所有 AI Provider 均不可用'))
+          }
+        })
+    })
+  })
+}
+
+async function postAiJsonWithRequest<T>(
+  request: AiRequestContext,
   scene: FeatureScene,
   payload: Record<string, unknown>,
-  promptOverride?: string,
-): Promise<T | undefined> {
-  const request = createAiRequestContext(settings, scene)
-  if (!request)
-    return undefined
+  promptOverride: string | undefined,
+  signal: AbortSignal,
+): Promise<T> {
+  let failureLogged = false
 
   try {
     const user = JSON.stringify({ scene, ...payload })
     const system = promptOverride ?? request.prompt
     const stream = !modelPrefersNonStreaming(request.model)
-    let response = await fetchChatCompletion(request, system, user, stream)
+    let response = await fetchChatCompletion(request, system, user, stream, signal)
     let retryError: string | undefined
     let firstError: string | undefined
 
@@ -495,13 +639,14 @@ async function postAiJson<T>(
       if (stream && shouldRetryWithoutStream(response.status, firstError)) {
         retryError = firstError
         firstError = undefined
-        response = await fetchChatCompletion(request, system, user, false)
+        response = await fetchChatCompletion(request, system, user, false, signal)
       }
     }
 
     if (!response.ok) {
       const rawError = firstError ?? await readErrorText(response)
       const error = normalizeAiErrorMessage(response.status, rawError)
+      failureLogged = true
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -529,7 +674,7 @@ async function postAiJson<T>(
         throw error
 
       retryError = getErrorMessage(error)
-      response = await fetchChatCompletion(request, system, user, false)
+      response = await fetchChatCompletion(request, system, user, false, signal)
       if (!response.ok) {
         const responseError = await readErrorText(response)
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
@@ -557,7 +702,10 @@ async function postAiJson<T>(
     return data
   }
   catch (error) {
-    if (error instanceof Error && !error.message.startsWith('AI request failed')) {
+    if (isAbortError(error))
+      throw error
+
+    if (!failureLogged && error instanceof Error) {
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -575,21 +723,30 @@ async function postAiJson<T>(
   }
 }
 
-async function postAiText(
+async function postAiJson<T>(
   settings: LexiSettings,
   scene: FeatureScene,
-  text: string,
-  onText?: (text: string) => void,
+  payload: Record<string, unknown>,
   promptOverride?: string,
-): Promise<string | undefined> {
-  const request = createAiRequestContext(settings, scene)
-  if (!request)
-    return undefined
+): Promise<T | undefined> {
+  const requests = createAiRequestContexts(settings, scene)
+  return runProviderRace(requests, (request, signal) => postAiJsonWithRequest<T>(request, scene, payload, promptOverride, signal))
+}
+
+async function postAiTextWithRequest(
+  request: AiRequestContext,
+  scene: FeatureScene,
+  text: string,
+  onText: ((text: string) => void) | undefined,
+  promptOverride: string | undefined,
+  signal: AbortSignal,
+) {
+  let failureLogged = false
 
   try {
     const system = promptOverride ?? request.prompt
     const stream = !modelPrefersNonStreaming(request.model)
-    let response = await fetchChatCompletion(request, system, text, stream)
+    let response = await fetchChatCompletion(request, system, text, stream, signal)
     let retryError: string | undefined
     let firstError: string | undefined
 
@@ -598,13 +755,14 @@ async function postAiText(
       if (stream && shouldRetryWithoutStream(response.status, firstError)) {
         retryError = firstError
         firstError = undefined
-        response = await fetchChatCompletion(request, system, text, false)
+        response = await fetchChatCompletion(request, system, text, false, signal)
       }
     }
 
     if (!response.ok) {
       const rawError = firstError ?? await readErrorText(response)
       const error = normalizeAiErrorMessage(response.status, rawError)
+      failureLogged = true
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -634,7 +792,7 @@ async function postAiText(
         throw error
 
       retryError = getErrorMessage(error)
-      response = await fetchChatCompletion(request, system, text, false)
+      response = await fetchChatCompletion(request, system, text, false, signal)
       if (!response.ok) {
         const responseError = await readErrorText(response)
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
@@ -661,7 +819,10 @@ async function postAiText(
     return translated
   }
   catch (error) {
-    if (error instanceof Error && !error.message.startsWith('AI request failed')) {
+    if (isAbortError(error))
+      throw error
+
+    if (!failureLogged && error instanceof Error) {
       await recordAiCall({
         scene,
         endpoint: request.endpoint,
@@ -677,6 +838,24 @@ async function postAiText(
 
     throw error
   }
+}
+
+async function postAiText(
+  settings: LexiSettings,
+  scene: FeatureScene,
+  text: string,
+  onText?: (text: string) => void,
+  promptOverride?: string,
+): Promise<string | undefined> {
+  const requests = createAiRequestContexts(settings, scene)
+  return runProviderRace(requests, (request, signal, index) => postAiTextWithRequest(
+    request,
+    scene,
+    text,
+    index === 0 ? onText : undefined,
+    promptOverride,
+    signal,
+  ))
 }
 
 export async function requestLexiDialogAnswer(
@@ -772,6 +951,35 @@ export async function requestSelectionTranslation(
     explanation: '由已配置 AI 服务生成。',
     source: 'ai',
   }
+}
+
+export async function requestPageTranslationBatch(
+  settings: LexiSettings,
+  items: Array<{ id: string, text: string }>,
+  context: string,
+) {
+  if (!items.length)
+    return []
+
+  const data = await postAiJson<AiPageTranslationBatchResponse>(settings, 'selection', {
+    items: items.map(item => ({ id: item.id, text: item.text.slice(0, 900) })),
+    context: context.slice(0, 900),
+    direction: settings.selection.translationDirection,
+    instruction: [
+      getTranslationDirectionInstruction(settings.selection.translationDirection),
+      'Translate every item independently for page auto-translation.',
+      'Keep ids exactly unchanged. Preserve code, URLs, product names and Markdown-like tokens.',
+      'Use context only to disambiguate; do not translate context itself.',
+      'Return compact JSON only: {"items":[{"id":"same-id","translation":"translated text"}]}',
+    ].join(' '),
+  }, [
+    'You are Lexi page auto-translator. Return only compact JSON matching the requested schema.',
+    'Translations must be natural, concise and human-sounding. No markdown, no hidden reasoning.',
+  ].join(' '))
+
+  return data?.items
+    ?.filter(item => item.id && item.translation)
+    .map(item => ({ id: item.id!, translation: item.translation!.trim() })) ?? []
 }
 
 export async function requestSelectionDetail(

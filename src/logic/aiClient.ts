@@ -58,6 +58,30 @@ interface OpenAiChatStreamChunk {
   }>
 }
 
+type ChatMessageContentPart =
+  | { type: 'text', text: string }
+  | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }
+
+type ChatMessageContent = string | ChatMessageContentPart[]
+
+interface MediaAnalysisInput {
+  kind: 'image' | 'video' | 'audio' | 'media'
+  src: string
+  pageUrl: string
+  pageTitle: string
+  title?: string
+  alt?: string
+  mimeType?: string
+  currentTime?: number
+  duration?: number
+  width?: number
+  height?: number
+  poster?: string
+  frameDataUrl?: string
+  mediaDataUrl?: string
+  context?: string
+}
+
 interface AiRequestContext {
   providerId: string
   providerLabel: string
@@ -203,7 +227,7 @@ function modelAcceptsTemperature(model: string) {
   return !modelPrefersNonStreaming(model)
 }
 
-function buildChatBody(model: string, system: string, user: string, stream: boolean) {
+function buildChatBody(model: string, system: string, user: ChatMessageContent, stream: boolean) {
   const body: Record<string, unknown> = {
     model,
     messages: [
@@ -402,7 +426,7 @@ function normalizeTranslationText(value: string) {
   return content.replace(/^(译文|翻译|translation)\s*[:：]\s*/i, '').trim()
 }
 
-async function fetchChatCompletion(request: AiRequestContext, system: string, user: string, stream: boolean, signal?: AbortSignal) {
+async function fetchChatCompletion(request: AiRequestContext, system: string, user: ChatMessageContent, stream: boolean, signal?: AbortSignal) {
   return fetch(request.endpoint, {
     method: 'POST',
     headers: request.headers,
@@ -465,12 +489,12 @@ function parseRawAiText(value: string) {
 
 function getTranslationDirectionInstruction(direction: TranslationDirection) {
   if (direction === 'zh-to-en')
-    return 'Translate from Chinese to English.'
+    return 'Translate from Chinese to English. Output natural English only.'
 
   if (direction === 'en-to-zh')
-    return 'Translate from English to Chinese.'
+    return 'Translate from English to Simplified Chinese. The final answer MUST be Simplified Chinese only.'
 
-  return 'Auto-detect direction: mostly Chinese text should become English; mostly English text should become Chinese.'
+  return 'Auto-detect direction: if the selected text is mostly Chinese, translate it into natural English; otherwise translate it into Simplified Chinese. For English, mixed-language, code comments, UI text or any non-Chinese text, the final answer MUST be Simplified Chinese only.'
 }
 
 async function readStreamText(response: Response, onText?: (text: string) => void) {
@@ -736,7 +760,7 @@ async function postAiJson<T>(
 async function postAiTextWithRequest(
   request: AiRequestContext,
   scene: FeatureScene,
-  text: string,
+  text: ChatMessageContent,
   onText: ((text: string) => void) | undefined,
   promptOverride: string | undefined,
   signal: AbortSignal,
@@ -745,6 +769,9 @@ async function postAiTextWithRequest(
 
   try {
     const system = promptOverride ?? request.prompt
+    const promptText = typeof text === 'string'
+      ? `${system}\n${text}`
+      : `${system}\n${JSON.stringify(text)}`
     const stream = !modelPrefersNonStreaming(request.model)
     let response = await fetchChatCompletion(request, system, text, stream, signal)
     let retryError: string | undefined
@@ -782,7 +809,7 @@ async function postAiTextWithRequest(
     let streamed = false
     let usageLog: ReturnType<typeof getUsageLog>
     try {
-      const result = await readAiResponseTextWithUsage(response, `${system}\n${text}`, onText)
+      const result = await readAiResponseTextWithUsage(response, promptText, onText)
       translated = result.text
       streamed = result.streamed
       usageLog = result.usageLog
@@ -798,7 +825,7 @@ async function postAiTextWithRequest(
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
       }
 
-      const result = await readAiResponseTextWithUsage(response, `${system}\n${text}`, onText)
+      const result = await readAiResponseTextWithUsage(response, promptText, onText)
       translated = result.text
       streamed = result.streamed
       usageLog = result.usageLog
@@ -843,7 +870,7 @@ async function postAiTextWithRequest(
 async function postAiText(
   settings: LexiSettings,
   scene: FeatureScene,
-  text: string,
+  text: ChatMessageContent,
   onText?: (text: string) => void,
   promptOverride?: string,
 ): Promise<string | undefined> {
@@ -1062,6 +1089,59 @@ export async function requestGitHubDigest(
   }
 }
 
+export async function requestMediaAnalysis(
+  settings: LexiSettings,
+  input: MediaAnalysisInput,
+  onText?: (text: string) => void,
+) {
+  const metadata = [
+    `媒体类型：${input.kind}`,
+    input.title ? `标题：${input.title}` : '',
+    input.alt ? `替代文本：${input.alt}` : '',
+    input.mimeType ? `MIME：${input.mimeType}` : '',
+    input.width && input.height ? `尺寸：${input.width}x${input.height}` : '',
+    Number.isFinite(input.duration) ? `时长：${Math.round(input.duration ?? 0)} 秒` : '',
+    Number.isFinite(input.currentTime) ? `当前时间：${Math.round(input.currentTime ?? 0)} 秒` : '',
+    `媒体 URL：${input.src}`,
+    input.poster ? `封面 URL：${input.poster}` : '',
+    `页面：${input.pageTitle || input.pageUrl}`,
+    `页面 URL：${input.pageUrl}`,
+    input.context ? `页面上下文：${input.context.slice(0, 900)}` : '',
+  ].filter(Boolean).join('\n')
+
+  const images = [input.frameDataUrl, input.mediaDataUrl, input.poster]
+    .filter((value): value is string => Boolean(value && (/^data:image\//i.test(value) || /^https?:\/\//i.test(value))))
+    .slice(0, 2)
+  const content: ChatMessageContent = images.length
+    ? [
+        {
+          type: 'text',
+          text: [
+            '请观察这个网页媒体，并提取一段用于还原该图像/画面的纯文本 prompt。',
+            input.kind === 'video'
+              ? '已附上当前视频帧或封面；只基于可见帧提取画面还原 prompt，不要分析剧情。'
+              : input.kind === 'audio'
+                ? '如果没有可见内容，只能根据封面/元数据输出视觉还原 prompt，不要声称听到了音频。'
+                : '已附上图片；请描述主体、场景、构图、颜色、光照、材质、UI/文字细节、风格、比例和氛围。',
+            '只输出 prompt 正文，纯文本一段或多句。不要输出“可复制提示词”、解释、标题、Markdown、代码块、列表或分析报告。',
+            metadata,
+          ].join('\n\n'),
+        },
+        ...images.map(url => ({
+          type: 'image_url' as const,
+          image_url: { url, detail: 'auto' as const },
+        })),
+      ]
+    : [
+        '请基于这个网页媒体生成一段用于还原该图像/画面的纯文本 prompt。',
+        '当前没有可直接传入模型的图片帧；只能根据媒体元数据、URL、文件名和页面上下文谨慎描述，不要编造不可见内容。',
+        '只输出 prompt 正文。不要输出解释、标题、Markdown、代码块、列表或分析报告。',
+        metadata,
+      ].join('\n\n')
+
+  return postAiText(settings, 'omni', content, onText)
+}
+
 export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
   const request = createAiRequestContext(settings, scene)
   if (!request)
@@ -1074,13 +1154,25 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
         'Selected text: optimistic update',
         'Context: The UI applies an optimistic update before the server confirms the change.',
       ].join('\n')
-    : JSON.stringify({
-      scene,
-      text: '上下文',
-      context: '模型需要足够的上下文才能给出稳定结果。',
-      instruction: 'Connection test. Return a minimal valid result for this scene.',
-    })
+    : scene === 'omni'
+      ? [
+          {
+            type: 'text' as const,
+            text: 'Connection test for Lexi AI Omni. 请用简体中文说明：这是一张用于测试多模态连接的 1x1 图片，并返回一句简短分析。',
+          },
+          {
+            type: 'image_url' as const,
+            image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', detail: 'low' as const },
+          },
+        ]
+      : JSON.stringify({
+        scene,
+        text: '上下文',
+        context: '模型需要足够的上下文才能给出稳定结果。',
+        instruction: 'Connection test. Return a minimal valid result for this scene.',
+      })
 
+  const requestUser = typeof user === 'string' ? user : JSON.stringify(user)
   const body = buildChatBody(request.model, request.prompt, user, false)
 
   try {
@@ -1093,14 +1185,14 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
     const durationMs = Math.round(performance.now() - request.startedAt)
     const rawResponse = await response.text()
     const responseText = parseRawAiText(rawResponse)
-    const usageLog = getUsageLog(undefined, `${request.prompt}\n${user}`, responseText)
+    const usageLog = getUsageLog(undefined, `${request.prompt}\n${requestUser}`, responseText)
     const result: AiTestResult = {
       ok: response.ok,
       request: {
         endpoint: request.endpoint,
         model: request.model,
         system: request.prompt,
-        user,
+        user: requestUser,
         stream: false,
         authSent: Boolean(request.apiKey),
         keyHint: getKeyHint(request.apiKey),
@@ -1147,7 +1239,7 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
           endpoint: request.endpoint,
           model: request.model,
           system: request.prompt,
-          user,
+          user: requestUser,
           stream: false,
           authSent: Boolean(request.apiKey),
           keyHint: getKeyHint(request.apiKey),

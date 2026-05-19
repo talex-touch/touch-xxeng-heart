@@ -1,6 +1,6 @@
 import browser from 'webextension-polyfill'
-import { onMessage } from 'webext-bridge/content-script'
-import { localTranslateSelection, requestLexiDialogAnswer, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
+import { onMessage, sendMessage } from 'webext-bridge/content-script'
+import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
@@ -63,6 +63,8 @@ const ignoredSelectors = [
   '[data-lexi-selection-translation]',
   '[data-lexi-page-translation]',
   '[data-lexi-dialog]',
+  '[data-lexi-media-toolbar]',
+  '[data-lexi-media-highlight]',
   '[data-lexi-github-digest]',
 ]
 
@@ -163,6 +165,30 @@ interface DialogAnchor {
   bottom: number
   width: number
   height: number
+}
+
+interface MediaTargetInfo {
+  element: HTMLImageElement | HTMLVideoElement | HTMLAudioElement | HTMLSourceElement
+  kind: 'image' | 'video' | 'audio' | 'media'
+  src: string
+  title?: string
+  alt?: string
+  mimeType?: string
+  currentTime?: number
+  duration?: number
+  width?: number
+  height?: number
+  poster?: string
+}
+
+interface MediaToolbarState extends MediaTargetInfo {
+  toolbar: HTMLElement
+  highlight: HTMLElement
+  answer?: HTMLElement
+  copy?: HTMLButtonElement
+  promptText?: string
+  frameDataUrl?: string
+  mediaDataUrl?: string
 }
 
 const discourseTitleSelectors = [
@@ -943,6 +969,197 @@ function getPageStyleContent(customCss = '') {
       .lexi-page-translation[data-lexi-loading="true"]::before {
         animation: none;
       }
+    }
+
+    .lexi-media-highlight {
+      all: initial;
+      box-sizing: border-box;
+      position: fixed;
+      z-index: 2147483646;
+      overflow: visible;
+      border: 2px solid rgba(37, 99, 235, 0.92);
+      border-radius: var(--lexi-media-radius, 16px);
+      box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.72), 0 0 24px rgba(99, 102, 241, 0.36), 0 0 42px rgba(14, 165, 233, 0.22);
+      pointer-events: none;
+      transform: translateY(0);
+      animation: lexi-media-float 2.2s ease-in-out infinite, lexi-media-border-pulse 1.25s ease-in-out infinite;
+    }
+
+    .lexi-media-highlight::before {
+      content: "";
+      position: absolute;
+      inset: -7px;
+      border: 2px solid rgba(168, 85, 247, 0.78);
+      border-radius: calc(var(--lexi-media-radius, 16px) + 7px);
+      box-shadow: 0 0 22px rgba(168, 85, 247, 0.36), 0 0 34px rgba(14, 165, 233, 0.24);
+      opacity: 0.85;
+      animation: lexi-media-glow-pulse 1.45s ease-in-out infinite;
+    }
+
+    .lexi-media-highlight__shine {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      border-radius: inherit;
+      opacity: 0.38;
+      mix-blend-mode: screen;
+    }
+
+    .lexi-media-highlight__shine::before {
+      content: "";
+      position: absolute;
+      left: -42%;
+      top: 0;
+      width: 28%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, 0.16) 48%, rgba(125, 211, 252, 0.08) 58%, transparent 100%);
+      transform: translateX(0) skewX(-12deg);
+      animation: lexi-media-shimmer 1.35s ease-in-out infinite;
+    }
+
+    .lexi-media-highlight::after {
+      content: "Lexi";
+      position: absolute;
+      right: 8px;
+      top: 8px;
+      z-index: 1;
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 999px;
+      background: linear-gradient(135deg, rgba(17, 24, 39, 0.92), rgba(67, 56, 202, 0.88), rgba(2, 132, 199, 0.88));
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+      color: #fff;
+      font: 700 11px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: .02em;
+      padding: 5px 7px;
+    }
+
+    @keyframes lexi-media-border-pulse {
+      0%, 100% { border-color: rgba(37, 99, 235, 0.92); box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.72), 0 0 24px rgba(99, 102, 241, 0.36), 0 0 42px rgba(14, 165, 233, 0.22); }
+      50% { border-color: rgba(236, 72, 153, 0.92); box-shadow: 0 0 0 1px rgba(216, 180, 254, 0.76), 0 0 28px rgba(236, 72, 153, 0.32), 0 0 46px rgba(99, 102, 241, 0.24); }
+    }
+
+    @keyframes lexi-media-glow-pulse {
+      0%, 100% { opacity: 0.72; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.006); }
+    }
+
+    @keyframes lexi-media-shimmer {
+      to { transform: translateX(470%) skewX(-12deg); }
+    }
+
+    @keyframes lexi-media-float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-3px); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .lexi-media-highlight,
+      .lexi-media-highlight::before,
+      .lexi-media-highlight__shine::before {
+        animation: none;
+      }
+    }
+
+    .lexi-media-toolbar {
+      all: initial;
+      box-sizing: border-box;
+      position: fixed;
+      z-index: 2147483647;
+      display: grid;
+      gap: 10px;
+      width: min(420px, calc(100vw - 24px));
+      border: 1px solid rgba(226, 232, 240, 0.58);
+      border-radius: 18px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(241, 245, 249, 0.46)),
+        radial-gradient(circle at 0% 0%, rgba(129, 140, 248, 0.16), transparent 36%),
+        radial-gradient(circle at 100% 12%, rgba(14, 165, 233, 0.12), transparent 34%);
+      box-shadow: 0 22px 60px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.62) inset;
+      backdrop-filter: blur(22px) saturate(1.18);
+      -webkit-backdrop-filter: blur(22px) saturate(1.18);
+      color: #111827;
+      padding: 12px;
+      font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      animation: lexi-card-enter 160ms ease-out both;
+    }
+
+    .lexi-media-toolbar * {
+      box-sizing: border-box;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .lexi-media-toolbar__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .lexi-media-toolbar__title {
+      min-width: 0;
+      overflow: hidden;
+      color: #111827;
+      font-size: 13px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lexi-media-toolbar__close {
+      border: 0;
+      background: transparent;
+      color: #64748b;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      padding: 0 3px;
+    }
+
+    .lexi-media-toolbar__meta {
+      overflow: hidden;
+      color: #64748b;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lexi-media-toolbar__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .lexi-media-toolbar__button {
+      border: 1px solid rgba(203, 213, 225, 0.88);
+      border-radius: 999px;
+      background: #fff;
+      color: #111827;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 7px 10px;
+    }
+
+    .lexi-media-toolbar__button:first-child {
+      border-color: #312e81;
+      background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7);
+      color: #fff;
+    }
+
+    .lexi-media-toolbar__answer {
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid rgba(226, 232, 240, 0.68);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.5);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.65) inset;
+      padding: 11px 12px;
+      color: #243244;
+      font-size: 12px;
+      line-height: 1.68;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .lexi-dialog {
@@ -1775,7 +1992,7 @@ function animateSelectionBlockHeight(block: HTMLElement, mutate: () => void) {
   }, 210)
 }
 
-function renderSelectionTranslationText(container: HTMLElement, text: string, previousText: string, revealChunk: boolean) {
+function renderAnimatedText(container: HTMLElement, text: string, previousText: string, revealChunk: boolean) {
   if (!revealChunk || !previousText || !text.startsWith(previousText)) {
     container.textContent = text
     return
@@ -1883,7 +2100,7 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
       const previousText = text.textContent ?? ''
       const nextText = translation.translation
       animateSelectionBlockHeight(block, () => {
-        renderSelectionTranslationText(text, nextText, previousText, !wasLoading)
+        renderAnimatedText(text, nextText, previousText, !wasLoading)
         delete block.dataset.lexiLoading
         delete text.dataset.lexiLoading
       })
@@ -2077,10 +2294,17 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   return dialog
 }
 
-function shortcutMatches(event: KeyboardEvent, shortcut: string) {
-  const parts = shortcut.toLowerCase().split('+').map(part => part.trim()).filter(Boolean)
-  const key = parts.at(-1)
-  if (!key)
+function parseShortcutParts(shortcut: string) {
+  return shortcut.toLowerCase().split('+').map(part => part.trim()).filter(Boolean)
+}
+
+function shortcutModifiersMatch(event: MouseEvent | PointerEvent | KeyboardEvent, shortcut: string, options: { allowKey?: boolean } = {}) {
+  const parts = parseShortcutParts(shortcut)
+  const key = parts.findLast(part => !['mod', 'ctrl', 'control', 'meta', 'cmd', 'command', 'alt', 'option', 'shift'].includes(part))
+  if (key && options.allowKey && event instanceof KeyboardEvent && event.key.toLowerCase() !== key)
+    return false
+
+  if (key && (!options.allowKey || !(event instanceof KeyboardEvent)))
     return false
 
   const wantsMod = parts.includes('mod')
@@ -2089,12 +2313,15 @@ function shortcutMatches(event: KeyboardEvent, shortcut: string) {
   const wantsAlt = parts.includes('alt') || parts.includes('option')
   const wantsShift = parts.includes('shift')
 
-  return event.key.toLowerCase() === key
-    && (!wantsMod || event.metaKey || event.ctrlKey)
+  return (!wantsMod || event.metaKey || event.ctrlKey)
     && (!wantsCtrl || event.ctrlKey)
     && (!wantsMeta || event.metaKey)
     && (!wantsAlt || event.altKey)
     && (!wantsShift || event.shiftKey)
+}
+
+function shortcutMatches(event: KeyboardEvent, shortcut: string) {
+  return shortcutModifiersMatch(event, shortcut, { allowKey: true })
 }
 
 function isMacPlatform() {
@@ -2103,6 +2330,164 @@ function isMacPlatform() {
 
 function selectionModifierPressed(event: MouseEvent | PointerEvent | KeyboardEvent) {
   return isMacPlatform() ? event.metaKey : event.ctrlKey
+}
+
+function getMediaElementFromEventTarget(target: EventTarget | null): MediaTargetInfo | undefined {
+  const element = target instanceof Element
+    ? target.closest<HTMLImageElement | HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>('img, video, audio, source')
+    : undefined
+  if (!element)
+    return undefined
+
+  const owner = element instanceof HTMLSourceElement && element.parentElement instanceof HTMLMediaElement
+    ? element.parentElement
+    : element
+  const media = owner instanceof HTMLMediaElement ? owner : undefined
+  const src = element instanceof HTMLSourceElement
+    ? element.src
+    : owner instanceof HTMLImageElement
+      ? owner.currentSrc || owner.src
+      : media?.currentSrc || media?.src
+  if (!src)
+    return undefined
+
+  const kind = owner instanceof HTMLImageElement
+    ? 'image'
+    : owner instanceof HTMLVideoElement
+      ? 'video'
+      : owner instanceof HTMLAudioElement
+        ? 'audio'
+        : 'media'
+  const title = owner.getAttribute('title') || owner.getAttribute('aria-label') || undefined
+  const alt = owner instanceof HTMLImageElement ? owner.alt || undefined : undefined
+  const width = owner instanceof HTMLImageElement
+    ? owner.naturalWidth || owner.clientWidth
+    : owner instanceof HTMLVideoElement
+      ? owner.videoWidth || owner.clientWidth
+      : owner.clientWidth
+  const height = owner instanceof HTMLImageElement
+    ? owner.naturalHeight || owner.clientHeight
+    : owner instanceof HTMLVideoElement
+      ? owner.videoHeight || owner.clientHeight
+      : owner.clientHeight
+
+  return {
+    element: owner as MediaTargetInfo['element'],
+    kind,
+    src,
+    title,
+    alt,
+    mimeType: element instanceof HTMLSourceElement ? element.type || undefined : undefined,
+    currentTime: media?.currentTime,
+    duration: Number.isFinite(media?.duration) ? media?.duration : undefined,
+    width: width || undefined,
+    height: height || undefined,
+    poster: owner instanceof HTMLVideoElement ? owner.poster || undefined : undefined,
+  }
+}
+
+function getFileNameFromUrl(url: string, fallback: string) {
+  try {
+    const parsed = new URL(url, location.href)
+    const name = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() ?? '')
+    return name || fallback
+  }
+  catch {
+    return fallback
+  }
+}
+
+function getMediaRadius(anchor: Element) {
+  const style = getComputedStyle(anchor)
+  const radius = style.borderRadius
+  if (radius && radius !== '0px')
+    return radius
+
+  const parentRadius = anchor.parentElement ? getComputedStyle(anchor.parentElement).borderRadius : ''
+  return parentRadius && parentRadius !== '0px' ? parentRadius : '12px'
+}
+
+function positionMediaHighlight(highlight: HTMLElement, anchor: Element) {
+  const rect = anchor.getBoundingClientRect()
+  highlight.style.left = `${rect.left}px`
+  highlight.style.top = `${rect.top}px`
+  highlight.style.width = `${Math.max(0, rect.width)}px`
+  highlight.style.height = `${Math.max(0, rect.height)}px`
+  const radius = getMediaRadius(anchor)
+  highlight.style.borderRadius = radius
+  highlight.style.setProperty('--lexi-media-radius', radius)
+}
+
+function positionMediaToolbar(toolbar: HTMLElement, anchor: Element) {
+  const rect = anchor.getBoundingClientRect()
+  const margin = 12
+  const gap = 8
+  const measured = toolbar.getBoundingClientRect()
+  const width = measured.width || Math.min(360, window.innerWidth - margin * 2)
+  const height = measured.height || 160
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
+  let top = rect.bottom + gap
+  if (top + height > window.innerHeight - margin)
+    top = rect.top - height - gap
+  if (top < margin)
+    top = Math.max(margin, Math.min(window.innerHeight - height - margin, rect.top))
+
+  toolbar.style.left = `${left}px`
+  toolbar.style.top = `${top}px`
+}
+
+function positionMediaUi(state: MediaToolbarState) {
+  positionMediaHighlight(state.highlight, state.element)
+  positionMediaToolbar(state.toolbar, state.element)
+}
+
+function captureVideoFrame(element: HTMLVideoElement) {
+  if (!element.videoWidth || !element.videoHeight)
+    return undefined
+
+  try {
+    const canvas = document.createElement('canvas')
+    const maxSize = 960
+    const scale = Math.min(1, maxSize / Math.max(element.videoWidth, element.videoHeight))
+    canvas.width = Math.max(1, Math.round(element.videoWidth * scale))
+    canvas.height = Math.max(1, Math.round(element.videoHeight * scale))
+    const context = canvas.getContext('2d')
+    if (!context)
+      return undefined
+
+    context.drawImage(element, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/jpeg', 0.86)
+  }
+  catch {
+    return undefined
+  }
+}
+
+async function imageToDataUrl(element: HTMLImageElement) {
+  if (!element.naturalWidth || !element.naturalHeight)
+    return undefined
+
+  try {
+    const canvas = document.createElement('canvas')
+    const maxSize = 960
+    const scale = Math.min(1, maxSize / Math.max(element.naturalWidth, element.naturalHeight))
+    canvas.width = Math.max(1, Math.round(element.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(element.naturalHeight * scale))
+    const context = canvas.getContext('2d')
+    if (!context)
+      return undefined
+
+    context.drawImage(element, 0, 0, canvas.width, canvas.height)
+    return canvas.toDataURL('image/jpeg', 0.86)
+  }
+  catch {
+    return undefined
+  }
+}
+
+function getMediaPageContext(element: Element) {
+  const container = element.closest('figure, article, section, main, div')
+  return (container?.textContent || document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 900)
 }
 
 async function translateSelection(
@@ -2146,8 +2531,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let dynamicTimer: number | undefined
   let selectionTimer: number | undefined
   let dialog: HTMLElement | undefined
+  let mediaToolbarState: MediaToolbarState | undefined
   let lastTranslation: LastTranslationState | undefined
   let dialogShortcut = defaultSettings.ui.dialogShortcut
+  let mediaModifierShortcut = defaultSettings.ui.mediaModifierShortcut
   let lastSelectionKey = ''
   let activeSelectionKey = ''
   let latestSelectionSnapshot = ''
@@ -2185,6 +2572,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       specialProfile: getDetectedSpecialProfileStats(settings, siteHints),
     }
     dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
+    mediaModifierShortcut = settings.ui.mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut
     events.onStats(stats)
   }
 
@@ -2195,6 +2583,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const replacementEnabled = settings.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, siteHints)
     const budget = getReplacementBudget(settings, siteHints)
     dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
+    mediaModifierShortcut = settings.ui.mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut
     stats = {
       replacements: 0,
       records: records.length,
@@ -2517,8 +2906,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       childList: true,
       subtree: true,
     })
-    window.removeEventListener('scroll', onPageTranslationScroll)
-    window.addEventListener('scroll', onPageTranslationScroll, { passive: true })
+    window.removeEventListener('scroll', onPageScroll)
+    window.addEventListener('scroll', onPageScroll, { passive: true })
   }
 
   async function startPageTranslation() {
@@ -2559,7 +2948,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationInFlight.clear()
     window.clearTimeout(pageTranslationTimer)
     pageTranslationObserver?.disconnect()
-    window.removeEventListener('scroll', onPageTranslationScroll)
+    window.removeEventListener('scroll', onPageScroll)
     removePageTranslationElements()
     const cache = await readPageTranslationCache()
     pageTranslationSources.clear()
@@ -2659,6 +3048,159 @@ export function startPageEnhancer(events: EnhancerEvents) {
     await saveRecords(records)
     stats.records = records.length
     currentEvents.onStats(stats)
+  }
+
+  function closeMediaToolbar() {
+    mediaToolbarState?.highlight.remove()
+    mediaToolbarState?.toolbar.remove()
+    mediaToolbarState = undefined
+  }
+
+  async function analyzeMediaToolbar() {
+    const state = mediaToolbarState
+    if (!state?.answer)
+      return
+
+    const { settings } = await getStoredState()
+    if (!isSceneEnabled(settings, 'omni', location.href, detectSpecialSiteHints()) || !settings.ai.omni.enabled) {
+      state.answer.textContent = 'AI Omni 多模态场景未启用。请在选项页启用并配置支持 vision 的模型。'
+      return
+    }
+
+    const updateAnswer = (text: string, revealChunk = true) => {
+      if (!state.answer)
+        return
+
+      state.promptText = text
+      if (state.copy)
+        state.copy.disabled = !text.trim() || text === '分析中...'
+      const previous = state.answer.textContent ?? ''
+      renderAnimatedText(state.answer, text, previous, revealChunk)
+    }
+    updateAnswer('分析中...', false)
+    if (state.kind === 'video' && state.element instanceof HTMLVideoElement)
+      state.frameDataUrl = captureVideoFrame(state.element)
+    else if (state.kind === 'image' && state.element instanceof HTMLImageElement)
+      state.mediaDataUrl = await imageToDataUrl(state.element)
+
+    try {
+      const text = await requestMediaAnalysis(settings, {
+        kind: state.kind,
+        src: state.src,
+        pageUrl: location.href,
+        pageTitle: document.title,
+        title: state.title,
+        alt: state.alt,
+        mimeType: state.mimeType,
+        currentTime: state.currentTime,
+        duration: state.duration,
+        width: state.width,
+        height: state.height,
+        poster: state.poster,
+        frameDataUrl: state.frameDataUrl,
+        mediaDataUrl: state.mediaDataUrl,
+        context: getMediaPageContext(state.element),
+      }, (value) => {
+        if (mediaToolbarState === state)
+          updateAnswer(value)
+      })
+      if (mediaToolbarState === state && text)
+        updateAnswer(text)
+    }
+    catch (error) {
+      if (mediaToolbarState === state)
+        updateAnswer(error instanceof Error ? error.message : '分析失败', false)
+    }
+  }
+
+  async function downloadMediaToolbar() {
+    const state = mediaToolbarState
+    if (!state)
+      return
+
+    const filename = `Lexi/${getFileNameFromUrl(state.src, `media-${Date.now()}`)}`
+    const response = await sendMessage('lexi-download-media', {
+      url: state.src,
+      filename,
+    }, 'background') as { ok?: boolean, error?: string }
+    const { settings } = await getStoredState()
+    showLexiToast(response.ok ? '已交给浏览器下载。' : response.error || '下载失败', settings.ui.customCss)
+  }
+
+  async function copyMediaPrompt() {
+    const state = mediaToolbarState
+    if (!state?.promptText?.trim())
+      return
+
+    const { settings } = await getStoredState()
+    await navigator.clipboard.writeText(state.promptText.trim())
+    showLexiToast('Prompt 已复制。', settings.ui.customCss)
+  }
+
+  function showMediaToolbar(info: MediaTargetInfo) {
+    closeMediaToolbar()
+
+    const existingStyle = document.getElementById('lexi-page-style')
+    if (!existingStyle)
+      ensurePageStyles(defaultSettings.ui.customCss)
+
+    const highlight = document.createElement('div')
+    const toolbar = document.createElement('section')
+    const head = document.createElement('div')
+    const title = document.createElement('div')
+    const close = document.createElement('button')
+    const meta = document.createElement('div')
+    const actions = document.createElement('div')
+    const download = document.createElement('button')
+    const analyze = document.createElement('button')
+    const copy = document.createElement('button')
+    const answer = document.createElement('div')
+
+    highlight.dataset.lexiMediaHighlight = 'true'
+    highlight.className = 'lexi-media-highlight'
+    highlight.append(Object.assign(document.createElement('span'), { className: 'lexi-media-highlight__shine' }))
+    toolbar.dataset.lexiMediaToolbar = 'true'
+    toolbar.className = 'lexi-media-toolbar'
+    head.className = 'lexi-media-toolbar__head'
+    title.className = 'lexi-media-toolbar__title'
+    close.className = 'lexi-media-toolbar__close'
+    meta.className = 'lexi-media-toolbar__meta'
+    actions.className = 'lexi-media-toolbar__actions'
+    download.className = 'lexi-media-toolbar__button'
+    analyze.className = 'lexi-media-toolbar__button'
+    copy.className = 'lexi-media-toolbar__button'
+    answer.className = 'lexi-media-toolbar__answer'
+
+    close.type = 'button'
+    download.type = 'button'
+    analyze.type = 'button'
+    copy.type = 'button'
+    title.textContent = `${info.kind === 'image' ? '图片' : info.kind === 'video' ? '视频' : info.kind === 'audio' ? '音频' : '媒体'}操作`
+    close.textContent = '×'
+    meta.textContent = [info.title || info.alt || getFileNameFromUrl(info.src, info.src), info.width && info.height ? `${info.width}×${info.height}` : ''].filter(Boolean).join(' · ')
+    download.textContent = '下载媒体'
+    analyze.textContent = '提取还原 Prompt'
+    copy.textContent = '复制 Prompt'
+    copy.disabled = true
+    answer.textContent = '点击“提取还原 Prompt”，会输出用于还原这张图的纯文本 prompt。'
+
+    close.addEventListener('click', closeMediaToolbar)
+    download.addEventListener('click', () => downloadMediaToolbar().catch((error) => {
+      answer.textContent = error instanceof Error ? error.message : '下载失败'
+    }))
+    analyze.addEventListener('click', () => analyzeMediaToolbar().catch((error) => {
+      answer.textContent = error instanceof Error ? error.message : '分析失败'
+    }))
+    copy.addEventListener('click', () => copyMediaPrompt().catch((error) => {
+      answer.textContent = error instanceof Error ? error.message : '复制失败'
+    }))
+
+    head.append(title, close)
+    actions.append(analyze, copy, download)
+    toolbar.append(head, meta, actions, answer)
+    document.documentElement.append(highlight, toolbar)
+    mediaToolbarState = { ...info, toolbar, highlight, answer, copy }
+    positionMediaUi(mediaToolbarState)
   }
 
   async function translateAndRecord(selected: string, context: string, range: Range | undefined, requestId: number, requestKey: string) {
@@ -2860,18 +3402,50 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   }
 
-  const onPointerDown = () => {
+  const onPointerDown = (event: PointerEvent) => {
     selectionPointerDown = true
     selectionFinalizedAt = 0
     selectionFinalizedWithModifier = false
     selectionChangingSince = performance.now()
     window.clearTimeout(selectionTimer)
+
+    if (shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut) && getMediaElementFromEventTarget(event.target)) {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+    }
+  }
+
+  function tryShowMediaToolbarFromEvent(event: MouseEvent | PointerEvent) {
+    if (!shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut))
+      return false
+
+    const media = getMediaElementFromEventTarget(event.target)
+    if (!media)
+      return false
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    getStoredState()
+      .then(({ settings }) => {
+        ensurePageStyles(settings.ui.customCss)
+        showMediaToolbar(media)
+      })
+      .catch((error) => {
+        console.warn('[Lexi] media toolbar failed', error)
+        showMediaToolbar(media)
+      })
+    return true
   }
 
   const onMouseUp = (event: MouseEvent) => {
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
     selectionFinalizedWithModifier = selectionModifierPressed(event)
+    if (tryShowMediaToolbarFromEvent(event))
+      return
+
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
       if (!disposed && getSelectionSnapshot())
@@ -2883,6 +3457,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
     selectionFinalizedWithModifier = selectionModifierPressed(event)
+    if (tryShowMediaToolbarFromEvent(event))
+      return
+
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
       if (!disposed && getSelectionSnapshot())
@@ -2941,6 +3518,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const currentDialog = document.querySelector<HTMLElement>('[data-lexi-dialog]')
     if (currentDialog)
       closeLexiDialog(currentDialog)
+    if (mediaToolbarState)
+      closeMediaToolbar()
   }
 
   const onPointerOver = (event: MouseEvent | PointerEvent) => {
@@ -2978,13 +3557,30 @@ export function startPageEnhancer(events: EnhancerEvents) {
     tooltip.hidden = true
   }
 
-  function onPageTranslationScroll() {
+  function onPageScroll() {
+    if (mediaToolbarState)
+      positionMediaUi(mediaToolbarState)
+
     if (!pageTranslationEnabled)
       return
 
     getStoredState()
       .then(({ settings }) => schedulePageTranslationScan(settings, 180))
       .catch(error => console.warn('[Lexi] page translation scroll scan failed', error))
+  }
+
+  function onMediaClickCapture(event: MouseEvent) {
+    if (!shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut))
+      return
+
+    const media = getMediaElementFromEventTarget(event.target)
+    if (!media)
+      return
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    tryShowMediaToolbarFromEvent(event)
   }
 
   const removeContextTranslateListener = onMessage('lexi-context-translate', async ({ data }) => {
@@ -3047,15 +3643,19 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   run()
   restoreSavedPageTranslation().catch(error => console.warn('[Lexi] restore page translation failed', error))
-  document.addEventListener('pointerdown', onPointerDown)
+  document.addEventListener('pointerdown', onPointerDown, true)
+  document.addEventListener('click', onMediaClickCapture, true)
+  document.addEventListener('auxclick', onMediaClickCapture, true)
   document.addEventListener('mouseup', onMouseUp)
   document.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })
   window.addEventListener('mouseup', onMouseUp, true)
   window.addEventListener('pointerup', onPointerUp, true)
   document.addEventListener('keyup', onKeyUp)
   document.addEventListener('selectionchange', onSelectionChange)
   document.addEventListener('keydown', onKeyDown)
   document.addEventListener('keydown', onEscape)
+  window.addEventListener('resize', onPageScroll)
   document.addEventListener('pointerover', onPointerOver, true)
   document.addEventListener('pointermove', onPointerMove, true)
   document.addEventListener('pointerout', onPointerOut, true)
@@ -3092,7 +3692,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     removePageTranslateStopListener()
     removePageTranslateStatusListener()
     removePageStatsListener()
-    document.removeEventListener('pointerdown', onPointerDown)
+    document.removeEventListener('pointerdown', onPointerDown, true)
+    document.removeEventListener('click', onMediaClickCapture, true)
+    document.removeEventListener('auxclick', onMediaClickCapture, true)
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('pointerup', onPointerUp)
     window.removeEventListener('mouseup', onMouseUp, true)
@@ -3101,15 +3703,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
     document.removeEventListener('selectionchange', onSelectionChange)
     document.removeEventListener('keydown', onKeyDown)
     document.removeEventListener('keydown', onEscape)
+    window.removeEventListener('resize', onPageScroll)
     document.removeEventListener('pointerover', onPointerOver, true)
     document.removeEventListener('pointermove', onPointerMove, true)
     document.removeEventListener('pointerout', onPointerOut, true)
     document.removeEventListener('mouseover', onPointerOver, true)
     document.removeEventListener('mousemove', onPointerMove, true)
     document.removeEventListener('mouseout', onPointerOut, true)
-    window.removeEventListener('scroll', onPageTranslationScroll)
+    window.removeEventListener('scroll', onPageScroll)
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()
     dialog?.remove()
+    closeMediaToolbar()
   }
 }

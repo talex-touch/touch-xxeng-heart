@@ -48,6 +48,7 @@ export async function getManifest() {
       'storage',
       'activeTab',
       'contextMenus',
+      'downloads',
       ...isFirefox ? [] : ['sidePanel'],
     ],
     host_permissions: ['*://*/*'],

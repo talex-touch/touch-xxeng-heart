@@ -6,7 +6,7 @@ const emptyAiConnection = {
   model: '',
 }
 
-const promptDefaults: Record<FeatureScene, string> = {
+export const promptDefaults: Record<FeatureScene, string> = {
   replacement: [
     '从网页文本中提取少量适合程序员英语学习的词库项。',
     '中文技术词给出自然英文替换词。',
@@ -18,12 +18,21 @@ const promptDefaults: Record<FeatureScene, string> = {
   ].join(' '),
   selection: [
     '把用户选中的文本翻译成目标语言，先结合上下文判断语气、意图和潜台词。',
+    '当目标语言为中文，或用户文本主要是英文 / 非中文内容且方向为自动判断时，必须输出简体中文；不要保留英文原句，不要输出英文解释。',
+    '当用户文本主要是中文且方向为自动判断时，输出自然英文。',
     '译文要准确、自然、有人味，避免翻译腔；必要时重组句子，让目标语言读者觉得像真人会说的话。',
     '只输出最终译文，不要 JSON、标题、解释、备选项或思考过程。',
   ].join(' '),
   daily: [
     '生成适合程序员日常学习的英语词汇建议。',
     '优先选择真实开发场景常见表达，保持简洁。',
+  ].join(' '),
+  omni: [
+    '你是 Lexi AI Omni 图像还原 Prompt 提取器。',
+    '用户从网页上点选图片后，你要观察图片内容，并输出一段可直接复制给文生图/图生图模型的纯文本 prompt，用来尽可能还原这张图。',
+    'prompt 要具体描述主体、场景、构图、视角、布局、颜色、材质、光照、风格、UI 细节、文字内容、清晰度、比例和氛围。',
+    '如果是视频或音频，基于当前帧、封面、alt/title、URL、文件名和页面上下文输出媒体画面还原 prompt，并明确只描述可见/可推断的视觉信息。',
+    '只输出 prompt 正文。不要输出解释、标题、JSON、Markdown、代码块、项目符号或思考过程。',
   ].join(' '),
 }
 
@@ -61,6 +70,7 @@ export const featureLabels: Record<FeatureScene, string> = {
   replacement: '网页词汇替换',
   selection: '划词翻译',
   daily: '每日推荐',
+  omni: 'AI Omni 多模态',
 }
 
 export const defaultSettings: LexiSettings = {
@@ -153,6 +163,7 @@ export const defaultSettings: LexiSettings = {
   ui: {
     showFloatingStatus: false,
     dialogShortcut: 'mod+k',
+    mediaModifierShortcut: 'meta+shift',
     customCss: '',
   },
   githubDigest: {
@@ -168,6 +179,7 @@ export const defaultSettings: LexiSettings = {
     replacement: createAiSceneConfig('replacement'),
     selection: createAiSceneConfig('selection'),
     daily: createAiSceneConfig('daily'),
+    omni: createAiSceneConfig('omni'),
   },
 }
 
@@ -249,6 +261,11 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
         ...defaultSettings.ai.daily,
         ...value?.ai?.daily,
         providerIds: value?.ai?.daily?.providerIds ?? defaultSettings.ai.daily.providerIds,
+      },
+      omni: {
+        ...defaultSettings.ai.omni,
+        ...value?.ai?.omni,
+        providerIds: value?.ai?.omni?.providerIds ?? defaultSettings.ai.omni.providerIds,
       },
     },
   }

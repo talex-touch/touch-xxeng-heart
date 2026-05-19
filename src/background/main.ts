@@ -1,4 +1,4 @@
-import { sendMessage } from 'webext-bridge/background'
+import { onMessage, sendMessage } from 'webext-bridge/background'
 import browser from 'webextension-polyfill'
 
 // only on dev mode
@@ -34,4 +34,23 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
     pageUrl: tab.url,
     pageTitle: tab.title,
   }, { context: 'content-script', tabId: tab.id }).catch((error: unknown) => console.error(error))
+})
+
+onMessage('lexi-download-media', async ({ data }) => {
+  const payload = data as { url?: string, filename?: string }
+  if (!payload.url)
+    return { ok: false, error: '缺少媒体 URL' }
+
+  try {
+    const id = await browser.downloads.download({
+      url: payload.url,
+      filename: payload.filename,
+      conflictAction: 'uniquify',
+      saveAs: true,
+    })
+    return { ok: true, id }
+  }
+  catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 })

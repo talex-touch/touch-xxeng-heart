@@ -103,5 +103,5 @@ export function isSceneEnabled(settings: LexiSettings, scene: FeatureScene, url 
     return false
 
   const rule = findSceneRule(settings.siteRules.sceneRules, url)
-  return rule ? rule[scene] : true
+  return rule ? rule[scene] ?? true : true
 }

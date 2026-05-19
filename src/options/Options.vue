@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, watchEffect } from 'vue'
-import { defaultSettings, featureLabels } from '~/logic/defaults'
+import { defaultSettings, featureLabels, promptDefaults } from '~/logic/defaults'
 import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
-import { aiCallLogs, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
+import { aiCallLogs, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
 import type { AiProviderConfig, AiTestResult, FeatureScene, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
-const scenes: FeatureScene[] = ['replacement', 'selection', 'daily']
+const scenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'omni']
+const sceneRuleScenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'omni']
 const tabs: Array<{ id: OptionsTab, label: string }> = [
   { id: 'settings', label: '基础设置' },
   { id: 'special', label: '特殊场景' },
@@ -54,6 +55,15 @@ const aiSceneTokenStats = computed(() => scenes.map(scene => ({
     .reduce((sum, log) => sum + (log.totalTokens ?? 0), 0),
 })))
 const recentPageVisits = computed(() => pageVisitLogs.value)
+const githubDigestEntries = computed(() => Object.entries(githubDigestCache.value)
+  .map(([key, entry]) => ({ key, ...entry }))
+  .sort((a, b) => b.updatedAt - a.updatedAt))
+const githubDigestStats = computed(() => ({
+  total: githubDigestEntries.value.length,
+  quick: githubDigestEntries.value.filter(entry => entry.quickDigest).length,
+  detail: githubDigestEntries.value.filter(entry => entry.digest).length,
+  bytes: estimateStorageBytes(githubDigestCache.value),
+}))
 const filteredVocabularyRecords = computed(() => {
   const query = normalizeSearchText(vocabularySearchQuery.value)
   if (!query)
@@ -154,6 +164,25 @@ function formatTime(value: number) {
     minute: '2-digit',
     second: '2-digit',
   }).format(new Date(value))
+}
+
+function formatDateTime(value: number) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+function clearGitHubDigestCache() {
+  githubDigestCache.value = {}
+}
+
+function removeGitHubDigestCacheEntry(key: string) {
+  const next = { ...githubDigestCache.value }
+  delete next[key]
+  githubDigestCache.value = next
 }
 
 async function testScene(scene: FeatureScene) {
@@ -274,6 +303,10 @@ function formatTestRequest(result: AiTestResult) {
   return JSON.stringify(result.request, null, 2)
 }
 
+function resetScenePrompt(scene: FeatureScene) {
+  lexiSettings.value.ai[scene].prompt = promptDefaults[scene]
+}
+
 function addSceneRule() {
   const domain = normalizeSiteRuleDomain(newSceneRuleDomain.value)
   if (!domain || lexiSettings.value.siteRules.sceneRules.some(rule => rule.domain === domain))
@@ -284,6 +317,7 @@ function addSceneRule() {
     replacement: true,
     selection: true,
     daily: true,
+    omni: true,
   }
   lexiSettings.value.siteRules.sceneRules = [rule, ...lexiSettings.value.siteRules.sceneRules]
   newSceneRuleDomain.value = ''
@@ -384,18 +418,10 @@ function removeSceneRule(index: number) {
                       删除
                     </button>
                   </div>
-                  <div class="mt-2 grid grid-cols-3 gap-2 text-12px text-neutral-600">
-                    <label class="flex items-center gap-1">
-                      <input v-model="rule.replacement" type="checkbox">
-                      <span>替换</span>
-                    </label>
-                    <label class="flex items-center gap-1">
-                      <input v-model="rule.selection" type="checkbox">
-                      <span>划词</span>
-                    </label>
-                    <label class="flex items-center gap-1">
-                      <input v-model="rule.daily" type="checkbox">
-                      <span>每日</span>
+                  <div class="mt-2 grid grid-cols-2 gap-2 text-12px text-neutral-600 sm:grid-cols-4">
+                    <label v-for="scene in sceneRuleScenes" :key="`${rule.domain}-${scene}`" class="flex items-center gap-1">
+                      <input v-model="rule[scene]" type="checkbox">
+                      <span>{{ featureLabels[scene] }}</span>
                     </label>
                   </div>
                 </div>
@@ -435,7 +461,7 @@ function removeSceneRule(index: number) {
             <label class="mt-4 flex items-center justify-between gap-4">
               <span>
                 <span class="block text-14px font-500">按住修饰键触发划词翻译</span>
-                <span class="text-12px text-neutral-500">macOS 使用 Command，Windows/Linux 使用 Ctrl。</span>
+                <span class="text-12px text-neutral-500">macOS 使用 Command，Windows/Linux 使用 Ctrl。媒体点击可单独配置，默认 meta+shift。</span>
               </span>
               <input v-model="lexiSettings.selection.requireModifierKey" type="checkbox" class="h-5 w-5">
             </label>
@@ -497,6 +523,11 @@ function removeSceneRule(index: number) {
               <span class="text-13px font-500">快捷对话键</span>
               <input v-model.trim="lexiSettings.ui.dialogShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="mod+k">
               <span class="mt-1 block text-12px text-neutral-500">支持 mod+k、ctrl+k、meta+k、alt+l、shift+mod+k。无选区时会基于整页内容提问。</span>
+            </label>
+            <label class="mt-4 block">
+              <span class="text-13px font-500">媒体点击修饰键</span>
+              <input v-model.trim="lexiSettings.ui.mediaModifierShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="meta+shift">
+              <span class="mt-1 block text-12px text-neutral-500">按住该组合点击图片 / 视频 / 音频打开媒体操作栏；默认 meta+shift。</span>
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">每日推荐数量</span>
@@ -857,13 +888,18 @@ function removeSceneRule(index: number) {
               <span class="text-12px font-500 text-neutral-600">API Key 覆盖</span>
               <input v-model="lexiSettings.ai[scene].apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
             </label>
-            <label class="mt-3 block">
-              <span class="text-12px font-500 text-neutral-600">提示词</span>
+            <div class="mt-3 block">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-12px font-500 text-neutral-600">提示词</span>
+                <button type="button" class="rounded-full border border-neutral-200 bg-white px-2 py-1 text-11px text-neutral-600 cursor-pointer hover:bg-neutral-50" @click="resetScenePrompt(scene)">
+                  重置为系统提示词
+                </button>
+              </div>
               <textarea
                 v-model="lexiSettings.ai[scene].prompt"
                 class="mt-1 min-h-28 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-13px leading-5 outline-none focus:border-neutral-950"
               />
-            </label>
+            </div>
             <div class="mt-4 flex items-center gap-3">
               <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="testingScenes[scene]" @click="testScene(scene)">
                 {{ testingScenes[scene] ? '测试中' : '测试' }}
@@ -999,6 +1035,53 @@ function removeSceneRule(index: number) {
             </div>
             <p v-if="!recentPageVisits.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
               暂无网页访问记录。
+            </p>
+          </div>
+        </div>
+
+        <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm lg:col-span-2">
+          <div class="flex shrink-0 items-start justify-between gap-3">
+            <div>
+              <h2 class="text-16px font-600">
+                Lexi 速读缓存
+              </h2>
+              <p class="mt-1 text-12px text-neutral-500">
+                仓库级缓存 {{ githubDigestStats.total }} 个，Quick {{ githubDigestStats.quick }} 个，Detail {{ githubDigestStats.detail }} 个，占用 {{ formatBytes(githubDigestStats.bytes) }}。
+              </p>
+            </div>
+            <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="clearGitHubDigestCache">
+              清空缓存
+            </button>
+          </div>
+          <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+            <div v-for="entry in githubDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="break-words text-14px font-700">
+                    {{ entry.repo || entry.key }}
+                  </div>
+                  <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                    {{ entry.languages?.join(' · ') || '暂无语言信息' }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }}
+                  </div>
+                </div>
+                <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeGitHubDigestCacheEntry(entry.key)">
+                  删除
+                </button>
+              </div>
+              <div class="mt-2 flex flex-wrap gap-2 text-11px">
+                <span class="rounded-full px-2 py-1" :class="entry.quickDigest ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'">Quick {{ entry.quickDigest ? '已缓存' : '无' }}</span>
+                <span class="rounded-full px-2 py-1" :class="entry.digest ? 'bg-blue-50 text-blue-700' : 'bg-neutral-100 text-neutral-500'">Detail {{ entry.digest ? '已缓存' : '无' }}</span>
+                <span v-for="topic in entry.topics?.slice(0, 5)" :key="`${entry.key}-${topic}`" class="rounded-full bg-neutral-100 px-2 py-1 text-neutral-600">{{ topic }}</span>
+              </div>
+              <p v-if="entry.quickDigest?.oneLine" class="mt-2 break-words text-12px leading-5 text-neutral-700">
+                {{ entry.quickDigest.oneLine }}
+              </p>
+              <p v-if="entry.digest?.oneLine" class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                详细：{{ entry.digest.oneLine }}
+              </p>
+            </div>
+            <p v-if="!githubDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+              暂无 Lexi 速读缓存。打开 GitHub 仓库页并生成速读后会出现在这里。
             </p>
           </div>
         </div>

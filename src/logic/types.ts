@@ -1,4 +1,4 @@
-export type FeatureScene = 'replacement' | 'selection' | 'daily'
+export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'omni'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
 
 export interface AiConnectionConfig {
@@ -133,6 +133,7 @@ export interface SiteSceneRule {
   replacement: boolean
   selection: boolean
   daily: boolean
+  omni: boolean
 }
 
 export type SpecialSiteKind = 'social-feed' | 'forum-feed' | 'learning-exam' | 'custom'
@@ -181,6 +182,7 @@ export interface HistorySettings {
 export interface UiSettings {
   showFloatingStatus: boolean
   dialogShortcut: string
+  mediaModifierShortcut: string
   customCss: string
 }
 

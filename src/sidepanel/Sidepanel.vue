@@ -477,7 +477,7 @@ onMounted(() => {
           <div class="flex items-center justify-between gap-3 rounded-2 bg-neutral-50 px-3 py-2 text-12px">
             <span>
               <span class="block font-500">按修饰键触发划词</span>
-              <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl</span>
+              <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl；媒体操作默认 meta+shift</span>
             </span>
             <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.selection.requireModifierKey ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.selection.requireModifierKey" @click="lexiSettings.selection.requireModifierKey = !lexiSettings.selection.requireModifierKey">
               <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.selection.requireModifierKey ? 'left-5' : 'left-0.5'" />

@@ -1,6 +1,6 @@
 import { defaultSettings, mergeSettings } from './defaults'
-import { aiCallLogsStorageKey, githubDigestStorageKey, pageTranslationMemoryStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
-import type { AiCallLog, GitHubDigestCache, LexiSettings, PageTranslationMemory, PageVisitLog, VocabularyRecord } from './types'
+import { aiCallLogsStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationMemoryStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
+import type { AiCallLog, ForumDigestCache, GitHubDigestCache, LexiSettings, PageTranslationMemory, PageVisitLog, VocabularyRecord } from './types'
 import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
 
 export const { data: lexiSettings, dataReady: lexiSettingsReady } = useWebExtensionStorage<LexiSettings>(
@@ -28,6 +28,11 @@ export const { data: pageVisitLogs, dataReady: pageVisitLogsReady } = useWebExte
 
 export const { data: githubDigestCache, dataReady: githubDigestCacheReady } = useWebExtensionStorage<GitHubDigestCache>(
   githubDigestStorageKey,
+  {},
+)
+
+export const { data: forumDigestCache, dataReady: forumDigestCacheReady } = useWebExtensionStorage<ForumDigestCache>(
+  forumDigestStorageKey,
   {},
 )
 

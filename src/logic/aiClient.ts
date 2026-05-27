@@ -1,6 +1,6 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
 import { recordAiCall } from './analytics'
-import type { AiConnectionConfig, AiTestResult, FeatureScene, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+import type { AiConnectionConfig, AiTestResult, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
 
 interface AiReplacementResponse {
   items?: VocabularyCandidate[]
@@ -426,6 +426,22 @@ function normalizeTranslationText(value: string) {
   return content.replace(/^(译文|翻译|translation)\s*[:：]\s*/i, '').trim()
 }
 
+function normalizeMarkdownAnswerText(value: string) {
+  const content = stripThinkingText(value).trim()
+  if (!content)
+    return ''
+
+  try {
+    const parsed = JSON.parse(content) as { answer?: unknown, content?: unknown, text?: unknown }
+    const answer = [parsed.answer, parsed.content, parsed.text].find(item => typeof item === 'string')
+    if (typeof answer === 'string')
+      return answer.trim()
+  }
+  catch {}
+
+  return content.replace(/^(回答|answer)\s*[:：]\s*/i, '').trim()
+}
+
 async function fetchChatCompletion(request: AiRequestContext, system: string, user: ChatMessageContent, stream: boolean, signal?: AbortSignal) {
   return fetch(request.endpoint, {
     method: 'POST',
@@ -497,7 +513,7 @@ function getTranslationDirectionInstruction(direction: TranslationDirection) {
   return 'Auto-detect direction: if the selected text is mostly Chinese, translate it into natural English; otherwise translate it into Simplified Chinese. For English, mixed-language, code comments, UI text or any non-Chinese text, the final answer MUST be Simplified Chinese only.'
 }
 
-async function readStreamText(response: Response, onText?: (text: string) => void) {
+async function readStreamText(response: Response, onText?: (text: string) => void, normalizeText = normalizeTranslationText) {
   const reader = response.body?.getReader()
   if (!reader)
     throw new Error('AI stream is empty')
@@ -518,7 +534,7 @@ async function readStreamText(response: Response, onText?: (text: string) => voi
     buffer = lines.pop() ?? ''
     for (const line of lines) {
       content += appendStreamLine(line)
-      const visible = normalizeTranslationText(content)
+      const visible = normalizeText(content)
       if (visible)
         onText?.(visible)
     }
@@ -529,12 +545,12 @@ async function readStreamText(response: Response, onText?: (text: string) => voi
 
   if (buffer) {
     content += appendStreamLine(buffer)
-    const visible = normalizeTranslationText(content)
+    const visible = normalizeText(content)
     if (visible)
       onText?.(visible)
   }
 
-  const text = normalizeTranslationText(content)
+  const text = normalizeText(content)
   if (!text)
     throw new Error('AI stream response is empty')
 
@@ -551,10 +567,10 @@ function extractTextContent(value: unknown) {
   return (value as OpenAiChatResponse).choices?.[0]?.message?.content ?? JSON.stringify(value)
 }
 
-async function readAiResponseTextWithUsage(response: Response, promptText: string, onText?: (text: string) => void): Promise<{ text: string, streamed: boolean, usageLog: ReturnType<typeof getUsageLog> }> {
+async function readAiResponseTextWithUsage(response: Response, promptText: string, onText?: (text: string) => void, normalizeText = normalizeTranslationText): Promise<{ text: string, streamed: boolean, usageLog: ReturnType<typeof getUsageLog> }> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('text/event-stream')) {
-    const text = await readStreamText(response, onText)
+    const text = await readStreamText(response, onText, normalizeText)
     return {
       text,
       streamed: true,
@@ -563,7 +579,7 @@ async function readAiResponseTextWithUsage(response: Response, promptText: strin
   }
 
   const json = await response.json() as OpenAiChatResponse
-  const text = normalizeTranslationText(extractTextContent(json))
+  const text = normalizeText(extractTextContent(json))
   if (!text)
     throw new Error('AI response text is empty')
 
@@ -764,6 +780,7 @@ async function postAiTextWithRequest(
   onText: ((text: string) => void) | undefined,
   promptOverride: string | undefined,
   signal: AbortSignal,
+  normalizeText = normalizeTranslationText,
 ) {
   let failureLogged = false
 
@@ -809,7 +826,7 @@ async function postAiTextWithRequest(
     let streamed = false
     let usageLog: ReturnType<typeof getUsageLog>
     try {
-      const result = await readAiResponseTextWithUsage(response, promptText, onText)
+      const result = await readAiResponseTextWithUsage(response, promptText, onText, normalizeText)
       translated = result.text
       streamed = result.streamed
       usageLog = result.usageLog
@@ -825,7 +842,7 @@ async function postAiTextWithRequest(
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
       }
 
-      const result = await readAiResponseTextWithUsage(response, promptText, onText)
+      const result = await readAiResponseTextWithUsage(response, promptText, onText, normalizeText)
       translated = result.text
       streamed = result.streamed
       usageLog = result.usageLog
@@ -873,16 +890,37 @@ async function postAiText(
   text: ChatMessageContent,
   onText?: (text: string) => void,
   promptOverride?: string,
+  signal?: AbortSignal,
+  normalizeText = normalizeTranslationText,
 ): Promise<string | undefined> {
   const requests = createAiRequestContexts(settings, scene)
-  return runProviderRace(requests, (request, signal, index) => postAiTextWithRequest(
-    request,
-    scene,
-    text,
-    index === 0 ? onText : undefined,
-    promptOverride,
-    signal,
-  ))
+  const run = runProviderRace(requests, (request, providerSignal, index) => {
+    if (!signal)
+      return postAiTextWithRequest(request, scene, text, index === 0 ? onText : undefined, promptOverride, providerSignal, normalizeText)
+
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    signal.addEventListener('abort', abort, { once: true })
+    providerSignal.addEventListener('abort', abort, { once: true })
+    return postAiTextWithRequest(request, scene, text, index === 0 ? onText : undefined, promptOverride, controller.signal, normalizeText)
+      .finally(() => {
+        signal.removeEventListener('abort', abort)
+        providerSignal.removeEventListener('abort', abort)
+      })
+  })
+
+  if (!signal)
+    return run
+
+  return Promise.race([
+    run,
+    new Promise<undefined>((_, reject) => {
+      if (signal.aborted)
+        reject(new DOMException('Request aborted', 'AbortError'))
+      else
+        signal.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')), { once: true })
+    }),
+  ])
 }
 
 export async function requestLexiDialogAnswer(
@@ -895,11 +933,19 @@ export async function requestLexiDialogAnswer(
     page?: string
   },
   onText?: (text: string) => void,
+  history: Array<{ role: 'user' | 'assistant', content: string }> = [],
+  signal?: AbortSignal,
 ) {
+  const historyText = history
+    .slice(-8)
+    .map(item => `${item.role === 'user' ? '用户' : 'Lexi'}：${item.content}`)
+    .join('\n\n')
+
   return postAiText(
     settings,
     'selection',
     [
+      historyText ? `历史对话：\n${historyText}` : '',
       `用户问题：${question}`,
       context.selected ? `当前选区：${context.selected}` : '',
       context.translation ? `最近翻译：${context.translation}` : '',
@@ -909,10 +955,13 @@ export async function requestLexiDialogAnswer(
     onText,
     [
       '你是 Lexi 的网页上下文助手。',
-      '基于用户选区、最近翻译和页面上下文回答。',
+      '基于用户选区、最近翻译、历史对话和页面上下文回答。',
       '回答要简洁、直接、中文优先；如涉及术语，给出短解释。',
-      '不要输出 JSON、Markdown 标题或思考过程。',
+      '可以使用简洁 Markdown（列表、行内代码、代码块、引用）增强可读性。',
+      '不要输出 JSON 或思考过程。',
     ].join(' '),
+    signal,
+    normalizeMarkdownAnswerText,
   )
 }
 
@@ -926,7 +975,7 @@ export async function requestReplacementCandidates(
     context,
     instruction: [
       'Extract two kinds of reusable vocabulary entries from the page text.',
-      '1) Chinese programming/AI terms that are useful for learning English: set original to the Chinese term and replacement to a natural English expression.',
+      '1) Chinese programming/AI terms that are useful for learning English: set original to the Chinese term and replacement to a natural English expression. Do NOT extract single Chinese characters or ambiguous one-character terms; Chinese terms must contain at least two CJK characters.',
       '2) Product, brand, model, platform, library, framework, CLI or service names such as Codex, ChatGPT, Claude, GitHub Actions, Vite, React, Next.js: record them as product knowledge, but DO NOT translate or rename them. For product entries set original and replacement to the exact same surface name from the page.',
       'Add tag "product" for product/name entries; add "technical" for general technical terms. You may add more concise tags such as ai, cli, framework, platform.',
       'Product entries will be reused by Lexi for hover explanations only, not for text replacement.',
@@ -938,6 +987,7 @@ export async function requestReplacementCandidates(
     'Return only valid compact JSON. No markdown, no explanations, no hidden reasoning.',
     'Write all meaning fields in Chinese first; include brief English explanation only if useful.',
     'Preserve product names exactly. Never translate product names; mark them with tag "product".',
+    'Never return a single Chinese character as original for replacement entries.',
   ].join(' '))
 
   return data?.items?.filter(item => item.original && item.replacement) ?? []
@@ -1022,7 +1072,7 @@ export async function requestSelectionDetail(
     instruction: [
       'Explain only terms that help understand the selected text.',
       'Put each term explanation into terms as one short item.',
-      'For Chinese terms, terms[].term must be the short Chinese term from the selected text; the matching English expression must be in candidate.replacement, not in terms[].term.',
+      'For Chinese terms, terms[].term must be the short Chinese term from the selected text; the matching English expression must be in candidate.replacement, not in terms[].term. Do not return single Chinese characters as terms or candidate.original.',
       'For English terms, terms[].term must be the short English term itself, never the whole selected sentence.',
       'Give a brief context comment about tone, intent, relationship or subtext after considering the surrounding context.',
       'Give one short translation optimization suggestion: how to make the translation more natural and human-sounding, avoiding translationese.',
@@ -1086,6 +1136,44 @@ export async function requestGitHubDigest(
     techStack: Array.isArray(data.techStack) ? data.techStack.filter(Boolean).slice(0, 8) : [],
     startHere: Array.isArray(data.startHere) ? data.startHere.filter(Boolean).slice(0, 5) : [],
     terms: Array.isArray(data.terms) ? data.terms.filter(Boolean).slice(0, 8) : [],
+  }
+}
+
+export async function requestForumDigest(
+  settings: LexiSettings,
+  info: ForumDigestInfo,
+) {
+  const data = await postAiJson<Partial<ForumDigestResult>>(settings, 'daily', {
+    scene: 'forum-digest',
+    host: info.host,
+    title: info.title,
+    author: info.author,
+    category: info.category,
+    tags: info.tags,
+    url: info.url,
+    posts: info.posts.map(post => post.slice(0, 1800)).slice(0, 10),
+    pageText: info.pageText.slice(0, 4200),
+    instruction: [
+      'Create a quick Lexi forum reading digest for a Discourse-like technical forum topic.',
+      'Only summarize the main post and the first few visible replies provided in posts. Do not infer or summarize the whole thread beyond the provided posts.',
+      'Prefer concise Simplified Chinese.',
+      'Focus on: what the main post asks/says, early replies / key viewpoints, useful technical terms or services, and any unresolved caveat.',
+      'Return compact JSON only: {"oneLine":"","summary":[""],"keyPoints":[""],"terms":[""],"sentiment":""}.',
+    ].join(' '),
+  }, [
+    'You are Lexi Forum Digest. Return only compact JSON matching the requested schema.',
+    'Use concise Simplified Chinese. No markdown, no hidden reasoning.',
+  ].join(' '))
+
+  if (!data?.oneLine)
+    return undefined
+
+  return {
+    oneLine: data.oneLine.trim(),
+    summary: Array.isArray(data.summary) ? data.summary.filter(Boolean).slice(0, 5) : [],
+    keyPoints: Array.isArray(data.keyPoints) ? data.keyPoints.filter(Boolean).slice(0, 6) : [],
+    terms: Array.isArray(data.terms) ? data.terms.filter(Boolean).slice(0, 10) : [],
+    sentiment: typeof data.sentiment === 'string' ? data.sentiment.trim() : undefined,
   }
 }
 

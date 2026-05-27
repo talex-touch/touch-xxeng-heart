@@ -66,6 +66,7 @@ const ignoredSelectors = [
   '[data-lexi-media-toolbar]',
   '[data-lexi-media-highlight]',
   '[data-lexi-github-digest]',
+  '[data-lexi-forum-digest]',
 ]
 
 const blockSelectors = [
@@ -165,6 +166,13 @@ interface DialogAnchor {
   bottom: number
   width: number
   height: number
+}
+
+type DialogMessageRole = 'system' | 'user' | 'assistant'
+
+interface DialogHistoryMessage {
+  role: 'user' | 'assistant'
+  content: string
 }
 
 interface MediaTargetInfo {
@@ -403,6 +411,11 @@ function countCjkCharacters(text: string) {
   return Array.from(text).filter(char => /[\u3400-\u9FFF]/.test(char)).length
 }
 
+function isAmbiguousSingleCharacterTerm(text: string) {
+  const normalized = text.replace(/\s+/g, '').trim()
+  return normalized.length === 1 && hasCjkText(normalized)
+}
+
 function isConciseEnglishReplacement(original: string, replacement: string) {
   const normalized = replacement.replace(/\s+/g, ' ').trim()
   if (!normalized || hasCjkText(normalized))
@@ -419,6 +432,9 @@ function isConciseEnglishReplacement(original: string, replacement: string) {
 function canAutoReplaceCandidate(candidate: VocabularyCandidate) {
   if (isProductVocabularyCandidate(candidate))
     return candidate.original.trim() === candidate.replacement.trim()
+
+  if (isAmbiguousSingleCharacterTerm(candidate.original))
+    return false
 
   return hasCjkText(candidate.original) && isConciseEnglishReplacement(candidate.original, candidate.replacement)
 }
@@ -509,7 +525,7 @@ function formatSelectionDetail(detail: SelectionDetailView) {
 function createCandidateFromTerm(translation: SelectionTranslation, term: { term: string, explanation: string }): VocabularyCandidate | undefined {
   const isChineseTerm = hasCjkText(term.term)
   const replacement = isChineseTerm ? translation.translation : term.term
-  if (isChineseTerm && !isConciseEnglishReplacement(term.term, replacement))
+  if (isChineseTerm && (isAmbiguousSingleCharacterTerm(term.term) || !isConciseEnglishReplacement(term.term, replacement)))
     return undefined
 
   return {
@@ -1227,35 +1243,141 @@ function getPageStyleContent(customCss = '') {
       padding: 14px;
     }
 
-    .lexi-dialog__context,
-    .lexi-dialog__answer {
+    .lexi-dialog__context {
       position: relative;
-      max-height: 150px;
+      max-height: 118px;
       overflow: auto;
       border: 1px solid rgba(203, 213, 225, 0.72);
-      background: rgba(248, 250, 252, 0.72);
+      background:
+        linear-gradient(90deg, rgba(99, 102, 241, 0.07), transparent 22%),
+        rgba(248, 250, 252, 0.72);
       padding: 11px 12px;
-      color: #525252;
+      color: #4b5563;
       font-size: 12px;
       line-height: 1.6;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
 
-    .lexi-dialog__context {
-      background:
-        linear-gradient(90deg, rgba(99, 102, 241, 0.07), transparent 22%),
-        rgba(248, 250, 252, 0.72);
-      color: #4b5563;
+    .lexi-dialog__messages {
+      display: flex;
+      max-height: min(50vh, 420px);
+      flex-direction: column;
+      gap: 10px;
+      overflow: auto;
+      padding: 2px 1px 4px;
+      scroll-behavior: smooth;
     }
 
-    .lexi-dialog__answer {
-      max-height: 220px;
-      border-color: rgba(129, 140, 248, 0.28);
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(248, 250, 252, 0.74));
-      color: #111827;
+    .lexi-dialog__bubble {
+      max-width: min(88%, 38rem);
+      border: 1px solid rgba(203, 213, 225, 0.66);
+      border-radius: 16px;
+      padding: 10px 12px;
       font-size: 13px;
+      line-height: 1.62;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      animation: lexi-dialog-bubble-enter 160ms ease-out both;
+    }
+
+    .lexi-dialog__bubble--system,
+    .lexi-dialog__bubble--assistant {
+      align-self: flex-start;
+      border-bottom-left-radius: 6px;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.78));
+      color: #111827;
+    }
+
+    .lexi-dialog__bubble--system {
+      max-width: 100%;
+      border-style: dashed;
+      background: rgba(248, 250, 252, 0.62);
+      color: #64748b;
+      font-size: 12px;
+    }
+
+    .lexi-dialog__bubble--user {
+      align-self: flex-end;
+      border-color: rgba(37, 99, 235, 0.22);
+      border-bottom-right-radius: 6px;
+      background: linear-gradient(135deg, #2563eb, #4f46e5 58%, #7c3aed);
+      color: #fff;
+    }
+
+    .lexi-dialog__bubble[data-lexi-pending="true"] {
+      background: linear-gradient(100deg, rgba(255,255,255,0.9), rgba(238,242,255,0.9), rgba(255,255,255,0.9));
+      background-size: 220% 100%;
+      color: #4f46e5;
+      animation: lexi-dialog-bubble-enter 160ms ease-out both, lexi-shimmer-surface 1000ms ease-in-out infinite;
+    }
+
+    .lexi-dialog__bubble p {
+      margin: 0.45em 0;
+    }
+
+    .lexi-dialog__bubble p:first-child {
+      margin-top: 0;
+    }
+
+    .lexi-dialog__bubble p:last-child {
+      margin-bottom: 0;
+    }
+
+    .lexi-dialog__bubble ul,
+    .lexi-dialog__bubble ol {
+      margin: 0.45em 0;
+      padding-left: 1.35em;
+    }
+
+    .lexi-dialog__bubble li {
+      margin: 0.18em 0;
+    }
+
+    .lexi-dialog__bubble code {
+      border-radius: 5px;
+      background: rgba(15, 23, 42, 0.08);
+      padding: 0.1em 0.32em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .lexi-dialog__bubble--user code {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    .lexi-dialog__bubble pre {
+      max-width: 100%;
+      overflow: auto;
+      border-radius: 10px;
+      background: rgba(15, 23, 42, 0.9);
+      color: #e5e7eb;
+      padding: 10px;
+      white-space: pre;
+    }
+
+    .lexi-dialog__bubble pre code {
+      background: transparent;
+      padding: 0;
+      color: inherit;
+    }
+
+    .lexi-dialog__bubble blockquote {
+      margin: 0.5em 0;
+      border-left: 3px solid rgba(99, 102, 241, 0.35);
+      padding-left: 0.75em;
+      color: #475569;
+    }
+
+    .lexi-dialog__bubble a {
+      color: #2563eb;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .lexi-dialog__bubble--user a {
+      color: #fff;
     }
 
     .lexi-dialog__form {
@@ -1304,6 +1426,19 @@ function getPageStyleContent(customCss = '') {
       to {
         opacity: 1;
         transform: translateX(-50%) translateY(0);
+      }
+    }
+
+    @keyframes lexi-dialog-bubble-enter {
+      from {
+        opacity: 0;
+        filter: blur(2px);
+        transform: translateY(4px) scale(0.99);
+      }
+      to {
+        opacity: 1;
+        filter: blur(0);
+        transform: translateY(0) scale(1);
       }
     }
 
@@ -2151,6 +2286,135 @@ function renderDialogContext(context: ReturnType<typeof createDialogContext>) {
   ].filter(Boolean).join('\n')
 }
 
+function escapeMarkdownHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
+function renderInlineMarkdown(value: string) {
+  const escaped = escapeMarkdownHtml(value)
+  return escaped
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    .replace(/(\*\*|__)(.+?)\1/g, '<strong>$2</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
+}
+
+function renderMarkdown(value: string) {
+  const lines = value.replace(/\r\n?/g, '\n').split('\n')
+  const html: string[] = []
+  let paragraph: string[] = []
+  let list: { ordered: boolean, items: string[] } | undefined
+  let codeLines: string[] | undefined
+  let codeLanguage = ''
+
+  const flushParagraph = () => {
+    if (!paragraph.length)
+      return
+
+    html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`)
+    paragraph = []
+  }
+  const flushList = () => {
+    if (!list)
+      return
+
+    const tag = list.ordered ? 'ol' : 'ul'
+    html.push(`<${tag}>${list.items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`)
+    list = undefined
+  }
+
+  for (const line of lines) {
+    const fenceText = line.trim()
+    if (fenceText.startsWith('```')) {
+      if (codeLines) {
+        html.push(`<pre><code${codeLanguage ? ` class="language-${escapeMarkdownHtml(codeLanguage)}"` : ''}>${escapeMarkdownHtml(codeLines.join('\n'))}</code></pre>`)
+        codeLines = undefined
+        codeLanguage = ''
+      }
+      else if (/^```[\w-]*$/.test(fenceText)) {
+        flushParagraph()
+        flushList()
+        codeLines = []
+        codeLanguage = fenceText.slice(3)
+      }
+      continue
+    }
+
+    if (codeLines) {
+      codeLines.push(line)
+      continue
+    }
+
+    const trimmed = line.trim()
+    if (!trimmed) {
+      flushParagraph()
+      flushList()
+      continue
+    }
+
+    const quote = trimmed.match(/^>\s?(.*)$/)
+    if (quote) {
+      flushParagraph()
+      flushList()
+      html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`)
+      continue
+    }
+
+    const bulletPrefix = trimmed.slice(0, 2)
+    const bulletItem = ['- ', '* ', '+ '].includes(bulletPrefix)
+      ? trimmed.slice(2).trim()
+      : ''
+    const orderedMatch = trimmed.match(/^(\d{1,3})[.)] (.*)$/)
+    if (bulletItem || orderedMatch) {
+      flushParagraph()
+      const isOrdered = Boolean(orderedMatch)
+      if (!list || list.ordered !== isOrdered) {
+        flushList()
+        list = { ordered: isOrdered, items: [] }
+      }
+      list.items.push(bulletItem || (orderedMatch?.[2] ?? '').trim())
+      continue
+    }
+
+    paragraph.push(trimmed)
+  }
+
+  if (codeLines)
+    html.push(`<pre><code${codeLanguage ? ` class="language-${escapeMarkdownHtml(codeLanguage)}"` : ''}>${escapeMarkdownHtml(codeLines.join('\n'))}</code></pre>`)
+  flushParagraph()
+  flushList()
+
+  return html.join('') || '<p></p>'
+}
+
+function appendDialogMessage(container: HTMLElement, role: DialogMessageRole, text: string, pending = false) {
+  const bubble = document.createElement('div')
+  bubble.className = `lexi-dialog__bubble lexi-dialog__bubble--${role}`
+  bubble.dataset.lexiRole = role
+  if (pending)
+    bubble.dataset.lexiPending = 'true'
+  bubble.innerHTML = renderMarkdown(text)
+  container.append(bubble)
+  container.scrollTop = container.scrollHeight
+  return bubble
+}
+
+function updateDialogMessage(bubble: HTMLElement, text: string, pending = false) {
+  bubble.innerHTML = renderMarkdown(text)
+  if (pending)
+    bubble.dataset.lexiPending = 'true'
+  else
+    delete bubble.dataset.lexiPending
+  const container = bubble.parentElement
+  if (container)
+    container.scrollTop = container.scrollHeight
+}
+
 function getDialogAnchorFromRange(range?: Range): DialogAnchor | undefined {
   if (!range)
     return undefined
@@ -2213,6 +2477,8 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   }
 
   const context = createDialogContext(lastTranslation)
+  const history: DialogHistoryMessage[] = []
+  let dialogAbortController: AbortController | undefined
   const anchor = getCurrentDialogAnchor()
   const dialog = document.createElement('section')
   const head = document.createElement('div')
@@ -2220,7 +2486,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   const close = document.createElement('button')
   const body = document.createElement('div')
   const contextBlock = document.createElement('div')
-  const answer = document.createElement('div')
+  const messages = document.createElement('div')
   const form = document.createElement('form')
   const input = document.createElement('textarea')
   const button = document.createElement('button')
@@ -2232,7 +2498,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   close.className = 'lexi-dialog__close'
   body.className = 'lexi-dialog__body'
   contextBlock.className = 'lexi-dialog__context'
-  answer.className = 'lexi-dialog__answer'
+  messages.className = 'lexi-dialog__messages'
   form.className = 'lexi-dialog__form'
   input.className = 'lexi-dialog__input'
   button.className = 'lexi-dialog__button'
@@ -2241,9 +2507,9 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   close.type = 'button'
   close.textContent = '×'
   contextBlock.textContent = renderDialogContext(context) || '当前页面暂无可用上下文。'
-  answer.textContent = context.selected
-    ? '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。'
-    : '未检测到选区。现在会基于整个页面内容回答，你可以直接提问。'
+  appendDialogMessage(messages, 'system', context.selected
+    ? '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。支持 Markdown 渲染，可连续追问。'
+    : '未检测到选区。现在会基于整个页面内容回答，你可以直接提问。支持 Markdown 渲染，可连续追问。')
   input.placeholder = context.selected ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
   input.rows = 2
   button.type = 'submit'
@@ -2261,24 +2527,34 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
     if (!question)
       return
 
-    answer.textContent = '思考中...'
+    appendDialogMessage(messages, 'user', question)
+    history.push({ role: 'user', content: question })
+    input.value = ''
+    const assistantBubble = appendDialogMessage(messages, 'assistant', '思考中...', true)
     button.setAttribute('disabled', 'true')
-    requestLexiDialogAnswer(settings, question, context, text => answer.textContent = text)
+    dialogAbortController = new AbortController()
+    requestLexiDialogAnswer(settings, question, context, text => updateDialogMessage(assistantBubble, text || '思考中...', true), history.slice(0, -1), dialogAbortController.signal)
       .then((text) => {
-        if (text)
-          answer.textContent = text
+        const answer = text || assistantBubble.textContent || ''
+        updateDialogMessage(assistantBubble, answer || '（无返回内容）')
+        if (answer)
+          history.push({ role: 'assistant', content: answer })
       })
       .catch((error) => {
-        answer.textContent = error instanceof Error ? error.message : '请求失败'
+        const message = error instanceof Error ? error.message : '请求失败'
+        updateDialogMessage(assistantBubble, message)
+        history.push({ role: 'assistant', content: message })
       })
       .finally(() => {
+        dialogAbortController = undefined
         button.removeAttribute('disabled')
+        input.focus()
       })
   })
 
   head.append(title, close)
   form.append(input, button)
-  body.append(contextBlock, form, answer)
+  body.append(contextBlock, messages, form)
   dialog.append(head, body)
   document.documentElement.appendChild(dialog)
   positionLexiDialog(dialog, anchor)
@@ -2286,6 +2562,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   window.addEventListener('resize', reposition)
   window.addEventListener('scroll', reposition, true)
   dialog.addEventListener('lexi-dialog-close', () => {
+    dialogAbortController?.abort()
     window.removeEventListener('resize', reposition)
     window.removeEventListener('scroll', reposition, true)
   }, { once: true })

@@ -3,9 +3,9 @@ import { computed, ref, watchEffect } from 'vue'
 import { defaultSettings, featureLabels, promptDefaults } from '~/logic/defaults'
 import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
-import { aiCallLogs, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
+import { aiCallLogs, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
-import type { AiProviderConfig, AiTestResult, FeatureScene, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
+import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
@@ -63,6 +63,13 @@ const githubDigestStats = computed(() => ({
   quick: githubDigestEntries.value.filter(entry => entry.quickDigest).length,
   detail: githubDigestEntries.value.filter(entry => entry.digest).length,
   bytes: estimateStorageBytes(githubDigestCache.value),
+}))
+const forumDigestEntries = computed(() => Object.entries(forumDigestCache.value)
+  .map(([key, entry]) => ({ key, ...entry }))
+  .sort((a, b) => b.updatedAt - a.updatedAt))
+const forumDigestStats = computed(() => ({
+  total: forumDigestEntries.value.length,
+  bytes: estimateStorageBytes(forumDigestCache.value),
 }))
 const filteredVocabularyRecords = computed(() => {
   const query = normalizeSearchText(vocabularySearchQuery.value)
@@ -183,6 +190,24 @@ function removeGitHubDigestCacheEntry(key: string) {
   const next = { ...githubDigestCache.value }
   delete next[key]
   githubDigestCache.value = next
+}
+
+function clearForumDigestCache() {
+  forumDigestCache.value = {}
+}
+
+function removeForumDigestCacheEntry(key: string) {
+  const next = { ...forumDigestCache.value }
+  delete next[key]
+  forumDigestCache.value = next
+}
+
+function formatForumDigestSummary(digest: ForumDigestResult) {
+  return digest.oneLine || digest.summary[0] || '暂无摘要'
+}
+
+function getForumDigestHistoryCount(entry: { history?: unknown[] }) {
+  return Array.isArray(entry.history) ? entry.history.length : 0
 }
 
 async function testScene(scene: FeatureScene) {
@@ -521,8 +546,8 @@ function removeSceneRule(index: number) {
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">快捷对话键</span>
-              <input v-model.trim="lexiSettings.ui.dialogShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="mod+k">
-              <span class="mt-1 block text-12px text-neutral-500">支持 mod+k、ctrl+k、meta+k、alt+l、shift+mod+k。无选区时会基于整页内容提问。</span>
+              <input v-model.trim="lexiSettings.ui.dialogShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="mod+shift+m">
+              <span class="mt-1 block text-12px text-neutral-500">默认 Ctrl/Command+Shift+M；支持 mod+shift+m、ctrl+shift+m、meta+shift+m、alt+l。无选区时会基于整页内容提问。</span>
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">媒体点击修饰键</span>
@@ -564,6 +589,31 @@ function removeSceneRule(index: number) {
                 </span>
                 <input v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" type="checkbox" class="h-5 w-5">
               </label>
+
+              <div class="mt-5 border-t border-neutral-200 pt-4">
+                <h4 class="text-13px font-600">
+                  Discourse / 论坛 Lexi 速读
+                </h4>
+                <p class="mt-1 text-12px leading-5 text-neutral-500">
+                  对 linux.do、idcflare.com 以及自动识别到的 Discourse 帖子，只读取主贴和前几楼做快速总结，降低 token 消耗。使用“每日推荐”AI 场景配置。
+                </p>
+                <label class="mt-3 flex items-center justify-between gap-4">
+                  <span class="text-14px font-500">显示论坛速读卡片</span>
+                  <input v-model="lexiSettings.forumDigest.enabled" type="checkbox" class="h-5 w-5">
+                </label>
+                <label class="mt-3 flex items-center justify-between gap-4">
+                  <span class="text-14px font-500">自动生成整帖总结</span>
+                  <input v-model="lexiSettings.forumDigest.autoGenerate" type="checkbox" class="h-5 w-5">
+                </label>
+                <label class="mt-3 block">
+                  <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.forumDigest.autoDelaySeconds }} 秒</span>
+                  <input v-model.number="lexiSettings.forumDigest.autoDelaySeconds" type="range" min="1" max="20" step="1" class="mt-2 w-full accent-neutral-950">
+                </label>
+                <label class="mt-3 block">
+                  <span class="text-13px font-500">缓存天数</span>
+                  <input v-model.number="lexiSettings.forumDigest.cacheDays" type="number" min="1" max="60" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
+                </label>
+              </div>
             </div>
             <label class="mt-4 block">
               <span class="text-13px font-500">自定义样式 CSS</span>
@@ -1039,50 +1089,94 @@ function removeSceneRule(index: number) {
           </div>
         </div>
 
-        <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm lg:col-span-2">
-          <div class="flex shrink-0 items-start justify-between gap-3">
-            <div>
-              <h2 class="text-16px font-600">
-                Lexi 速读缓存
-              </h2>
-              <p class="mt-1 text-12px text-neutral-500">
-                仓库级缓存 {{ githubDigestStats.total }} 个，Quick {{ githubDigestStats.quick }} 个，Detail {{ githubDigestStats.detail }} 个，占用 {{ formatBytes(githubDigestStats.bytes) }}。
-              </p>
+        <div class="grid gap-5 lg:col-span-2 lg:grid-cols-2">
+          <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+            <div class="flex shrink-0 items-start justify-between gap-3">
+              <div>
+                <h2 class="text-16px font-600">
+                  GitHub 速读缓存
+                </h2>
+                <p class="mt-1 text-12px text-neutral-500">
+                  仓库级缓存 {{ githubDigestStats.total }} 个，Quick {{ githubDigestStats.quick }} 个，Detail {{ githubDigestStats.detail }} 个，占用 {{ formatBytes(githubDigestStats.bytes) }}。
+                </p>
+              </div>
+              <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="clearGitHubDigestCache">
+                清空缓存
+              </button>
             </div>
-            <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="clearGitHubDigestCache">
-              清空缓存
-            </button>
-          </div>
-          <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <div v-for="entry in githubDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <div class="break-words text-14px font-700">
-                    {{ entry.repo || entry.key }}
+            <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              <div v-for="entry in githubDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="break-words text-14px font-700">
+                      {{ entry.repo || entry.key }}
+                    </div>
+                    <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                      {{ entry.languages?.join(' · ') || '暂无语言信息' }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }}
+                    </div>
                   </div>
-                  <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                    {{ entry.languages?.join(' · ') || '暂无语言信息' }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }}
-                  </div>
+                  <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeGitHubDigestCacheEntry(entry.key)">
+                    删除
+                  </button>
                 </div>
-                <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeGitHubDigestCacheEntry(entry.key)">
-                  删除
-                </button>
+                <div class="mt-2 flex flex-wrap gap-2 text-11px">
+                  <span class="rounded-full px-2 py-1" :class="entry.quickDigest ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'">Quick {{ entry.quickDigest ? '已缓存' : '无' }}</span>
+                  <span class="rounded-full px-2 py-1" :class="entry.digest ? 'bg-blue-50 text-blue-700' : 'bg-neutral-100 text-neutral-500'">Detail {{ entry.digest ? '已缓存' : '无' }}</span>
+                  <span v-for="topic in entry.topics?.slice(0, 5)" :key="`${entry.key}-${topic}`" class="rounded-full bg-neutral-100 px-2 py-1 text-neutral-600">{{ topic }}</span>
+                </div>
+                <p v-if="entry.quickDigest?.oneLine" class="mt-2 break-words text-12px leading-5 text-neutral-700">
+                  {{ entry.quickDigest.oneLine }}
+                </p>
+                <p v-if="entry.digest?.oneLine" class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                  详细：{{ entry.digest.oneLine }}
+                </p>
               </div>
-              <div class="mt-2 flex flex-wrap gap-2 text-11px">
-                <span class="rounded-full px-2 py-1" :class="entry.quickDigest ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'">Quick {{ entry.quickDigest ? '已缓存' : '无' }}</span>
-                <span class="rounded-full px-2 py-1" :class="entry.digest ? 'bg-blue-50 text-blue-700' : 'bg-neutral-100 text-neutral-500'">Detail {{ entry.digest ? '已缓存' : '无' }}</span>
-                <span v-for="topic in entry.topics?.slice(0, 5)" :key="`${entry.key}-${topic}`" class="rounded-full bg-neutral-100 px-2 py-1 text-neutral-600">{{ topic }}</span>
-              </div>
-              <p v-if="entry.quickDigest?.oneLine" class="mt-2 break-words text-12px leading-5 text-neutral-700">
-                {{ entry.quickDigest.oneLine }}
-              </p>
-              <p v-if="entry.digest?.oneLine" class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                详细：{{ entry.digest.oneLine }}
+              <p v-if="!githubDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                暂无 GitHub 速读缓存。打开 GitHub 仓库页并生成速读后会出现在这里。
               </p>
             </div>
-            <p v-if="!githubDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-              暂无 Lexi 速读缓存。打开 GitHub 仓库页并生成速读后会出现在这里。
-            </p>
+          </div>
+
+          <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+            <div class="flex shrink-0 items-start justify-between gap-3">
+              <div>
+                <h2 class="text-16px font-600">
+                  论坛 Lexi 速读缓存
+                </h2>
+                <p class="mt-1 text-12px text-neutral-500">
+                  帖子级缓存 {{ forumDigestStats.total }} 个，占用 {{ formatBytes(forumDigestStats.bytes) }}。
+                </p>
+              </div>
+              <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="clearForumDigestCache">
+                清空缓存
+              </button>
+            </div>
+            <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              <div v-for="entry in forumDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="break-words text-14px font-700">
+                      {{ entry.title || entry.key }}
+                    </div>
+                    <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                      {{ entry.host }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }} · 历史 {{ getForumDigestHistoryCount(entry) }}
+                    </div>
+                  </div>
+                  <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeForumDigestCacheEntry(entry.key)">
+                    删除
+                  </button>
+                </div>
+                <p class="mt-2 break-words text-12px leading-5 text-neutral-700">
+                  {{ formatForumDigestSummary(entry.digest) }}
+                </p>
+                <a :href="entry.url" target="_blank" rel="noreferrer" class="mt-2 inline-block break-all text-12px text-neutral-500 underline underline-offset-2 hover:text-neutral-950">
+                  {{ entry.url }}
+                </a>
+              </div>
+              <p v-if="!forumDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                暂无论坛速读缓存。打开 linux.do、idcflare.com 或 Discourse 帖子后会出现在这里。
+              </p>
+            </div>
           </div>
         </div>
       </section>

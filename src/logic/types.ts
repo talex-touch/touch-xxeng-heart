@@ -194,6 +194,13 @@ export interface GitHubDigestSettings {
   cacheDays: number
 }
 
+export interface ForumDigestSettings {
+  enabled: boolean
+  autoGenerate: boolean
+  autoDelaySeconds: number
+  cacheDays: number
+}
+
 export interface GitHubDigestResult {
   oneLine: string
   details?: string
@@ -218,6 +225,45 @@ export interface GitHubDigestCacheEntry {
 
 export type GitHubDigestCache = Record<string, GitHubDigestCacheEntry>
 
+export interface ForumDigestInfo {
+  key: string
+  host: string
+  title: string
+  author?: string
+  category?: string
+  tags: string[]
+  posts: string[]
+  pageText: string
+  url: string
+  sourceHash: string
+}
+
+export interface ForumDigestResult {
+  oneLine: string
+  summary: string[]
+  keyPoints: string[]
+  terms: string[]
+  sentiment?: string
+}
+
+export interface ForumDigestCacheVersion {
+  sourceHash: string
+  digest: ForumDigestResult
+  createdAt: number
+}
+
+export interface ForumDigestCacheEntry {
+  host: string
+  title: string
+  url: string
+  digest: ForumDigestResult
+  sourceHash: string
+  updatedAt: number
+  history: ForumDigestCacheVersion[]
+}
+
+export type ForumDigestCache = Record<string, ForumDigestCacheEntry>
+
 export interface LexiSettings {
   siteRules: SiteRules
   replacement: ReplacementSettings
@@ -226,6 +272,7 @@ export interface LexiSettings {
   history: HistorySettings
   ui: UiSettings
   githubDigest: GitHubDigestSettings
+  forumDigest: ForumDigestSettings
   ai: AiSettings
 }
 

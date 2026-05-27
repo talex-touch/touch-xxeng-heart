@@ -1,3 +1,4 @@
+import { startForumDigest } from './forumDigest'
 import { startGitHubDigest } from './githubDigest'
 import { startPageEnhancer } from './pageEnhancer'
 import type { PageStats } from './pageEnhancer'
@@ -24,6 +25,7 @@ export function ensurePageEnhancer() {
     },
   })
   startGitHubDigest()
+  startForumDigest()
 }
 
 export function subscribePageStats(listener: (stats: PageStats) => void) {

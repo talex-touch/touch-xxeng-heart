@@ -11,6 +11,7 @@ export const promptDefaults: Record<FeatureScene, string> = {
     '从网页文本中提取少量适合程序员英语学习的词库项。',
     '中文技术词给出自然英文替换词。',
     '产品、品牌、模型、平台、库、框架、CLI 或服务名（如 Codex、ChatGPT、Claude、GitHub Actions、Vite、React、Next.js）只记录知识，不翻译不改名；这类条目的 original 和 replacement 都使用页面里的原始名称，并在 tags 中加入 product。',
+    '不要提取或替换单个汉字/单字词，避免页面中出现歧义；中文术语至少 2 个汉字。',
     '普通技术词在 tags 中加入 technical。',
     'meaning 用中文优先，必要时补一句英文解释，方便中英对照。',
     '只返回 JSON：{"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}]}。',
@@ -98,7 +99,7 @@ export const defaultSettings: LexiSettings = {
         id: 'discourse',
         label: 'Discourse 论坛',
         kind: 'forum-feed',
-        domains: ['discourse.org'],
+        domains: ['discourse.org', 'linux.do', 'idcflare.com'],
         enabled: true,
         replacement: true,
         selection: true,
@@ -162,7 +163,7 @@ export const defaultSettings: LexiSettings = {
   },
   ui: {
     showFloatingStatus: false,
-    dialogShortcut: 'mod+k',
+    dialogShortcut: 'mod+shift+m',
     mediaModifierShortcut: 'meta+shift',
     customCss: '',
   },
@@ -171,6 +172,12 @@ export const defaultSettings: LexiSettings = {
     autoGenerate: true,
     autoDelaySeconds: 18,
     allowPrivateAutoGenerate: false,
+    cacheDays: 7,
+  },
+  forumDigest: {
+    enabled: true,
+    autoGenerate: true,
+    autoDelaySeconds: 4,
     cacheDays: 7,
   },
   ai: {
@@ -202,6 +209,9 @@ function normalizeProviders(value?: Partial<LexiSettings>): AiProviderConfig[] {
 
 export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
   const providers = normalizeProviders(value)
+  const uiDialogShortcut = !value?.ui?.dialogShortcut || value.ui.dialogShortcut === 'mod+k'
+    ? defaultSettings.ui.dialogShortcut
+    : value.ui.dialogShortcut
 
   return {
     ...defaultSettings,
@@ -236,10 +246,15 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
     ui: {
       ...defaultSettings.ui,
       ...value?.ui,
+      dialogShortcut: uiDialogShortcut,
     },
     githubDigest: {
       ...defaultSettings.githubDigest,
       ...value?.githubDigest,
+    },
+    forumDigest: {
+      ...defaultSettings.forumDigest,
+      ...value?.forumDigest,
     },
     ai: {
       global: {

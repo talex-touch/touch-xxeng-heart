@@ -3,6 +3,7 @@ import { onMessage, sendMessage } from 'webext-bridge/content-script'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
+import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import type { SiteDetectionHints } from '~/logic/siteRules'
 import { pageTranslationActivationsStorageKey, pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
@@ -259,10 +260,22 @@ function getCandidateRecord(index: ReplacementRecordIndex, candidate: Vocabulary
   return index.byId.get(id) ?? index.byOriginal.get(candidate.original)
 }
 
-function createReplacementCandidatePool(settings: LexiSettings, records: VocabularyRecord[]) {
+function createReplacementCandidatePool(settings: LexiSettings, records: VocabularyRecord[], conservative = false) {
   const maxDifficulty = settings.replacement.difficulty
-  const local = programmerVocabulary.filter(item => item.difficulty <= maxDifficulty)
-  const recorded = records.filter(record => record.difficulty <= maxDifficulty || isProductVocabularyCandidate(record))
+  const minDifficulty = conservative ? Math.min(2, maxDifficulty) : 1
+  const filterCandidate = (candidate: VocabularyCandidate) => {
+    if (isProductVocabularyCandidate(candidate))
+      return true
+
+    if (conservative && isLowValueShortChineseCandidate(candidate))
+      return false
+
+    return candidate.difficulty >= minDifficulty
+      && candidate.difficulty <= maxDifficulty
+      && canAutoReplaceCandidate(candidate)
+  }
+  const local = programmerVocabulary.filter(filterCandidate)
+  const recorded = records.filter(filterCandidate)
   return dedupeReplacementCandidates([...local, ...recorded])
 }
 
@@ -403,42 +416,6 @@ function candidateExists(records: VocabularyRecord[], candidate: VocabularyCandi
   return records.some(record => record.id === id)
 }
 
-function hasCjkText(text: string) {
-  return /[\u3400-\u9FFF]/.test(text)
-}
-
-function countCjkCharacters(text: string) {
-  return Array.from(text).filter(char => /[\u3400-\u9FFF]/.test(char)).length
-}
-
-function isAmbiguousSingleCharacterTerm(text: string) {
-  const normalized = text.replace(/\s+/g, '').trim()
-  return normalized.length === 1 && hasCjkText(normalized)
-}
-
-function isConciseEnglishReplacement(original: string, replacement: string) {
-  const normalized = replacement.replace(/\s+/g, ' ').trim()
-  if (!normalized || hasCjkText(normalized))
-    return false
-
-  if (/Selected on page|[。！？；]/i.test(normalized))
-    return false
-
-  const maxLength = Math.max(32, countCjkCharacters(original) * 8)
-  const wordCount = normalized.split(/[\s/]+/).filter(Boolean).length
-  return normalized.length <= maxLength && wordCount <= 6
-}
-
-function canAutoReplaceCandidate(candidate: VocabularyCandidate) {
-  if (isProductVocabularyCandidate(candidate))
-    return candidate.original.trim() === candidate.replacement.trim()
-
-  if (isAmbiguousSingleCharacterTerm(candidate.original))
-    return false
-
-  return hasCjkText(candidate.original) && isConciseEnglishReplacement(candidate.original, candidate.replacement)
-}
-
 function collectReplacementSeed(seeds: ReplacementSeed[], text: string, context: string) {
   const normalized = normalizeReplacementSeed(text)
   if (seeds.length >= maxAiReplacementSeedsPerPage || normalized.length < 24)
@@ -453,17 +430,6 @@ function collectReplacementSeed(seeds: ReplacementSeed[], text: string, context:
     text: normalized,
     context,
   })
-}
-
-function createManualCandidate(translation: SelectionTranslation): VocabularyCandidate {
-  return translation.candidate ?? {
-    original: translation.original,
-    replacement: translation.translation,
-    meaning: translation.explanation,
-    example: `Selected on page: ${translation.original}`,
-    tags: ['manual'],
-    difficulty: 2,
-  }
 }
 
 function normalizeTerm(value: unknown) {
@@ -520,22 +486,6 @@ function formatSelectionDetail(detail: SelectionDetailView) {
   ].filter(Boolean)
 
   return lines.join('\n')
-}
-
-function createCandidateFromTerm(translation: SelectionTranslation, term: { term: string, explanation: string }): VocabularyCandidate | undefined {
-  const isChineseTerm = hasCjkText(term.term)
-  const replacement = isChineseTerm ? translation.translation : term.term
-  if (isChineseTerm && (isAmbiguousSingleCharacterTerm(term.term) || !isConciseEnglishReplacement(term.term, replacement)))
-    return undefined
-
-  return {
-    original: isChineseTerm ? term.term : translation.original,
-    replacement,
-    meaning: term.explanation,
-    example: `Selected on page: ${translation.original}`,
-    tags: ['technical', 'selection'],
-    difficulty: 2,
-  }
 }
 
 function formatCandidateMeaning(candidate: VocabularyCandidate) {
@@ -1623,6 +1573,7 @@ function getReplacementBudget(settings: LexiSettings, hints = detectSpecialSiteH
     maxPerPage: Math.max(0, maxPerPage),
     density: Math.max(0, density),
     dynamicScan: Boolean(profile?.dynamicScan),
+    conservative: Boolean(profile?.conservative),
   }
 }
 
@@ -2784,21 +2735,7 @@ async function translateSelection(
 }
 
 function looksTechnicalTerm(text: string) {
-  const trimmed = text.trim()
-  return /^[A-Z][A-Z0-9-]+$/.test(trimmed)
-    || /^[a-z][a-z0-9-]{1,24}$/i.test(trimmed)
-    || /[A-Z][a-z]+[A-Z]/.test(trimmed)
-}
-
-function createTechnicalCandidate(translation: SelectionTranslation, explanation: string): VocabularyCandidate {
-  return translation.candidate ?? {
-    original: translation.original,
-    replacement: translation.translation,
-    meaning: explanation || translation.explanation,
-    example: `Selected on page: ${translation.original}`,
-    tags: ['technical', 'manual'],
-    difficulty: 2,
-  }
+  return isLikelyTechnicalSelectionTerm(text)
 }
 
 export function startPageEnhancer(events: EnhancerEvents) {
@@ -2896,8 +2833,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     let nextRecords = records
     const aiReplacementSeeds: ReplacementSeed[] = []
     const recordIndex = createReplacementRecordIndex(records)
-    const candidatePool = createReplacementCandidatePool(settings, records)
-      .filter(canAutoReplaceCandidate)
+    const candidatePool = createReplacementCandidatePool(settings, records, budget.conservative)
     const replacementPlans: ReplacementNodePlan[] = []
 
     for (const node of textNodes) {
@@ -3541,7 +3477,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!settings.history.enabled)
       return
 
-    const validDetailCandidate = detailCandidate && canAutoReplaceCandidate(detailCandidate)
+    const validDetailCandidate = detailCandidate && shouldRecordSelectionCandidate(detailCandidate, selected)
       ? detailCandidate
       : undefined
     const termCandidates = detailView.terms
@@ -3550,6 +3486,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const candidate = validDetailCandidate
       ?? termCandidates[0]
       ?? (looksTechnicalTerm(selected) ? createTechnicalCandidate(translation, detailText) : createManualCandidate(translation))
+    if (!candidate)
+      return
+
     let nextRecords = upsertVocabularyRecord(records, {
       candidate,
       source: 'manual',

@@ -1,6 +1,7 @@
 import browser from 'webextension-polyfill'
 import { requestForumDigest } from '~/logic/aiClient'
 import { mergeSettings } from '~/logic/defaults'
+import { createForumDigestCacheEntry, getCachedForumDigestEntry, getForumDigestVersion, shouldAutoGenerateForumDigest } from '~/logic/forumDigestCache'
 import { forumDigestStorageKey, settingsStorageKey } from '~/logic/storageKeys'
 import type { ForumDigestCache, ForumDigestCacheEntry, ForumDigestInfo, ForumDigestResult, LexiSettings } from '~/logic/types'
 
@@ -220,7 +221,7 @@ function getDigestBody(digest: ForumDigestResult, options: { cached?: boolean, s
       <button data-lexi-forum-action="collapse">收起</button>
     </div>
     ${options.cached ? '<p class="lexi-forum-digest__hint">来自本地缓存</p>' : ''}
-    ${options.stale ? '<p class="lexi-forum-digest__hint">检测到主贴/前几楼有变化，自动生成开启时会刷新；也可手动点击生成。</p>' : ''}
+    ${options.stale ? '<p class="lexi-forum-digest__hint">检测到主贴/前几楼有变化，已优先保留本地缓存；需要更新时可手动点击生成。</p>' : ''}
   `
 }
 
@@ -231,27 +232,6 @@ function formatVersionTime(value: number) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
-}
-
-function normalizeCacheHistory(entry: ForumDigestCacheEntry | undefined) {
-  if (!entry)
-    return []
-
-  const history = Array.isArray(entry.history)
-    ? entry.history.filter(item => item?.sourceHash && item.digest)
-    : []
-  const hasCurrent = history.some(item => item.sourceHash === entry.sourceHash)
-  if (!hasCurrent && entry.digest && entry.sourceHash) {
-    history.unshift({
-      sourceHash: entry.sourceHash,
-      digest: entry.digest,
-      createdAt: entry.updatedAt,
-    })
-  }
-
-  return history
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 8)
 }
 
 function getHistorySwitcher(state: ForumDigestCardState) {
@@ -434,41 +414,16 @@ function removeCard() {
 }
 
 function getCachedEntry(cache: ForumDigestCache, info: ForumDigestInfo, settings: LexiSettings) {
-  const entry = cache[info.key]
-  if (!entry)
-    return undefined
-
-  const ttl = Math.max(1, settings.forumDigest.cacheDays) * 24 * 60 * 60 * 1000
-  if (Date.now() - entry.updatedAt > ttl)
-    return undefined
-
-  return {
-    ...entry,
-    history: normalizeCacheHistory(entry),
-  }
+  return getCachedForumDigestEntry(cache, info.key, settings.forumDigest.cacheDays)
 }
 
 function createCacheEntry(info: ForumDigestInfo, digest: ForumDigestResult, current?: ForumDigestCacheEntry): ForumDigestCacheEntry {
-  const createdAt = Date.now()
-  const nextVersion = {
-    sourceHash: info.sourceHash,
-    digest,
-    createdAt,
-  }
-  const history = [
-    nextVersion,
-    ...normalizeCacheHistory(current).filter(item => item.sourceHash !== info.sourceHash),
-  ].slice(0, 8)
-
-  return {
+  return createForumDigestCacheEntry({
     host: info.host,
     title: info.title,
     url: info.url,
-    digest,
     sourceHash: info.sourceHash,
-    updatedAt: createdAt,
-    history,
-  }
+  }, digest, current)
 }
 
 async function generateDigest(force = false) {
@@ -480,13 +435,14 @@ async function generateDigest(force = false) {
   if (!settings.forumDigest.enabled)
     return
 
+  const requestInfo = { ...state.info, posts: [...state.info.posts], tags: [...state.info.tags] }
   const cache = await getDigestCache()
-  const cachedEntry = getCachedEntry(cache, state.info, settings)
-  const cached = !force && cachedEntry?.history.find(item => item.sourceHash === state.info.sourceHash)?.digest
+  const cachedEntry = getCachedEntry(cache, requestInfo, settings)
+  const cached = !force && getForumDigestVersion(cachedEntry, requestInfo.sourceHash)?.digest
   if (cached && cachedEntry) {
     state.digest = cached
     state.history = cachedEntry.history
-    state.selectedHistoryIndex = cachedEntry.history.findIndex(item => item.sourceHash === state.info.sourceHash)
+    state.selectedHistoryIndex = cachedEntry.history.findIndex(item => item.sourceHash === requestInfo.sourceHash)
     state.cached = true
     state.status = 'ready'
     renderCard()
@@ -498,22 +454,35 @@ async function generateDigest(force = false) {
   renderCard()
 
   try {
-    const digest = await withTimeout(requestForumDigest(settings, state.info), 30000, '论坛速读生成超时，请稍后重试或检查 AI 后端。')
+    const digest = await withTimeout(requestForumDigest(settings, requestInfo), 30000, '论坛速读生成超时，请稍后重试或检查 AI 后端。')
     if (!digest)
       throw new Error('AI 未返回有效论坛速读。请确认每日推荐 AI 场景已配置。')
 
-    const entry = createCacheEntry(state.info, digest, cachedEntry ?? cache[state.info.key])
-    cache[state.info.key] = entry
+    const entry = createCacheEntry(requestInfo, digest, cachedEntry ?? cache[requestInfo.key])
+    cache[requestInfo.key] = entry
     await saveDigestCache(cache)
-    state.digest = digest
-    state.history = entry.history
-    state.selectedHistoryIndex = 0
-    state.cached = false
-    state.status = 'ready'
+    if (cardState === state && state.info.key === requestInfo.key && state.info.sourceHash === requestInfo.sourceHash) {
+      state.digest = digest
+      state.history = entry.history
+      state.selectedHistoryIndex = 0
+      state.cached = false
+      state.status = 'ready'
+    }
+    else if (cardState === state && state.info.key === requestInfo.key) {
+      state.digest = getForumDigestVersion(entry, state.info.sourceHash)?.digest ?? entry.history[0]?.digest
+      state.history = entry.history
+      state.selectedHistoryIndex = state.history.findIndex(item => item.digest === state.digest)
+      state.cached = true
+      state.status = 'ready'
+    }
   }
   catch (error) {
-    state.status = 'error'
-    state.error = error instanceof Error ? error.message : '生成失败'
+    if (cardState === state && state.info.key === requestInfo.key) {
+      state.status = state.info.sourceHash === requestInfo.sourceHash ? 'error' : 'ready'
+      state.error = state.status === 'error'
+        ? error instanceof Error ? error.message : '生成失败'
+        : undefined
+    }
   }
   finally {
     renderCard()
@@ -595,7 +564,7 @@ async function scheduleAutoGenerate(_info: ForumDigestInfo) {
 
   const delay = Math.max(300, settings.forumDigest.autoDelaySeconds * 1000)
   autoTimer = window.setTimeout(() => {
-    void generateDigest(true)
+    void generateDigest(false)
   }, delay)
 }
 
@@ -620,8 +589,10 @@ async function refresh() {
 
   const cache = await getDigestCache()
   const cached = getCachedEntry(cache, info, settings)
-  const currentVersionIndex = cached?.history.findIndex(item => item.sourceHash === info.sourceHash) ?? -1
-  const currentVersion = currentVersionIndex >= 0 ? cached?.history[currentVersionIndex] : undefined
+  const currentVersion = getForumDigestVersion(cached, info.sourceHash)
+  const currentVersionIndex = currentVersion
+    ? cached?.history.findIndex(item => item.sourceHash === info.sourceHash) ?? -1
+    : -1
 
   if (cardState?.info.key === info.key) {
     const changed = cardState.info.sourceHash !== info.sourceHash
@@ -634,7 +605,7 @@ async function refresh() {
       }
     }
     renderCard()
-    if (changed && !currentVersion)
+    if (changed && shouldAutoGenerateForumDigest(cached))
       await scheduleAutoGenerate(info)
     return
   }
@@ -647,7 +618,7 @@ async function refresh() {
     cardState.cached = Boolean(currentVersion)
     cardState.status = 'ready'
     renderCard()
-    if (!currentVersion)
+    if (shouldAutoGenerateForumDigest(cached))
       await scheduleAutoGenerate(info)
   }
   else {

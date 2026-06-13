@@ -192,6 +192,70 @@ function collectForumInfo(): ForumDigestInfo | undefined {
   }
 }
 
+function isUsableSidebarTarget(element: HTMLElement) {
+  const rect = element.getBoundingClientRect()
+  return rect.width >= 100 && rect.right > window.innerWidth * 0.5
+}
+
+function findDiscourseSidebarPlacement() {
+  const navigation = document.querySelector<HTMLElement>('.topic-navigation')
+  if (navigation && isUsableSidebarTarget(navigation)) {
+    const before = navigation.querySelector<HTMLElement>('#topic-progress-wrapper, .topic-progress-wrapper, .timeline-container, .topic-timeline')
+    return { parent: navigation, before }
+  }
+
+  const selectors = [
+    '#topic-progress-wrapper',
+    '.topic-progress-wrapper',
+    '.timeline-container',
+    '.topic-timeline',
+  ]
+
+  for (const selector of selectors) {
+    const element = document.querySelector<HTMLElement>(selector)
+    const parent = element?.parentElement
+    if (element && parent && parent !== document.body && isUsableSidebarTarget(parent))
+      return { parent, before: element }
+  }
+
+  return undefined
+}
+
+function removeSidebarMount() {
+  document.querySelector<HTMLElement>('[data-lexi-forum-digest-mount="true"]')?.remove()
+}
+
+function getSidebarMount() {
+  const placement = findDiscourseSidebarPlacement()
+  const existing = document.querySelector<HTMLElement>('[data-lexi-forum-digest-mount="true"]')
+  if (!placement) {
+    existing?.remove()
+    return undefined
+  }
+
+  if (existing?.parentElement === placement.parent) {
+    if (placement.before && existing.nextElementSibling !== placement.before)
+      placement.parent.insertBefore(existing, placement.before)
+    return existing
+  }
+
+  existing?.remove()
+  const mount = document.createElement('div')
+  mount.className = 'lexi-forum-digest-mount'
+  mount.dataset.lexiForumDigestMount = 'true'
+  placement.parent.insertBefore(mount, placement.before ?? null)
+  return mount
+}
+
+function placeCard(element: HTMLElement) {
+  const mount = getSidebarMount()
+  const parent = mount ?? document.body
+  if (element.parentElement !== parent)
+    parent.append(element)
+
+  element.dataset.lexiPlacement = mount ? 'sidebar' : 'fixed'
+}
+
 function createList(items: string[], emptyText: string) {
   if (!items.length)
     return `<p class="lexi-forum-digest__muted">${escapeHtml(emptyText)}</p>`
@@ -317,6 +381,8 @@ function renderCard() {
       ? `${getDigestBody(activeDigest ?? getFallbackDigest(info), { cached, stale: stale || showingHistoricalVersion })}${getHistorySwitcher(cardState)}`
       : `<p class="lexi-forum-digest__desc lexi-forum-digest__error">${escapeHtml(error || '生成失败')}</p><div class="lexi-forum-digest__actions"><button data-lexi-forum-action="generate">重试</button><button data-lexi-forum-action="hide">关闭</button></div>`
 
+  placeCard(element)
+
   const html = `
     <button class="lexi-forum-digest__collapsed-toggle" type="button" data-lexi-forum-action="expand" aria-label="展开 Lexi 速读">
       <span>Lexi 速读</span>
@@ -350,9 +416,12 @@ function ensureStyles() {
   const style = document.createElement('style')
   style.id = 'lexi-forum-digest-style'
   style.textContent = `
+    .lexi-forum-digest-mount { width: 100%; margin: 14px 0; }
     .lexi-forum-digest { box-sizing: border-box; position: fixed; right: 18px; top: 96px; z-index: 2147483646; width: min(360px, calc(100vw - 36px)); max-height: min(72vh, 720px); overflow: auto; border: 1px solid rgba(129,140,248,.32); border-radius: 14px; background: linear-gradient(135deg, rgba(255,255,255,.96), rgba(248,250,252,.9)); box-shadow: 0 18px 50px rgba(15,23,42,.18), 0 0 0 1px rgba(255,255,255,.64) inset; backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); color: #111827; padding: 13px; font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .lexi-forum-digest *, .lexi-forum-digest *::before, .lexi-forum-digest *::after { box-sizing: border-box; }
+    .lexi-forum-digest[data-lexi-placement="sidebar"] { position: static; right: auto; top: auto; z-index: auto; width: 100%; min-width: 0; max-height: min(58vh, 520px); border-radius: 12px; padding: 11px; box-shadow: 0 12px 32px rgba(15,23,42,.12), 0 0 0 1px rgba(255,255,255,.62) inset; }
     .lexi-forum-digest--collapsed { width: 142px; min-height: 0; overflow: hidden; border-radius: 999px; padding: 9px 10px; }
+    .lexi-forum-digest[data-lexi-placement="sidebar"].lexi-forum-digest--collapsed { width: 100%; border-radius: 12px; padding: 8px 9px; }
     .lexi-forum-digest__collapsed-toggle { display: none; width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
     .lexi-forum-digest--collapsed .lexi-forum-digest__collapsed-toggle { display: block; }
     .lexi-forum-digest--collapsed .lexi-forum-digest__content { display: none; }
@@ -360,8 +429,10 @@ function ensureStyles() {
     .lexi-forum-digest__collapsed-toggle strong { display: block; overflow: hidden; margin-top: 1px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .lexi-forum-digest__content { animation: lexi-forum-digest-enter 260ms cubic-bezier(.2,.9,.2,1) both; }
     .lexi-forum-digest__head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+    .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__head { gap: 6px; }
     .lexi-forum-digest__eyebrow { color: #4f46e5; font-size: 11px; font-weight: 800; letter-spacing: .02em; }
     .lexi-forum-digest__title { margin-top: 1px; font-size: 15px; font-weight: 800; }
+    .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__title { font-size: 14px; }
     .lexi-forum-digest__status { border-radius: 999px; background: rgba(79,70,229,.1); color: #4f46e5; padding: 2px 7px; font-size: 11px; white-space: nowrap; }
     .lexi-forum-digest__status--error { background: rgba(254,242,242,.9); color: #dc2626; }
     .lexi-forum-digest__status--stale { background: rgba(251,191,36,.16); color: #b45309; }
@@ -375,7 +446,9 @@ function ensureStyles() {
     .lexi-forum-digest li { margin: 3px 0; color: #475569; }
     .lexi-forum-digest__terms, .lexi-forum-digest__hint, .lexi-forum-digest__muted { margin: 10px 0 0; color: #64748b; font-size: 12px; }
     .lexi-forum-digest__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__actions { gap: 6px; }
     .lexi-forum-digest__actions button { border: 1px solid rgba(203,213,225,.9); border-radius: 999px; background: #fff; color: #111827; cursor: pointer; font: 12px/1 ui-sans-serif, system-ui, sans-serif; padding: 7px 10px; }
+    .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__actions button { font-size: 11px; padding: 6px 8px; }
     .lexi-forum-digest__actions button:first-child { border-color: #312e81; background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7); color: #fff; }
     .lexi-forum-digest__versions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; border-top: 1px solid rgba(226,232,240,.8); padding-top: 10px; }
     .lexi-forum-digest__versions span { width: 100%; color: #64748b; font-size: 11px; font-weight: 700; }
@@ -402,7 +475,7 @@ function mountCard(info: ForumDigestInfo) {
   element.dataset.lexiForumDigest = 'true'
   cardState = { element, info, status: 'ready', collapsed: false, history: [], selectedHistoryIndex: -1 }
   element.addEventListener('click', onCardClick)
-  document.body.append(element)
+  placeCard(element)
   renderCard()
 }
 
@@ -410,6 +483,7 @@ function removeCard() {
   window.clearTimeout(autoTimer)
   cardState?.element.removeEventListener('click', onCardClick)
   cardState?.element.remove()
+  removeSidebarMount()
   cardState = undefined
 }
 

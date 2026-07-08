@@ -39,6 +39,11 @@ let mutationTimer: number | undefined
 let autoTimer: number | undefined
 let lastUrl = ''
 let disposed = false
+let stopGitHubDigest: (() => void) | undefined
+
+function isExtensionContextInvalidated(error: unknown) {
+  return error instanceof Error && /Extension context invalidated/i.test(error.message)
+}
 
 function isGitHubRepoPage() {
   if (location.hostname !== 'github.com')
@@ -708,7 +713,14 @@ async function scheduleAutoGenerate(info: GitHubRepoInfo) {
 
   const delay = Math.max(1200, settings.githubDigest.autoDelaySeconds * 1000)
   autoTimer = window.setTimeout(() => {
-    void generateDetailDigest(false)
+    void generateDetailDigest(false).catch((error) => {
+      if (isExtensionContextInvalidated(error)) {
+        stopGitHubDigest?.()
+        return
+      }
+
+      console.warn('[Lexi] GitHub Digest auto generate failed', error)
+    })
   }, delay)
 }
 
@@ -775,7 +787,14 @@ function checkRoute() {
 
   lastUrl = location.href
   window.setTimeout(() => {
-    refresh().catch(error => console.warn('[Lexi] GitHub Digest refresh failed', error))
+    refresh().catch((error) => {
+      if (isExtensionContextInvalidated(error)) {
+        stopGitHubDigest?.()
+        return
+      }
+
+      console.warn('[Lexi] GitHub Digest refresh failed', error)
+    })
   }, 700)
 }
 
@@ -798,24 +817,10 @@ export function startGitHubDigest() {
   if (location.hostname !== 'github.com')
     return () => {}
 
-  disposed = false
-  lastUrl = location.href
-  refresh().catch(error => console.warn('[Lexi] GitHub Digest init failed', error))
-  routeInterval = window.setInterval(checkRoute, 1000)
-  document.addEventListener('visibilitychange', onVisibilityChange)
-  window.addEventListener('scroll', onScroll, { passive: true })
-
-  const observer = new MutationObserver(() => {
-    window.clearTimeout(mutationTimer)
-    mutationTimer = window.setTimeout(() => {
-      refresh().catch(error => console.warn('[Lexi] GitHub Digest mutation refresh failed', error))
-    }, 900)
-  })
-  observer.observe(document.body, { childList: true, subtree: true })
-
-  return () => {
+  let observer: MutationObserver | undefined
+  const stop = () => {
     disposed = true
-    observer.disconnect()
+    observer?.disconnect()
     window.clearInterval(routeInterval)
     window.clearTimeout(mutationTimer)
     window.clearTimeout(autoTimer)
@@ -823,4 +828,30 @@ export function startGitHubDigest() {
     window.removeEventListener('scroll', onScroll)
     removeCard()
   }
+  const handleRefreshError = (message: string, error: unknown) => {
+    if (isExtensionContextInvalidated(error)) {
+      stop()
+      return
+    }
+
+    console.warn(message, error)
+  }
+  stopGitHubDigest = stop
+
+  disposed = false
+  lastUrl = location.href
+  refresh().catch(error => handleRefreshError('[Lexi] GitHub Digest init failed', error))
+  routeInterval = window.setInterval(checkRoute, 1000)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  window.addEventListener('scroll', onScroll, { passive: true })
+
+  observer = new MutationObserver(() => {
+    window.clearTimeout(mutationTimer)
+    mutationTimer = window.setTimeout(() => {
+      refresh().catch(error => handleRefreshError('[Lexi] GitHub Digest mutation refresh failed', error))
+    }, 900)
+  })
+  observer.observe(document.body, { childList: true, subtree: true })
+
+  return stop
 }

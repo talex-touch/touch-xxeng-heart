@@ -70,6 +70,10 @@ const ignoredSelectors = [
   '[data-lexi-forum-digest]',
 ]
 
+function isExtensionContextInvalidated(error: unknown) {
+  return error instanceof Error && /Extension context invalidated/i.test(error.message)
+}
+
 const blockSelectors = [
   'p',
   'li',
@@ -3852,51 +3856,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       refreshStats()
   }
 
-  browser.storage.local.get(settingsStorageKey).then((stored) => {
-    if (!stored[settingsStorageKey])
-      browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
-  })
-
-  run()
-  restoreSavedPageTranslation().catch(error => console.warn('[Lexi] restore page translation failed', error))
-  document.addEventListener('pointerdown', onPointerDown, true)
-  document.addEventListener('click', onMediaClickCapture, true)
-  document.addEventListener('auxclick', onMediaClickCapture, true)
-  document.addEventListener('mouseup', onMouseUp)
-  document.addEventListener('pointerup', onPointerUp)
-  window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })
-  window.addEventListener('mouseup', onMouseUp, true)
-  window.addEventListener('pointerup', onPointerUp, true)
-  document.addEventListener('keyup', onKeyUp)
-  document.addEventListener('selectionchange', onSelectionChange)
-  document.addEventListener('keydown', onKeyDown)
-  document.addEventListener('keydown', onEscape)
-  window.addEventListener('resize', onPageScroll)
-  document.addEventListener('pointerover', onPointerOver, true)
-  document.addEventListener('pointermove', onPointerMove, true)
-  document.addEventListener('pointerout', onPointerOut, true)
-  document.addEventListener('mouseover', onPointerOver, true)
-  document.addEventListener('mousemove', onPointerMove, true)
-  document.addEventListener('mouseout', onPointerOut, true)
-  browser.storage.onChanged.addListener(onStorageChanged)
-
-  void getStoredState().then(({ settings }) => {
-    if (!getReplacementBudget(settings, detectSpecialSiteHints()).dynamicScan)
-      return
-
-    dynamicObserver = new MutationObserver(() => {
-      window.clearTimeout(dynamicTimer)
-      dynamicTimer = window.setTimeout(() => {
-        run().catch(error => console.warn('[Lexi] dynamic scan failed', error))
-      }, 900)
-    })
-    dynamicObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-  })
-
-  return () => {
+  const stop = () => {
     disposed = true
     dynamicObserver?.disconnect()
     pageTranslationObserver?.disconnect()
@@ -3932,4 +3892,59 @@ export function startPageEnhancer(events: EnhancerEvents) {
     dialog?.remove()
     closeMediaToolbar()
   }
+
+  const handleDynamicScanError = (error: unknown) => {
+    if (isExtensionContextInvalidated(error)) {
+      stop()
+      return
+    }
+
+    console.warn('[Lexi] dynamic scan failed', error)
+  }
+
+  browser.storage.local.get(settingsStorageKey).then((stored) => {
+    if (!stored[settingsStorageKey])
+      browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
+  })
+
+  run()
+  restoreSavedPageTranslation().catch(error => console.warn('[Lexi] restore page translation failed', error))
+  document.addEventListener('pointerdown', onPointerDown, true)
+  document.addEventListener('click', onMediaClickCapture, true)
+  document.addEventListener('auxclick', onMediaClickCapture, true)
+  document.addEventListener('mouseup', onMouseUp)
+  document.addEventListener('pointerup', onPointerUp)
+  window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })
+  window.addEventListener('mouseup', onMouseUp, true)
+  window.addEventListener('pointerup', onPointerUp, true)
+  document.addEventListener('keyup', onKeyUp)
+  document.addEventListener('selectionchange', onSelectionChange)
+  document.addEventListener('keydown', onKeyDown)
+  document.addEventListener('keydown', onEscape)
+  window.addEventListener('resize', onPageScroll)
+  document.addEventListener('pointerover', onPointerOver, true)
+  document.addEventListener('pointermove', onPointerMove, true)
+  document.addEventListener('pointerout', onPointerOut, true)
+  document.addEventListener('mouseover', onPointerOver, true)
+  document.addEventListener('mousemove', onPointerMove, true)
+  document.addEventListener('mouseout', onPointerOut, true)
+  browser.storage.onChanged.addListener(onStorageChanged)
+
+  void getStoredState().then(({ settings }) => {
+    if (!getReplacementBudget(settings, detectSpecialSiteHints()).dynamicScan)
+      return
+
+    dynamicObserver = new MutationObserver(() => {
+      window.clearTimeout(dynamicTimer)
+      dynamicTimer = window.setTimeout(() => {
+        run().catch(handleDynamicScanError)
+      }, 900)
+    })
+    dynamicObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+    })
+  })
+
+  return stop
 }

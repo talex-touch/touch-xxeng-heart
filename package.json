@@ -23,6 +23,7 @@
     "dev:js": "npm run build:js -- --mode development",
     "build": "cross-env NODE_ENV=production run-s clear build:web build:prepare build:background build:js",
     "version:bump": "esno scripts/version.ts",
+    "release:prepare": "esno scripts/prepare-release.ts",
     "version:patch": "pnpm run version:bump -- patch",
     "version:minor": "pnpm run version:bump -- minor",
     "version:major": "pnpm run version:bump -- major",

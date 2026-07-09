@@ -1,5 +1,6 @@
 import browser from 'webextension-polyfill'
 import { onMessage, sendMessage } from 'webext-bridge/content-script'
+import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
@@ -3852,6 +3853,60 @@ export function startPageEnhancer(events: EnhancerEvents) {
       refreshStats()
   }
 
+  const stop = () => {
+    disposed = true
+    dynamicObserver?.disconnect()
+    pageTranslationObserver?.disconnect()
+    window.clearTimeout(dynamicTimer)
+    window.clearTimeout(selectionTimer)
+    window.clearTimeout(pageTranslationTimer)
+    pageTranslationEnabled = false
+    pageTranslationRunning = false
+    pageTranslationScanPending = false
+    pageTranslationInFlight.clear()
+    activeSelectionBlock?.remove()
+    activeSelectionBlock = undefined
+    removePageTranslationElements()
+    removeContextTranslateListener()
+    removePageTranslateStartListener()
+    removePageTranslateStopListener()
+    removePageTranslateStatusListener()
+    removePageStatsListener()
+    document.removeEventListener('pointerdown', onPointerDown, true)
+    document.removeEventListener('click', onMediaClickCapture, true)
+    document.removeEventListener('auxclick', onMediaClickCapture, true)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('mouseup', onMouseUp, true)
+    window.removeEventListener('pointerup', onPointerUp, true)
+    document.removeEventListener('keyup', onKeyUp)
+    document.removeEventListener('selectionchange', onSelectionChange)
+    document.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('keydown', onEscape)
+    window.removeEventListener('resize', onPageScroll)
+    document.removeEventListener('pointerover', onPointerOver, true)
+    document.removeEventListener('pointermove', onPointerMove, true)
+    document.removeEventListener('pointerout', onPointerOut, true)
+    document.removeEventListener('mouseover', onPointerOver, true)
+    document.removeEventListener('mousemove', onPointerMove, true)
+    document.removeEventListener('mouseout', onPointerOut, true)
+    window.removeEventListener('scroll', onPageScroll)
+    window.removeEventListener('scroll', onPageScroll, true)
+    browser.storage.onChanged.removeListener(onStorageChanged)
+    tooltip?.remove()
+    dialog?.remove()
+    closeMediaToolbar()
+  }
+
+  const handleDynamicScanError = (error: unknown) => {
+    if (isExtensionContextInvalidated(error)) {
+      stop()
+      return
+    }
+
+    console.warn('[Lexi] dynamic scan failed', error)
+  }
+
   browser.storage.local.get(settingsStorageKey).then((stored) => {
     if (!stored[settingsStorageKey])
       browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
@@ -3887,7 +3942,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     dynamicObserver = new MutationObserver(() => {
       window.clearTimeout(dynamicTimer)
       dynamicTimer = window.setTimeout(() => {
-        run().catch(error => console.warn('[Lexi] dynamic scan failed', error))
+        run().catch(handleDynamicScanError)
       }, 900)
     })
     dynamicObserver.observe(document.body, {
@@ -3896,40 +3951,5 @@ export function startPageEnhancer(events: EnhancerEvents) {
     })
   })
 
-  return () => {
-    disposed = true
-    dynamicObserver?.disconnect()
-    pageTranslationObserver?.disconnect()
-    window.clearTimeout(dynamicTimer)
-    window.clearTimeout(selectionTimer)
-    window.clearTimeout(pageTranslationTimer)
-    removeContextTranslateListener()
-    removePageTranslateStartListener()
-    removePageTranslateStopListener()
-    removePageTranslateStatusListener()
-    removePageStatsListener()
-    document.removeEventListener('pointerdown', onPointerDown, true)
-    document.removeEventListener('click', onMediaClickCapture, true)
-    document.removeEventListener('auxclick', onMediaClickCapture, true)
-    document.removeEventListener('mouseup', onMouseUp)
-    document.removeEventListener('pointerup', onPointerUp)
-    window.removeEventListener('mouseup', onMouseUp, true)
-    window.removeEventListener('pointerup', onPointerUp, true)
-    document.removeEventListener('keyup', onKeyUp)
-    document.removeEventListener('selectionchange', onSelectionChange)
-    document.removeEventListener('keydown', onKeyDown)
-    document.removeEventListener('keydown', onEscape)
-    window.removeEventListener('resize', onPageScroll)
-    document.removeEventListener('pointerover', onPointerOver, true)
-    document.removeEventListener('pointermove', onPointerMove, true)
-    document.removeEventListener('pointerout', onPointerOut, true)
-    document.removeEventListener('mouseover', onPointerOver, true)
-    document.removeEventListener('mousemove', onPointerMove, true)
-    document.removeEventListener('mouseout', onPointerOut, true)
-    window.removeEventListener('scroll', onPageScroll)
-    browser.storage.onChanged.removeListener(onStorageChanged)
-    tooltip?.remove()
-    dialog?.remove()
-    closeMediaToolbar()
-  }
+  return stop
 }

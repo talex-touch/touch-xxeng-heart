@@ -1,4 +1,4 @@
-import type { BrowserContext } from '@playwright/test'
+import type { BrowserContext, Page } from '@playwright/test'
 import { expect, test } from './fixtures'
 
 const videoTestUrl = 'https://lexi.test/video'
@@ -10,7 +10,13 @@ function routeVideoTestPage(context: BrowserContext) {
   }))
 }
 
+async function emulateNonMacPlatform(context: BrowserContext, page: Page) {
+  const cdp = await context.newCDPSession(page)
+  await cdp.send('Emulation.setNavigatorOverrides', { platform: 'Linux x86_64' })
+}
+
 test('video speed menu persists and resists player rate resets', async ({ context, page }) => {
+  await emulateNonMacPlatform(context, page)
   await routeVideoTestPage(context)
   await page.goto(videoTestUrl)
   await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
@@ -67,7 +73,56 @@ test('video speed menu persists and resists player rate resets', async ({ contex
   await expect.poll(getPlaybackRate).toBe(1)
 })
 
+test('video speed menu remains visible and can change rate while its video is fullscreen', async ({ context, page }) => {
+  await emulateNonMacPlatform(context, page)
+  await routeVideoTestPage(context)
+  await page.goto(videoTestUrl)
+  await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
+
+  const center = await page.evaluate(() => {
+    const video = document.createElement('video')
+    video.dataset.testFullscreenVideo = 'true'
+    video.style.cssText = 'display:block;width:800px;height:450px'
+    document.body.prepend(video)
+    const rect = video.getBoundingClientRect()
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    }
+  })
+  const video = page.locator('video[data-test-fullscreen-video]')
+  const menu = page.locator('[data-lexi-video-speed-menu]')
+
+  await page.keyboard.down('Control')
+  await page.mouse.click(center.x, center.y)
+  await page.keyboard.up('Control')
+  await expect(menu).toBeVisible()
+
+  await video.evaluate((element) => {
+    element.addEventListener('click', () => {
+      void element.requestFullscreen()
+    }, { once: true })
+  })
+  await video.click()
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.matches('video[data-test-fullscreen-video]') ?? false)).toBe(true)
+
+  try {
+    await expect(menu).toBeVisible()
+    await menu.locator('[data-lexi-video-rate="3"]').click()
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).playbackRate)).toBe(3)
+  }
+  finally {
+    await page.evaluate(async () => {
+      if (document.fullscreenElement)
+        await document.exitFullscreen()
+    })
+  }
+
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true)
+})
+
 test('video speed menu detects a preview behind an earlier document interceptor', async ({ context, page }) => {
+  await emulateNonMacPlatform(context, page)
   await context.addInitScript(() => {
     for (const type of ['pointerdown', 'mousedown', 'click'])
       document.addEventListener(type, event => event.stopImmediatePropagation(), true)
@@ -143,6 +198,7 @@ test('macOS trackpad uses Command plus secondary click without hijacking Command
 })
 
 test('video speed menu detects video tags inside open shadow players', async ({ context, page }) => {
+  await emulateNonMacPlatform(context, page)
   await routeVideoTestPage(context)
   await page.goto(videoTestUrl)
   await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
@@ -189,6 +245,7 @@ test('video speed menu detects video tags inside open shadow players', async ({ 
 })
 
 test('video speed menu detects video tags in embedded media frames', async ({ context, page }) => {
+  await emulateNonMacPlatform(context, page)
   await context.route('https://lexi.test/**', route => route.fulfill({
     contentType: 'text/html',
     body: '<!doctype html><html><body style="margin:0"><iframe data-test-media-frame src="https://media.test/player" style="display:block;width:800px;height:450px;border:0"></iframe></body></html>',

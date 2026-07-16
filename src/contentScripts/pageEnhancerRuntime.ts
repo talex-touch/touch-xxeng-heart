@@ -27,8 +27,14 @@ export function ensurePageEnhancer() {
   if (window.top !== window)
     return
 
-  startGitHubDigest()
-  startForumDigest()
+  const startTopFrameFeatures = () => {
+    startGitHubDigest()
+    startForumDigest()
+  }
+  if (document.body)
+    startTopFrameFeatures()
+  else
+    document.addEventListener('DOMContentLoaded', startTopFrameFeatures, { once: true })
 }
 
 export function subscribePageStats(listener: (stats: PageStats) => void) {

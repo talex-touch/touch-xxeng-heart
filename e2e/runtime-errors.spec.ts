@@ -54,3 +54,20 @@ test('content script survives synthetic key events and BFCache navigation', asyn
 
   expect(errors).toEqual([])
 })
+
+test('content script mounts at document start on GitHub and Discourse pages', async ({ context, page }) => {
+  await context.route('https://github.com/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><main>GitHub document-start test</main></body></html>',
+  }))
+  await context.route('https://linux.do/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><main>Discourse document-start test</main></body></html>',
+  }))
+
+  await page.goto('https://github.com/lexi-test/document-start-regression')
+  await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
+
+  await page.goto('https://linux.do/t/document-start-regression/1')
+  await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
+})

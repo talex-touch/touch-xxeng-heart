@@ -202,7 +202,7 @@ interface MediaToolbarState extends MediaTargetInfo {
 }
 
 interface VideoSpeedMenuState {
-  menu: HTMLElement
+  menu: HTMLDialogElement
   video: HTMLVideoElement
   previousRate: number
   selectedRate: number
@@ -1140,8 +1140,10 @@ function getPageStyleContent(customCss = '') {
       all: initial;
       box-sizing: border-box;
       position: fixed;
+      inset: auto;
       z-index: 2147483647;
       display: grid;
+      margin: 0;
       gap: 10px;
       width: min(300px, calc(100vw - 24px));
       border: 1px solid rgba(191, 219, 254, 0.72);
@@ -1154,6 +1156,14 @@ function getPageStyleContent(customCss = '') {
       padding: 12px;
       font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       animation: lexi-card-enter 140ms ease-out both;
+    }
+
+    .lexi-video-speed-menu:not([open]) {
+      display: none;
+    }
+
+    .lexi-video-speed-menu::backdrop {
+      background: transparent;
     }
 
     .lexi-video-speed-menu * {
@@ -2845,6 +2855,20 @@ function positionVideoSpeedMenu(menu: HTMLElement, video: HTMLVideoElement) {
   menu.style.top = `${top}px`
 }
 
+function promoteVideoSpeedMenu(menu: HTMLDialogElement) {
+  const container = document.documentElement
+  if (menu.parentElement !== container)
+    container.append(menu)
+
+  if (menu.open)
+    menu.close()
+
+  if (document.fullscreenElement)
+    menu.showModal()
+  else
+    menu.show()
+}
+
 function captureVideoFrame(element: HTMLVideoElement) {
   if (!element.videoWidth || !element.videoHeight)
     return undefined
@@ -3496,6 +3520,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     state.video.removeEventListener('playing', onVideoSpeedChange)
     state.video.removeEventListener('ratechange', onVideoSpeedChange)
+    if (state.menu.open)
+      state.menu.close()
     state.menu.remove()
     videoSpeedMenuState = undefined
     state.video.playbackRate = state.previousRate
@@ -3519,7 +3545,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!existingStyle)
       ensurePageStyles(defaultSettings.ui.customCss)
 
-    const menu = document.createElement('section')
+    const menu = document.createElement('dialog')
     const head = document.createElement('div')
     const title = document.createElement('strong')
     const hint = document.createElement('span')
@@ -3533,6 +3559,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     menu.dataset.lexiVideoSpeedMenu = 'true'
     menu.className = 'lexi-video-speed-menu'
+    menu.addEventListener('cancel', (event) => {
+      event.preventDefault()
+      closeVideoSpeedMenu()
+    })
     head.className = 'lexi-video-speed-menu__head'
     title.className = 'lexi-video-speed-menu__title'
     hint.className = 'lexi-video-speed-menu__hint'
@@ -3557,8 +3587,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     head.append(title, hint)
     menu.append(head, rates)
-    const fullscreenContainer = document.fullscreenElement
-    ;(fullscreenContainer instanceof HTMLElement ? fullscreenContainer : document.documentElement).append(menu)
+    promoteVideoSpeedMenu(menu)
     videoSpeedMenuState = state
     video.addEventListener('playing', onVideoSpeedChange)
     video.addEventListener('ratechange', onVideoSpeedChange)
@@ -4141,10 +4170,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!state)
       return
 
-    const fullscreenContainer = document.fullscreenElement
-    const container = fullscreenContainer instanceof HTMLElement ? fullscreenContainer : document.documentElement
-    if (state.menu.parentElement !== container)
-      container.append(state.menu)
+    promoteVideoSpeedMenu(state.menu)
     positionVideoSpeedMenu(state.menu, state.video)
   }
 

@@ -79,3 +79,40 @@ test('video speed menu detects a preview behind an earlier document interceptor'
   await expect(page.locator('[data-lexi-video-speed-menu]')).toBeVisible()
   await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).playbackRate)).toBe(2)
 })
+
+test('macOS trackpad uses Command plus secondary click without hijacking Command primary click', async ({ context, page }) => {
+  const cdp = await context.newCDPSession(page)
+  await cdp.send('Emulation.setNavigatorOverrides', { platform: 'MacIntel' })
+  await context.addInitScript(() => {
+    for (const type of ['pointerdown', 'mousedown', 'contextmenu', 'mouseup'])
+      document.addEventListener(type, event => event.stopImmediatePropagation(), true)
+  })
+  await page.goto('http://localhost:3303/popup/index.html')
+  await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
+
+  const center = await page.evaluate(() => {
+    const video = document.createElement('video')
+    video.dataset.testMacVideo = 'true'
+    video.style.cssText = 'display:block;width:800px;height:450px'
+    document.body.prepend(video)
+    const rect = video.getBoundingClientRect()
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    }
+  })
+  const menu = page.locator('[data-lexi-video-speed-menu]')
+
+  await page.keyboard.down('Meta')
+  await page.mouse.click(center.x, center.y)
+  await page.keyboard.up('Meta')
+  await expect(menu).toHaveCount(0)
+
+  await page.keyboard.down('Meta')
+  await page.mouse.click(center.x, center.y, { button: 'right' })
+  await page.keyboard.up('Meta')
+
+  const video = page.locator('video[data-test-mac-video]')
+  await expect(menu).toBeVisible()
+  await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).playbackRate)).toBe(2)
+})

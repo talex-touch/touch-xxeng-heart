@@ -3472,7 +3472,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     hint.className = 'lexi-video-speed-menu__hint'
     rates.className = 'lexi-video-speed-menu__rates'
     title.textContent = '倍速播放'
-    hint.textContent = `${isMacPlatform() ? '⌘' : 'Ctrl'} + 左键再次关闭 · Esc 恢复原速`
+    hint.textContent = isMacPlatform()
+      ? '⌘ + 双指点按/右键再次关闭 · Esc 恢复原速'
+      : 'Ctrl + 左键再次关闭 · Esc 恢复原速'
 
     for (const rate of [1, 1.25, 1.5, 2, 3, 4]) {
       const button = document.createElement('button')
@@ -3847,10 +3849,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   function getVideoSpeedGestureVideo(event: MouseEvent | PointerEvent) {
     const target = event.target instanceof Element ? event.target : undefined
-    if (event.button !== 0 || !selectionModifierPressed(event) || target?.closest('[data-lexi-video-speed-menu]'))
+    if (target?.closest('[data-lexi-video-speed-menu]'))
       return undefined
 
-    return getVideoFromPointerEvent(event)
+    const matchesGesture = isMacPlatform()
+      ? event.button === 2 && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
+      : event.button === 0 && event.ctrlKey
+    return matchesGesture ? getVideoFromPointerEvent(event) : undefined
   }
 
   function consumeVideoSpeedGesture(event: MouseEvent | PointerEvent) {
@@ -3881,6 +3886,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
       toggleVideoSpeedGesture(video)
 
     return consumeVideoSpeedGesture(event)
+  }
+
+  const onVideoSpeedContextMenu = (event: MouseEvent) => {
+    finishVideoSpeedGesture(event)
   }
 
   const onPointerDown = (event: PointerEvent) => {
@@ -4187,6 +4196,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.removeEventListener('pointerdown', onPointerDown, true)
     window.removeEventListener('click', onMediaClickCapture, true)
     window.removeEventListener('auxclick', onMediaClickCapture, true)
+    window.removeEventListener('contextmenu', onVideoSpeedContextMenu, true)
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('pointerup', onPointerUp)
     window.removeEventListener('mouseup', onMouseUp, true)
@@ -4258,6 +4268,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   window.addEventListener('pointerdown', onPointerDown, true)
   window.addEventListener('click', onMediaClickCapture, true)
   window.addEventListener('auxclick', onMediaClickCapture, true)
+  window.addEventListener('contextmenu', onVideoSpeedContextMenu, true)
   document.addEventListener('mouseup', onMouseUp)
   document.addEventListener('pointerup', onPointerUp)
   window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })

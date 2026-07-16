@@ -553,6 +553,7 @@ function removeSceneRule(index: number) {
               <span class="text-13px font-500">媒体点击修饰键</span>
               <input v-model.trim="lexiSettings.ui.mediaModifierShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="meta+shift">
               <span class="mt-1 block text-12px text-neutral-500">按住该组合点击图片 / 视频 / 音频打开媒体操作栏；默认 meta+shift。</span>
+              <span class="mt-1 block text-12px text-neutral-500">视频倍速：macOS 按住 Command 后用触控板双指点按（或鼠标右键）；Windows/Linux 使用 Ctrl+左键。</span>
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">每日推荐数量</span>

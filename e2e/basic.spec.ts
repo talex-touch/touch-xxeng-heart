@@ -10,15 +10,17 @@ test('popup opens Lexi controls', async ({ page, extensionId }) => {
 test('options exposes site and AI configuration', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
 
-  await expect(page.getByText('Lexi', { exact: true })).toBeVisible()
-  await expect(page.getByText('网页启用范围')).toBeVisible()
-  await expect(page.getByText('AI 场景配置')).toBeVisible()
+  await expect(page.locator('header')).toContainText('Lexi')
+  await expect(page.getByRole('heading', { name: '网页启用范围' })).toBeVisible()
+  await page.getByRole('button', { name: 'AI 场景' }).click()
+  await expect(page.getByRole('heading', { name: 'AI 场景配置' })).toBeVisible()
 })
 
 test('side panel shows daily learning workspace', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
 
   await expect(page.getByText('Lexical')).toBeVisible()
+  await page.getByRole('button', { name: /历史复盘/ }).click()
   await expect(page.getByText('今日推荐')).toBeVisible()
   await expect(page.getByText('待复盘')).toBeVisible()
 })

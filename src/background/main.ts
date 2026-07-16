@@ -1,5 +1,5 @@
-import { onMessage, sendMessage } from 'webext-bridge/background'
 import browser from 'webextension-polyfill'
+import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 
 // only on dev mode
 if (import.meta.hot) {
@@ -29,22 +29,23 @@ browser.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== 'lexi-translate-selection' || !tab?.id || !info.selectionText)
     return
 
-  sendMessage('lexi-context-translate', {
+  sendTabRuntimeMessage(tab.id, 'lexi-context-translate', {
     text: info.selectionText,
     pageUrl: tab.url,
     pageTitle: tab.title,
-  }, { context: 'content-script', tabId: tab.id }).catch((error: unknown) => console.error(error))
+  }).catch((error: unknown) => console.warn('[Lexi] context translation message failed', error))
 })
 
-onMessage('lexi-download-media', async ({ data }) => {
-  const payload = data as { url?: string, filename?: string }
-  if (!payload.url)
+listenRuntimeMessage<{ url?: unknown, filename?: unknown } | undefined>('lexi-download-media', async (data) => {
+  const url = typeof data?.url === 'string' ? data.url : ''
+  const filename = typeof data?.filename === 'string' ? data.filename : undefined
+  if (!url)
     return { ok: false, error: '缺少媒体 URL' }
 
   try {
     const id = await browser.downloads.download({
-      url: payload.url,
-      filename: payload.filename,
+      url,
+      filename,
       conflictAction: 'uniquify',
       saveAs: true,
     })

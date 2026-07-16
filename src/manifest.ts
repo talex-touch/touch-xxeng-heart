@@ -21,7 +21,7 @@ export async function getManifest() {
 
   // update this file to update this manifest.json
   // can also be conditional based on your need
-  const manifest: Manifest.WebExtensionManifest = {
+  const manifest: ChromiumManifest = {
     manifest_version: 3,
     name: pkg.displayName || pkg.name,
     version: pkg.version,
@@ -57,6 +57,9 @@ export async function getManifest() {
         matches: [
           '<all_urls>',
         ],
+        all_frames: true,
+        match_about_blank: true,
+        run_at: 'document_start',
         js: [
           'dist/contentScripts/index.global.js',
         ],

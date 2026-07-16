@@ -16,5 +16,8 @@ src/auto-imports.d.ts
 src/components.d.ts
 .eslintcache
 .spec-workflow/
+test-results/
+playwright-report/
+vite.config.*.timestamp-*.mjs
 
 .serena/

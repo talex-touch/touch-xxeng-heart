@@ -24,8 +24,17 @@ export function ensurePageEnhancer() {
       listeners.forEach(listener => listener(stats))
     },
   })
-  startGitHubDigest()
-  startForumDigest()
+  if (window.top !== window)
+    return
+
+  const startTopFrameFeatures = () => {
+    startGitHubDigest()
+    startForumDigest()
+  }
+  if (document.body)
+    startTopFrameFeatures()
+  else
+    document.addEventListener('DOMContentLoaded', startTopFrameFeatures, { once: true })
 }
 
 export function subscribePageStats(listener: (stats: PageStats) => void) {

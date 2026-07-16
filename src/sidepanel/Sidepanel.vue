@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { sendMessage } from 'webext-bridge/popup'
 import { computed, onMounted, ref } from 'vue'
+import { sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, normalizeImportedRecord } from '~/logic/vocabularyRecords'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
@@ -88,14 +88,14 @@ async function getActiveTabId() {
 
 async function refreshPageStats(tabId?: number) {
   const targetTabId = tabId ?? await getActiveTabId()
-  pageStats.value = await sendMessage('lexi-page-stats', {}, { context: 'content-script', tabId: targetTabId })
+  pageStats.value = await sendTabRuntimeMessage<PageStats>(targetTabId, 'lexi-page-stats', {})
 }
 
 async function refreshPageTranslationStatus() {
   try {
     const tabId = await getActiveTabId()
     await refreshPageStats(tabId)
-    const status = await sendMessage('lexi-page-translate-status', {}, { context: 'content-script', tabId })
+    const status = await sendTabRuntimeMessage<typeof pageTranslationStatus.value>(tabId, 'lexi-page-translate-status', {})
     pageTranslationStatus.value = status
     pageTranslationMessage.value = status.cached
       ? `已保存 ${status.blocks} 段，下次打开会自动恢复。`
@@ -137,10 +137,10 @@ async function controlPageTranslation(action: 'start' | 'stop') {
   pageTranslationLoading.value = true
   try {
     const tabId = await getActiveTabId()
-    const result = await sendMessage(
+    const result = await sendTabRuntimeMessage<{ message: string }>(
+      tabId,
       action === 'start' ? 'lexi-page-translate-start' : 'lexi-page-translate-stop',
       {},
-      { context: 'content-script', tabId },
     )
     pageTranslationMessage.value = result.message
     await refreshPageTranslationStatus()

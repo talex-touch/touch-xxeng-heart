@@ -1,9 +1,9 @@
 import browser from 'webextension-polyfill'
-import { onMessage, sendMessage } from 'webext-bridge/content-script'
-import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
+
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import { defaultSettings, mergeSettings } from '~/logic/defaults'
+import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessaging'
 import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import type { SiteDetectionHints } from '~/logic/siteRules'
@@ -199,6 +199,13 @@ interface MediaToolbarState extends MediaTargetInfo {
   promptText?: string
   frameDataUrl?: string
   mediaDataUrl?: string
+}
+
+interface VideoSpeedMenuState {
+  menu: HTMLElement
+  video: HTMLVideoElement
+  previousRate: number
+  selectedRate: number
 }
 
 const discourseTitleSelectors = [
@@ -1127,6 +1134,75 @@ function getPageStyleContent(customCss = '') {
       line-height: 1.68;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .lexi-video-speed-menu {
+      all: initial;
+      box-sizing: border-box;
+      position: fixed;
+      z-index: 2147483647;
+      display: grid;
+      gap: 10px;
+      width: min(300px, calc(100vw - 24px));
+      border: 1px solid rgba(191, 219, 254, 0.72);
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(30, 41, 59, 0.9));
+      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+      backdrop-filter: blur(18px) saturate(1.2);
+      -webkit-backdrop-filter: blur(18px) saturate(1.2);
+      color: #f8fafc;
+      padding: 12px;
+      font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      animation: lexi-card-enter 140ms ease-out both;
+    }
+
+    .lexi-video-speed-menu * {
+      box-sizing: border-box;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .lexi-video-speed-menu__head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .lexi-video-speed-menu__title {
+      font-weight: 750;
+      letter-spacing: 0.01em;
+    }
+
+    .lexi-video-speed-menu__hint {
+      color: #93c5fd;
+      font-size: 11px;
+    }
+
+    .lexi-video-speed-menu__rates {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 6px;
+    }
+
+    .lexi-video-speed-menu__rate {
+      border: 1px solid rgba(148, 163, 184, 0.32);
+      border-radius: 9px;
+      background: rgba(15, 23, 42, 0.38);
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      padding: 9px 4px;
+      text-align: center;
+    }
+
+    .lexi-video-speed-menu__rate:hover,
+    .lexi-video-speed-menu__rate--active {
+      border-color: rgba(125, 211, 252, 0.9);
+      background: linear-gradient(135deg, #0284c7, #4f46e5);
+      color: #fff;
+      box-shadow: 0 5px 15px rgba(37, 99, 235, 0.3);
     }
 
     .lexi-dialog {
@@ -2670,6 +2746,83 @@ function positionMediaUi(state: MediaToolbarState) {
   positionMediaToolbar(state.toolbar, state.element)
 }
 
+const videoPlayerHostSelector = [
+  '#bilibili-player',
+  '.bpx-player-container',
+  '.bilibili-player-video-wrap',
+  'xg-video-container',
+  '.xgplayer',
+  '[data-e2e="feed-active-video"]',
+].join(',')
+
+function findVideoWithin(element: Element) {
+  if (element instanceof HTMLVideoElement)
+    return element
+
+  return element.querySelector<HTMLVideoElement>('video')
+    ?? element.shadowRoot?.querySelector<HTMLVideoElement>('video')
+    ?? undefined
+}
+
+function getVideoFromEventTarget(target: EventTarget | null) {
+  const element = target instanceof Element ? target : undefined
+  if (!element)
+    return undefined
+
+  const video = element.closest<HTMLVideoElement>('video')
+  if (video)
+    return video
+
+  const playerHost = element.closest(videoPlayerHostSelector)
+  return playerHost ? findVideoWithin(playerHost) : undefined
+}
+
+function getVideoAtPoint(clientX: number, clientY: number) {
+  let bestMatch: HTMLVideoElement | undefined
+  let bestArea = Number.POSITIVE_INFINITY
+
+  const videos = document.querySelectorAll<HTMLVideoElement>('video')
+  for (let index = 0; index < videos.length; index += 1) {
+    const video = videos[index]
+    const rect = video.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0 || clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom)
+      continue
+
+    const style = getComputedStyle(video)
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0)
+      continue
+
+    const area = rect.width * rect.height
+    if (area < bestArea) {
+      bestMatch = video
+      bestArea = area
+    }
+  }
+
+  return bestMatch
+}
+
+function getVideoFromPointerEvent(event: MouseEvent | PointerEvent) {
+  return getVideoFromEventTarget(event.target)
+    ?? Array.from(document.elementsFromPoint(event.clientX, event.clientY)).map(getVideoFromEventTarget).find(Boolean)
+    ?? getVideoAtPoint(event.clientX, event.clientY)
+}
+
+function positionVideoSpeedMenu(menu: HTMLElement, video: HTMLVideoElement) {
+  const rect = video.getBoundingClientRect()
+  const margin = 12
+  const menuRect = menu.getBoundingClientRect()
+  const width = menuRect.width || 300
+  const height = menuRect.height || 100
+  const left = Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin))
+  let top = rect.top + 16
+  if (top + height > window.innerHeight - margin)
+    top = Math.max(margin, rect.bottom - height - 16)
+
+  menu.style.left = `${left}px`
+  menu.style.top = `${top}px`
+}
+
 function captureVideoFrame(element: HTMLVideoElement) {
   if (!element.videoWidth || !element.videoHeight)
     return undefined
@@ -2750,6 +2903,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let lastTranslation: LastTranslationState | undefined
   let dialogShortcut = defaultSettings.ui.dialogShortcut
   let mediaModifierShortcut = defaultSettings.ui.mediaModifierShortcut
+  let videoSpeedMenuState: VideoSpeedMenuState | undefined
+  let lastVideoSpeedGesture: { video: HTMLVideoElement, at: number } | undefined
   let lastSelectionKey = ''
   let activeSelectionKey = ''
   let latestSelectionSnapshot = ''
@@ -3270,6 +3425,77 @@ export function startPageEnhancer(events: EnhancerEvents) {
     mediaToolbarState = undefined
   }
 
+  function closeVideoSpeedMenu() {
+    const state = videoSpeedMenuState
+    if (!state)
+      return
+
+    state.video.playbackRate = state.previousRate
+    state.menu.remove()
+    videoSpeedMenuState = undefined
+  }
+
+  function updateVideoSpeedMenu(state: VideoSpeedMenuState) {
+    state.video.playbackRate = state.selectedRate
+    state.menu.querySelectorAll<HTMLButtonElement>('[data-lexi-video-rate]').forEach((button) => {
+      button.classList.toggle('lexi-video-speed-menu__rate--active', Number(button.dataset.lexiVideoRate) === state.selectedRate)
+    })
+  }
+
+  function showVideoSpeedMenu(video: HTMLVideoElement) {
+    if (videoSpeedMenuState?.video === video) {
+      positionVideoSpeedMenu(videoSpeedMenuState.menu, video)
+      return
+    }
+
+    closeVideoSpeedMenu()
+    const existingStyle = document.getElementById('lexi-page-style')
+    if (!existingStyle)
+      ensurePageStyles(defaultSettings.ui.customCss)
+
+    const menu = document.createElement('section')
+    const head = document.createElement('div')
+    const title = document.createElement('strong')
+    const hint = document.createElement('span')
+    const rates = document.createElement('div')
+    const state: VideoSpeedMenuState = {
+      menu,
+      video,
+      previousRate: video.playbackRate,
+      selectedRate: 2,
+    }
+
+    menu.dataset.lexiVideoSpeedMenu = 'true'
+    menu.className = 'lexi-video-speed-menu'
+    head.className = 'lexi-video-speed-menu__head'
+    title.className = 'lexi-video-speed-menu__title'
+    hint.className = 'lexi-video-speed-menu__hint'
+    rates.className = 'lexi-video-speed-menu__rates'
+    title.textContent = '倍速播放'
+    hint.textContent = `${isMacPlatform() ? '⌘' : 'Ctrl'} + 左键再次关闭 · Esc 恢复原速`
+
+    for (const rate of [1, 1.25, 1.5, 2, 3, 4]) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'lexi-video-speed-menu__rate'
+      button.dataset.lexiVideoRate = String(rate)
+      button.textContent = `${rate}×`
+      button.addEventListener('click', () => {
+        state.selectedRate = rate
+        updateVideoSpeedMenu(state)
+      })
+      rates.append(button)
+    }
+
+    head.append(title, hint)
+    menu.append(head, rates)
+    const fullscreenContainer = document.fullscreenElement
+    ;(fullscreenContainer instanceof HTMLElement ? fullscreenContainer : document.documentElement).append(menu)
+    videoSpeedMenuState = state
+    updateVideoSpeedMenu(state)
+    positionVideoSpeedMenu(menu, video)
+  }
+
   async function analyzeMediaToolbar() {
     const state = mediaToolbarState
     if (!state?.answer)
@@ -3333,10 +3559,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     const filename = `Lexi/${getFileNameFromUrl(state.src, `media-${Date.now()}`)}`
-    const response = await sendMessage('lexi-download-media', {
+    const response = await sendRuntimeMessage<{ ok?: boolean, error?: string }>('lexi-download-media', {
       url: state.src,
       filename,
-    }, 'background') as { ok?: boolean, error?: string }
+    })
     const { settings } = await getStoredState()
     showLexiToast(response.ok ? '已交给浏览器下载。' : response.error || '下载失败', settings.ui.customCss)
   }
@@ -3619,7 +3845,53 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   }
 
+  function getVideoSpeedGestureVideo(event: MouseEvent | PointerEvent) {
+    const target = event.target instanceof Element ? event.target : undefined
+    if (event.button !== 0 || !selectionModifierPressed(event) || target?.closest('[data-lexi-video-speed-menu]'))
+      return undefined
+
+    return getVideoFromPointerEvent(event)
+  }
+
+  function consumeVideoSpeedGesture(event: MouseEvent | PointerEvent) {
+    if (!getVideoSpeedGestureVideo(event))
+      return false
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+    return true
+  }
+
+  function toggleVideoSpeedGesture(video: HTMLVideoElement) {
+    if (videoSpeedMenuState?.video === video)
+      closeVideoSpeedMenu()
+    else
+      showVideoSpeedMenu(video)
+
+    lastVideoSpeedGesture = { video, at: performance.now() }
+  }
+
+  function finishVideoSpeedGesture(event: MouseEvent | PointerEvent) {
+    const video = getVideoSpeedGestureVideo(event)
+    if (!video)
+      return false
+
+    if (lastVideoSpeedGesture?.video !== video || performance.now() - lastVideoSpeedGesture.at > 500)
+      toggleVideoSpeedGesture(video)
+
+    return consumeVideoSpeedGesture(event)
+  }
+
   const onPointerDown = (event: PointerEvent) => {
+    const video = getVideoSpeedGestureVideo(event)
+    if (video) {
+      toggleVideoSpeedGesture(video)
+
+      consumeVideoSpeedGesture(event)
+      return
+    }
+
     selectionPointerDown = true
     selectionFinalizedAt = 0
     selectionFinalizedWithModifier = false
@@ -3657,6 +3929,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   const onMouseUp = (event: MouseEvent) => {
+    if (finishVideoSpeedGesture(event))
+      return
+
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
     selectionFinalizedWithModifier = selectionModifierPressed(event)
@@ -3665,12 +3940,16 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
-      if (!disposed && getSelectionSnapshot())
+      if (!disposed && getSelectionSnapshot()) {
         handleSelection().catch(error => console.warn('[Lexi] selection mouseup fallback failed', error))
+      }
     }, 80)
   }
 
   const onPointerUp = (event: PointerEvent) => {
+    if (finishVideoSpeedGesture(event))
+      return
+
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
     selectionFinalizedWithModifier = selectionModifierPressed(event)
@@ -3679,13 +3958,15 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
-      if (!disposed && getSelectionSnapshot())
+      if (!disposed && getSelectionSnapshot()) {
         handleSelection().catch(error => console.warn('[Lexi] selection pointerup fallback failed', error))
+      }
     }, 80)
   }
 
   const onKeyUp = (event: KeyboardEvent) => {
-    if (event.key.startsWith('Arrow') || event.key === 'Shift') {
+    const key = typeof event.key === 'string' ? event.key : ''
+    if (key.startsWith('Arrow') || key === 'Shift') {
       selectionFinalizedAt = performance.now()
       selectionFinalizedWithModifier = selectionModifierPressed(event)
       scheduleSelectionCheck(420)
@@ -3737,6 +4018,30 @@ export function startPageEnhancer(events: EnhancerEvents) {
       closeLexiDialog(currentDialog)
     if (mediaToolbarState)
       closeMediaToolbar()
+    if (videoSpeedMenuState)
+      closeVideoSpeedMenu()
+  }
+
+  const onVideoSpeedChange = (event: Event) => {
+    const state = videoSpeedMenuState
+    if (!state)
+      return
+
+    const video = getVideoFromEventTarget(event.target)
+    if (video === state.video && video.playbackRate !== state.selectedRate)
+      video.playbackRate = state.selectedRate
+  }
+
+  const onFullscreenChange = () => {
+    const state = videoSpeedMenuState
+    if (!state)
+      return
+
+    const fullscreenContainer = document.fullscreenElement
+    const container = fullscreenContainer instanceof HTMLElement ? fullscreenContainer : document.documentElement
+    if (state.menu.parentElement !== container)
+      container.append(state.menu)
+    positionVideoSpeedMenu(state.menu, state.video)
   }
 
   const onPointerOver = (event: MouseEvent | PointerEvent) => {
@@ -3777,6 +4082,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   function onPageScroll() {
     if (mediaToolbarState)
       positionMediaUi(mediaToolbarState)
+    if (videoSpeedMenuState)
+      positionVideoSpeedMenu(videoSpeedMenuState.menu, videoSpeedMenuState.video)
 
     if (!pageTranslationEnabled)
       return
@@ -3787,6 +4094,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   function onMediaClickCapture(event: MouseEvent) {
+    if (consumeVideoSpeedGesture(event))
+      return
+
     if (!shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut))
       return
 
@@ -3795,13 +4105,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     event.preventDefault()
+
     event.stopPropagation()
     event.stopImmediatePropagation()
     tryShowMediaToolbarFromEvent(event)
   }
 
-  const removeContextTranslateListener = onMessage('lexi-context-translate', async ({ data }) => {
-    const selected = data.text.trim()
+  const removeContextTranslateListener = listenRuntimeMessage<{ text?: unknown } | undefined>('lexi-context-translate', async (data) => {
+    const selected = typeof data?.text === 'string' ? data.text.trim() : ''
     if (!selected)
       return
 
@@ -3831,19 +4142,19 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   })
 
-  const removePageTranslateStartListener = onMessage('lexi-page-translate-start', () => {
+  const removePageTranslateStartListener = listenRuntimeMessage('lexi-page-translate-start', () => {
     return startPageTranslation()
   })
 
-  const removePageTranslateStopListener = onMessage('lexi-page-translate-stop', () => {
+  const removePageTranslateStopListener = listenRuntimeMessage('lexi-page-translate-stop', () => {
     return stopPageTranslation()
   })
 
-  const removePageTranslateStatusListener = onMessage('lexi-page-translate-status', () => {
+  const removePageTranslateStatusListener = listenRuntimeMessage('lexi-page-translate-status', () => {
     return getPageTranslationStatus()
   })
 
-  const removePageStatsListener = onMessage('lexi-page-stats', async () => {
+  const removePageStatsListener = listenRuntimeMessage('lexi-page-stats', async () => {
     await refreshStats()
     return stats
   })
@@ -3867,21 +4178,22 @@ export function startPageEnhancer(events: EnhancerEvents) {
     activeSelectionBlock?.remove()
     activeSelectionBlock = undefined
     removePageTranslationElements()
+    document.removeEventListener('DOMContentLoaded', initializeDocumentFeatures)
     removeContextTranslateListener()
     removePageTranslateStartListener()
     removePageTranslateStopListener()
     removePageTranslateStatusListener()
     removePageStatsListener()
-    document.removeEventListener('pointerdown', onPointerDown, true)
-    document.removeEventListener('click', onMediaClickCapture, true)
-    document.removeEventListener('auxclick', onMediaClickCapture, true)
+    window.removeEventListener('pointerdown', onPointerDown, true)
+    window.removeEventListener('click', onMediaClickCapture, true)
+    window.removeEventListener('auxclick', onMediaClickCapture, true)
     document.removeEventListener('mouseup', onMouseUp)
     document.removeEventListener('pointerup', onPointerUp)
     window.removeEventListener('mouseup', onMouseUp, true)
     window.removeEventListener('pointerup', onPointerUp, true)
-    document.removeEventListener('keyup', onKeyUp)
+    document.removeEventListener('keyup', onKeyUp, true)
     document.removeEventListener('selectionchange', onSelectionChange)
-    document.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('keydown', onKeyDown, true)
     document.removeEventListener('keydown', onEscape)
     window.removeEventListener('resize', onPageScroll)
     document.removeEventListener('pointerover', onPointerOver, true)
@@ -3892,40 +4204,70 @@ export function startPageEnhancer(events: EnhancerEvents) {
     document.removeEventListener('mouseout', onPointerOut, true)
     window.removeEventListener('scroll', onPageScroll)
     window.removeEventListener('scroll', onPageScroll, true)
+    document.removeEventListener('playing', onVideoSpeedChange, true)
+    document.removeEventListener('ratechange', onVideoSpeedChange, true)
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()
     dialog?.remove()
     closeMediaToolbar()
+    closeVideoSpeedMenu()
   }
 
-  const handleDynamicScanError = (error: unknown) => {
-    if (isExtensionContextInvalidated(error)) {
+  const handleEnhancerError = (error: unknown) => {
+    const message = typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error)
+    if (/Extension context invalidated/i.test(message)) {
       stop()
       return
     }
 
-    console.warn('[Lexi] dynamic scan failed', error)
+    console.warn('[Lexi] page enhancer failed', error)
   }
 
-  browser.storage.local.get(settingsStorageKey).then((stored) => {
-    if (!stored[settingsStorageKey])
-      browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
-  })
+  function initializeDocumentFeatures() {
+    if (disposed || !document.body)
+      return
 
-  run()
-  restoreSavedPageTranslation().catch(error => console.warn('[Lexi] restore page translation failed', error))
-  document.addEventListener('pointerdown', onPointerDown, true)
-  document.addEventListener('click', onMediaClickCapture, true)
-  document.addEventListener('auxclick', onMediaClickCapture, true)
+    run().catch(handleEnhancerError)
+    restoreSavedPageTranslation().catch(handleEnhancerError)
+    void getStoredState().then(({ settings }) => {
+      if (disposed)
+        return
+
+      if (!getReplacementBudget(settings, detectSpecialSiteHints()).dynamicScan)
+        return
+
+      dynamicObserver = new MutationObserver(() => {
+        window.clearTimeout(dynamicTimer)
+        dynamicTimer = window.setTimeout(() => {
+          run().catch(handleEnhancerError)
+        }, 900)
+      })
+      dynamicObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+      })
+    }).catch(handleEnhancerError)
+  }
+
+  void browser.storage.local.get(settingsStorageKey).then(async (stored) => {
+    if (!stored[settingsStorageKey])
+      await browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
+  }).catch(handleEnhancerError)
+
+  window.addEventListener('pointerdown', onPointerDown, true)
+  window.addEventListener('click', onMediaClickCapture, true)
+  window.addEventListener('auxclick', onMediaClickCapture, true)
   document.addEventListener('mouseup', onMouseUp)
   document.addEventListener('pointerup', onPointerUp)
   window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })
   window.addEventListener('mouseup', onMouseUp, true)
   window.addEventListener('pointerup', onPointerUp, true)
-  document.addEventListener('keyup', onKeyUp)
+  document.addEventListener('keyup', onKeyUp, true)
   document.addEventListener('selectionchange', onSelectionChange)
-  document.addEventListener('keydown', onKeyDown)
+  document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('keydown', onEscape)
+
   window.addEventListener('resize', onPageScroll)
   document.addEventListener('pointerover', onPointerOver, true)
   document.addEventListener('pointermove', onPointerMove, true)
@@ -3934,22 +4276,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
   document.addEventListener('mousemove', onPointerMove, true)
   document.addEventListener('mouseout', onPointerOut, true)
   browser.storage.onChanged.addListener(onStorageChanged)
+  document.addEventListener('playing', onVideoSpeedChange, true)
+  document.addEventListener('ratechange', onVideoSpeedChange, true)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
 
-  void getStoredState().then(({ settings }) => {
-    if (!getReplacementBudget(settings, detectSpecialSiteHints()).dynamicScan)
-      return
-
-    dynamicObserver = new MutationObserver(() => {
-      window.clearTimeout(dynamicTimer)
-      dynamicTimer = window.setTimeout(() => {
-        run().catch(handleDynamicScanError)
-      }, 900)
-    })
-    dynamicObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
-    })
-  })
+  if (document.body)
+    initializeDocumentFeatures()
+  else
+    document.addEventListener('DOMContentLoaded', initializeDocumentFeatures, { once: true })
 
   return stop
 }

@@ -2749,42 +2749,22 @@ function positionMediaUi(state: MediaToolbarState) {
   positionMediaToolbar(state.toolbar, state.element)
 }
 
-const videoPlayerHostSelector = [
-  '#bilibili-player',
-  '.bpx-player-container',
-  '.bilibili-player-video-wrap',
-  'xg-video-container',
-  '.xgplayer',
-  '[data-e2e="feed-active-video"]',
-].join(',')
-
-function findVideoWithin(element: Element) {
-  if (element instanceof HTMLVideoElement)
-    return element
-
-  return element.querySelector<HTMLVideoElement>('video')
-    ?? element.shadowRoot?.querySelector<HTMLVideoElement>('video')
-    ?? undefined
-}
-
 function getVideoFromEventTarget(target: EventTarget | null) {
   const element = target instanceof Element ? target : undefined
   if (!element)
     return undefined
 
-  const video = element.closest<HTMLVideoElement>('video')
-  if (video)
-    return video
+  if (element instanceof HTMLVideoElement)
+    return element
 
-  const playerHost = element.closest(videoPlayerHostSelector)
-  return playerHost ? findVideoWithin(playerHost) : undefined
+  return element.closest<HTMLVideoElement>('video') ?? undefined
 }
 
-function getVideoAtPoint(clientX: number, clientY: number) {
+function getVideoAtPoint(clientX: number, clientY: number, root: Document | ShadowRoot = document) {
   let bestMatch: HTMLVideoElement | undefined
   let bestArea = Number.POSITIVE_INFINITY
 
-  const videos = document.querySelectorAll<HTMLVideoElement>('video')
+  const videos = root.querySelectorAll<HTMLVideoElement>('video')
   for (let index = 0; index < videos.length; index += 1) {
     const video = videos[index]
     const rect = video.getBoundingClientRect()
@@ -2802,13 +2782,52 @@ function getVideoAtPoint(clientX: number, clientY: number) {
     }
   }
 
+  const elements = root instanceof Document
+    ? root.elementsFromPoint(clientX, clientY)
+    : root.querySelectorAll('*')
+  for (let index = 0; index < elements.length; index += 1) {
+    const element = elements[index]
+    if (!element.shadowRoot)
+      continue
+
+    const shadowVideo = getVideoAtPoint(clientX, clientY, element.shadowRoot)
+    if (!shadowVideo)
+      continue
+
+    const rect = shadowVideo.getBoundingClientRect()
+    const area = rect.width * rect.height
+    if (area < bestArea) {
+      bestMatch = shadowVideo
+      bestArea = area
+    }
+  }
+
   return bestMatch
 }
 
+function getVideoFromPointerTarget(target: EventTarget | null, clientX: number, clientY: number) {
+  const video = getVideoFromEventTarget(target)
+  if (video)
+    return video
+
+  const element = target instanceof Element ? target : undefined
+  return element?.shadowRoot ? getVideoAtPoint(clientX, clientY, element.shadowRoot) : undefined
+}
+
 function getVideoFromPointerEvent(event: MouseEvent | PointerEvent) {
-  return getVideoFromEventTarget(event.target)
-    ?? Array.from(document.elementsFromPoint(event.clientX, event.clientY)).map(getVideoFromEventTarget).find(Boolean)
-    ?? getVideoAtPoint(event.clientX, event.clientY)
+  for (const target of event.composedPath()) {
+    const video = getVideoFromPointerTarget(target, event.clientX, event.clientY)
+    if (video)
+      return video
+  }
+
+  for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
+    const video = getVideoFromPointerTarget(element, event.clientX, event.clientY)
+    if (video)
+      return video
+  }
+
+  return getVideoAtPoint(event.clientX, event.clientY)
 }
 
 function positionVideoSpeedMenu(menu: HTMLElement, video: HTMLVideoElement) {
@@ -2896,6 +2915,7 @@ function looksTechnicalTerm(text: string) {
 }
 
 export function startPageEnhancer(events: EnhancerEvents) {
+  const mediaPlaybackOnly = window.top !== window
   let disposed = false
   let tooltip: HTMLElement | undefined
   let dynamicObserver: MutationObserver | undefined
@@ -3474,9 +3494,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!state)
       return
 
-    state.video.playbackRate = state.previousRate
+    state.video.removeEventListener('playing', onVideoSpeedChange)
+    state.video.removeEventListener('ratechange', onVideoSpeedChange)
     state.menu.remove()
     videoSpeedMenuState = undefined
+    state.video.playbackRate = state.previousRate
   }
 
   function updateVideoSpeedMenu(state: VideoSpeedMenuState) {
@@ -3538,6 +3560,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const fullscreenContainer = document.fullscreenElement
     ;(fullscreenContainer instanceof HTMLElement ? fullscreenContainer : document.documentElement).append(menu)
     videoSpeedMenuState = state
+    video.addEventListener('playing', onVideoSpeedChange)
+    video.addEventListener('ratechange', onVideoSpeedChange)
     updateVideoSpeedMenu(state)
     positionVideoSpeedMenu(menu, video)
   }
@@ -3968,6 +3992,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       consumeVideoSpeedGesture(event)
       return
     }
+    if (mediaPlaybackOnly)
+      return
 
     selectionPointerDown = true
     selectionFinalizedAt = 0
@@ -4008,6 +4034,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const onMouseUp = (event: MouseEvent) => {
     if (finishVideoSpeedGesture(event))
       return
+    if (mediaPlaybackOnly)
+      return
 
     selectionPointerDown = false
     selectionFinalizedAt = performance.now()
@@ -4025,6 +4053,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const onPointerUp = (event: PointerEvent) => {
     if (finishVideoSpeedGesture(event))
+      return
+    if (mediaPlaybackOnly)
       return
 
     selectionPointerDown = false
@@ -4099,13 +4129,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
       closeVideoSpeedMenu()
   }
 
-  const onVideoSpeedChange = (event: Event) => {
+  function onVideoSpeedChange(event: Event) {
     const state = videoSpeedMenuState
-    if (!state)
-      return
-
-    const video = getVideoFromEventTarget(event.target)
-    if (video === state.video && video.playbackRate !== state.selectedRate)
+    const video = event.currentTarget
+    if (state && video === state.video && video instanceof HTMLVideoElement && video.playbackRate !== state.selectedRate)
       video.playbackRate = state.selectedRate
   }
 
@@ -4188,53 +4215,63 @@ export function startPageEnhancer(events: EnhancerEvents) {
     tryShowMediaToolbarFromEvent(event)
   }
 
-  const removeContextTranslateListener = listenRuntimeMessage<{ text?: unknown } | undefined>('lexi-context-translate', async (data) => {
-    const selected = typeof data?.text === 'string' ? data.text.trim() : ''
-    if (!selected)
-      return
+  const removeContextTranslateListener = mediaPlaybackOnly
+    ? () => {}
+    : listenRuntimeMessage<{ text?: unknown } | undefined>('lexi-context-translate', async (data) => {
+      const selected = typeof data?.text === 'string' ? data.text.trim() : ''
+      if (!selected)
+        return
 
-    if (selected.length > maxSelectionTranslationLength) {
-      const { settings } = await getStoredState()
-      showLexiToast(`选择区域过多（${selected.length} 字符），请缩小到 ${maxSelectionTranslationLength} 字符以内再翻译。`, settings.ui.customCss)
-      return
-    }
+      if (selected.length > maxSelectionTranslationLength) {
+        const { settings } = await getStoredState()
+        showLexiToast(`选择区域过多（${selected.length} 字符），请缩小到 ${maxSelectionTranslationLength} 字符以内再翻译。`, settings.ui.customCss)
+        return
+      }
 
-    const selection = window.getSelection()
-    const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
-    if (isSelectionInIgnoredArea(range))
-      return
+      const selection = window.getSelection()
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+      if (isSelectionInIgnoredArea(range))
+        return
 
-    selectionRequestId += 1
-    activeSelectionBlock?.remove()
-    activeSelectionBlock = undefined
-    const domKey = createSelectionDomKey(selected)
-    if (!claimSelectionDomLock(domKey))
-      return
-    removeSelectionBlocksByKey(domKey)
-    try {
-      await translateAndRecord(selected, selected, range, selectionRequestId, domKey)
-    }
-    finally {
-      releaseSelectionDomLock(domKey)
-    }
-  })
+      selectionRequestId += 1
+      activeSelectionBlock?.remove()
+      activeSelectionBlock = undefined
+      const domKey = createSelectionDomKey(selected)
+      if (!claimSelectionDomLock(domKey))
+        return
+      removeSelectionBlocksByKey(domKey)
+      try {
+        await translateAndRecord(selected, selected, range, selectionRequestId, domKey)
+      }
+      finally {
+        releaseSelectionDomLock(domKey)
+      }
+    })
 
-  const removePageTranslateStartListener = listenRuntimeMessage('lexi-page-translate-start', () => {
-    return startPageTranslation()
-  })
+  const removePageTranslateStartListener = mediaPlaybackOnly
+    ? () => {}
+    : listenRuntimeMessage('lexi-page-translate-start', () => {
+      return startPageTranslation()
+    })
 
-  const removePageTranslateStopListener = listenRuntimeMessage('lexi-page-translate-stop', () => {
-    return stopPageTranslation()
-  })
+  const removePageTranslateStopListener = mediaPlaybackOnly
+    ? () => {}
+    : listenRuntimeMessage('lexi-page-translate-stop', () => {
+      return stopPageTranslation()
+    })
 
-  const removePageTranslateStatusListener = listenRuntimeMessage('lexi-page-translate-status', () => {
-    return getPageTranslationStatus()
-  })
+  const removePageTranslateStatusListener = mediaPlaybackOnly
+    ? () => {}
+    : listenRuntimeMessage('lexi-page-translate-status', () => {
+      return getPageTranslationStatus()
+    })
 
-  const removePageStatsListener = listenRuntimeMessage('lexi-page-stats', async () => {
-    await refreshStats()
-    return stats
-  })
+  const removePageStatsListener = mediaPlaybackOnly
+    ? () => {}
+    : listenRuntimeMessage('lexi-page-stats', async () => {
+      await refreshStats()
+      return stats
+    })
 
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {
     if (areaName === 'local' && changes[settingsStorageKey])
@@ -4284,8 +4321,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
     document.removeEventListener('mouseout', onPointerOut, true)
     window.removeEventListener('scroll', onPageScroll)
     window.removeEventListener('scroll', onPageScroll, true)
-    document.removeEventListener('playing', onVideoSpeedChange, true)
-    document.removeEventListener('ratechange', onVideoSpeedChange, true)
     document.removeEventListener('fullscreenchange', onFullscreenChange)
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()
@@ -4330,45 +4365,47 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }).catch(handleEnhancerError)
   }
 
-  void browser.storage.local.get(settingsStorageKey).then(async (stored) => {
-    if (disposed)
-      return
+  if (!mediaPlaybackOnly) {
+    void browser.storage.local.get(settingsStorageKey).then(async (stored) => {
+      if (disposed)
+        return
 
-    if (!stored[settingsStorageKey])
-      await browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
-  }).catch(handleEnhancerError)
+      if (!stored[settingsStorageKey])
+        await browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
+    }).catch(handleEnhancerError)
+  }
 
   window.addEventListener('pointerdown', onPointerDown, true)
   window.addEventListener('pointercancel', onVideoSpeedPointerCancel, true)
-  window.addEventListener('click', onMediaClickCapture, true)
-  window.addEventListener('auxclick', onMediaClickCapture, true)
   window.addEventListener('contextmenu', onVideoSpeedContextMenu, true)
-  document.addEventListener('mouseup', onMouseUp)
-  document.addEventListener('pointerup', onPointerUp)
   window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })
   window.addEventListener('mouseup', onMouseUp, true)
   window.addEventListener('pointerup', onPointerUp, true)
-  document.addEventListener('keyup', onKeyUp, true)
-  document.addEventListener('selectionchange', onSelectionChange)
-  document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('keydown', onEscape)
-
   window.addEventListener('resize', onPageScroll)
-  document.addEventListener('pointerover', onPointerOver, true)
-  document.addEventListener('pointermove', onPointerMove, true)
-  document.addEventListener('pointerout', onPointerOut, true)
-  document.addEventListener('mouseover', onPointerOver, true)
-  document.addEventListener('mousemove', onPointerMove, true)
-  document.addEventListener('mouseout', onPointerOut, true)
-  browser.storage.onChanged.addListener(onStorageChanged)
-  document.addEventListener('playing', onVideoSpeedChange, true)
-  document.addEventListener('ratechange', onVideoSpeedChange, true)
   document.addEventListener('fullscreenchange', onFullscreenChange)
 
-  if (document.body)
-    initializeDocumentFeatures()
-  else
-    document.addEventListener('DOMContentLoaded', initializeDocumentFeatures, { once: true })
+  if (!mediaPlaybackOnly) {
+    window.addEventListener('click', onMediaClickCapture, true)
+    window.addEventListener('auxclick', onMediaClickCapture, true)
+    document.addEventListener('mouseup', onMouseUp)
+    document.addEventListener('pointerup', onPointerUp)
+    document.addEventListener('keyup', onKeyUp, true)
+    document.addEventListener('selectionchange', onSelectionChange)
+    document.addEventListener('keydown', onKeyDown, true)
+    document.addEventListener('pointerover', onPointerOver, true)
+    document.addEventListener('pointermove', onPointerMove, true)
+    document.addEventListener('pointerout', onPointerOut, true)
+    document.addEventListener('mouseover', onPointerOver, true)
+    document.addEventListener('mousemove', onPointerMove, true)
+    document.addEventListener('mouseout', onPointerOut, true)
+    browser.storage.onChanged.addListener(onStorageChanged)
+
+    if (document.body)
+      initializeDocumentFeatures()
+    else
+      document.addEventListener('DOMContentLoaded', initializeDocumentFeatures, { once: true })
+  }
 
   return stop
 }

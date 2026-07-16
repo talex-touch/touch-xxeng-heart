@@ -57,6 +57,8 @@ export async function getManifest() {
         matches: [
           '<all_urls>',
         ],
+        all_frames: true,
+        match_about_blank: true,
         run_at: 'document_start',
         js: [
           'dist/contentScripts/index.global.js',

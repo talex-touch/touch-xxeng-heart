@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+- Support video speed controls for any detected `<video>` tag, including open Shadow DOM and embedded frames.
+
 ## v0.1.5 - 2026-07-09
 
 Changes since v0.1.4.

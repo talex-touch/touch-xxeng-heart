@@ -9,6 +9,8 @@ import { setupApp } from '~/logic/common-setup'
 (() => {
   console.info('[Lexi] content script ready')
   ensurePageEnhancer()
+  if (window.top !== window)
+    return
 
   const mountApp = () => {
     if (!document.body || document.getElementById(__NAME__))

@@ -24,6 +24,9 @@ export function ensurePageEnhancer() {
       listeners.forEach(listener => listener(stats))
     },
   })
+  if (window.top !== window)
+    return
+
   startGitHubDigest()
   startForumDigest()
 }

@@ -2019,15 +2019,18 @@ async function savePageTranslationCache(cache: PageTranslationCache) {
   await browser.storage.local.set({ [getPageTranslationCacheKey()]: JSON.stringify(cache) })
 }
 
-async function restorePageTranslationCache(settings: LexiSettings, force = false) {
+async function restorePageTranslationCache(settings: LexiSettings, force = false, isActive: () => boolean = () => true) {
   const cache = await readPageTranslationCache()
-  if ((!force && !cache?.enabled) || !cache?.blocks.length)
+  if (!isActive() || (!force && !cache?.enabled) || !cache?.blocks.length)
     return cache
 
   ensurePageStyles(settings.ui.customCss)
   removePageTranslationElements()
   const targets = getPageTranslationTargets(settings, cache.blocks.length + 8)
   for (const block of cache.blocks) {
+    if (!isActive())
+      return cache
+
     const target = targets.find(item => item.id === block.id || item.text === block.source)
     if (!target)
       continue
@@ -2904,6 +2907,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let dialogShortcut = defaultSettings.ui.dialogShortcut
   let mediaModifierShortcut = defaultSettings.ui.mediaModifierShortcut
   let videoSpeedMenuState: VideoSpeedMenuState | undefined
+  let activeVideoSpeedGesture: { video: HTMLVideoElement, pointerId: number } | undefined
   let lastVideoSpeedGesture: { video: HTMLVideoElement, at: number } | undefined
   let lastSelectionKey = ''
   let activeSelectionKey = ''
@@ -2933,6 +2937,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function refreshStats() {
     const { settings, records } = await getStoredState()
+    if (disposed)
+      return
+
     const siteHints = detectSpecialSiteHints()
     stats = {
       ...stats,
@@ -2948,6 +2955,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function run() {
     const { settings, records } = await getStoredState()
+    if (disposed)
+      return
+
     const siteHints = detectSpecialSiteHints()
     const enabled = pageFeatureEnabled(settings, siteHints)
     const replacementEnabled = settings.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, siteHints)
@@ -3042,6 +3052,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       if (settings.history.enabled)
         await saveRecords(nextRecords)
     }
+    if (disposed)
+      return
 
     stats.records = nextRecords.length
     events.onStats(stats)
@@ -3053,6 +3065,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
       replacements: stats.replacements,
       records: stats.records,
     })
+    if (disposed)
+      return
 
     if (settings.ai.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, siteHints) && aiReplacementSeeds.length) {
       void queueAiReplacementSeeds(settings, aiReplacementSeeds, events)
@@ -3284,6 +3298,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return { ok: true, message: '当前页面自动翻译已启用。', blocks: pageTranslationSources.size }
 
     const { settings } = await getStoredState()
+    if (disposed)
+      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+
     const siteHints = detectSpecialSiteHints()
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return { ok: false, message: '划词翻译场景未启用。', blocks: 0 }
@@ -3292,7 +3309,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!activation)
       return { ok: false, message: '自动翻译 Regex 无效或为空，请在设置中修正。', blocks: 0 }
 
-    const cache = await restorePageTranslationCache(settings, true)
+    const cache = await restorePageTranslationCache(settings, true, () => !disposed)
+    if (disposed)
+      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+
     pageTranslationSources.clear()
     for (const block of cache?.blocks ?? [])
       pageTranslationSources.set(block.id, block)
@@ -3301,7 +3321,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationEnabled = true
     pageTranslationRunId += 1
     await savePageTranslationActivation(activation)
+    if (disposed)
+      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+
     await savePageTranslationSnapshot(settings)
+    if (disposed)
+      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+
     ensurePageTranslationWatcher(settings)
     schedulePageTranslationScan(settings, 0)
 
@@ -3355,12 +3381,21 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function restoreSavedPageTranslation() {
     const { settings } = await getStoredState()
+    if (disposed)
+      return
+
     const siteHints = detectSpecialSiteHints()
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return
 
     const activation = await findMatchingPageTranslationActivation()
-    const cache = await restorePageTranslationCache(settings, Boolean(activation))
+    if (disposed)
+      return
+
+    const cache = await restorePageTranslationCache(settings, Boolean(activation), () => !disposed)
+    if (disposed)
+      return
+
     if (!activation && !cache?.enabled)
       return
 
@@ -3377,6 +3412,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function queueAiReplacementSeeds(settings: LexiSettings, seeds: ReplacementSeed[], currentEvents: EnhancerEvents) {
     let { records } = await getStoredState()
+    if (disposed)
+      return
+
     let changed = false
 
     for (const seed of seeds) {
@@ -3385,6 +3423,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
       try {
         const candidates = await requestReplacementCandidates(settings, seed.text, seed.context)
+        if (disposed)
+          return
+
         for (const candidate of candidates) {
           if (!candidate.original || !candidate.replacement || candidateExists(records, candidate))
             continue
@@ -3415,6 +3456,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     records = applyHistoryLimit(records, settings)
     await saveRecords(records)
+    if (disposed)
+      return
+
     stats.records = records.length
     currentEvents.onStats(stats)
   }
@@ -3882,20 +3926,44 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!video)
       return false
 
-    if (lastVideoSpeedGesture?.video !== video || performance.now() - lastVideoSpeedGesture.at > 500)
+    const matchesActiveGesture = activeVideoSpeedGesture?.video === video
+      && (!(event instanceof PointerEvent) || activeVideoSpeedGesture.pointerId === event.pointerId)
+    if (matchesActiveGesture) {
+      activeVideoSpeedGesture = undefined
+      lastVideoSpeedGesture = { video, at: performance.now() }
+    }
+    else if (lastVideoSpeedGesture?.video !== video || performance.now() - lastVideoSpeedGesture.at > 500) {
       toggleVideoSpeedGesture(video)
+    }
 
     return consumeVideoSpeedGesture(event)
   }
 
   const onVideoSpeedContextMenu = (event: MouseEvent) => {
-    finishVideoSpeedGesture(event)
+    const video = getVideoSpeedGestureVideo(event)
+    if (!video)
+      return
+
+    if (activeVideoSpeedGesture?.video !== video
+      && (lastVideoSpeedGesture?.video !== video || performance.now() - lastVideoSpeedGesture.at > 500)) {
+      toggleVideoSpeedGesture(video)
+    }
+    consumeVideoSpeedGesture(event)
+  }
+
+  const onVideoSpeedPointerCancel = (event: PointerEvent) => {
+    if (activeVideoSpeedGesture?.pointerId !== event.pointerId)
+      return
+
+    lastVideoSpeedGesture = { video: activeVideoSpeedGesture.video, at: performance.now() }
+    activeVideoSpeedGesture = undefined
   }
 
   const onPointerDown = (event: PointerEvent) => {
     const video = getVideoSpeedGestureVideo(event)
     if (video) {
       toggleVideoSpeedGesture(video)
+      activeVideoSpeedGesture = { video, pointerId: event.pointerId }
 
       consumeVideoSpeedGesture(event)
       return
@@ -4175,6 +4243,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const stop = () => {
     disposed = true
+    activeVideoSpeedGesture = undefined
     dynamicObserver?.disconnect()
     pageTranslationObserver?.disconnect()
     window.clearTimeout(dynamicTimer)
@@ -4194,6 +4263,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     removePageTranslateStatusListener()
     removePageStatsListener()
     window.removeEventListener('pointerdown', onPointerDown, true)
+    window.removeEventListener('pointercancel', onVideoSpeedPointerCancel, true)
     window.removeEventListener('click', onMediaClickCapture, true)
     window.removeEventListener('auxclick', onMediaClickCapture, true)
     window.removeEventListener('contextmenu', onVideoSpeedContextMenu, true)
@@ -4261,11 +4331,15 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   void browser.storage.local.get(settingsStorageKey).then(async (stored) => {
+    if (disposed)
+      return
+
     if (!stored[settingsStorageKey])
       await browser.storage.local.set({ [settingsStorageKey]: JSON.stringify(defaultSettings) })
   }).catch(handleEnhancerError)
 
   window.addEventListener('pointerdown', onPointerDown, true)
+  window.addEventListener('pointercancel', onVideoSpeedPointerCancel, true)
   window.addEventListener('click', onMediaClickCapture, true)
   window.addEventListener('auxclick', onMediaClickCapture, true)
   window.addEventListener('contextmenu', onVideoSpeedContextMenu, true)

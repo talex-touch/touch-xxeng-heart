@@ -1,7 +1,18 @@
+import type { BrowserContext } from '@playwright/test'
 import { expect, test } from './fixtures'
 
-test('video speed menu persists and resists player rate resets', async ({ page }) => {
-  await page.goto('http://localhost:3303/popup/index.html')
+const videoTestUrl = 'https://lexi.test/video'
+
+function routeVideoTestPage(context: BrowserContext) {
+  return context.route('https://lexi.test/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><main>Lexi video test</main></body></html>',
+  }))
+}
+
+test('video speed menu persists and resists player rate resets', async ({ context, page }) => {
+  await routeVideoTestPage(context)
+  await page.goto(videoTestUrl)
   await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
 
   const center = await page.evaluate(() => {
@@ -42,6 +53,18 @@ test('video speed menu persists and resists player rate resets', async ({ page }
   await page.keyboard.press('Escape')
   await expect(menu).toHaveCount(0)
   await expect.poll(getPlaybackRate).toBe(1)
+
+  await page.keyboard.down('Control')
+  await page.mouse.move(center.x, center.y)
+  await page.mouse.down()
+  await page.waitForTimeout(650)
+  await page.mouse.up()
+  await page.keyboard.up('Control')
+  await expect(menu).toBeVisible()
+
+  await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+  await expect.poll(getPlaybackRate).toBe(1)
 })
 
 test('video speed menu detects a preview behind an earlier document interceptor', async ({ context, page }) => {
@@ -49,7 +72,8 @@ test('video speed menu detects a preview behind an earlier document interceptor'
     for (const type of ['pointerdown', 'mousedown', 'click'])
       document.addEventListener(type, event => event.stopImmediatePropagation(), true)
   })
-  await page.goto('http://localhost:3303/popup/index.html')
+  await routeVideoTestPage(context)
+  await page.goto(videoTestUrl)
   await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
 
   const center = await page.evaluate(() => {
@@ -87,7 +111,8 @@ test('macOS trackpad uses Command plus secondary click without hijacking Command
     for (const type of ['pointerdown', 'mousedown', 'contextmenu', 'mouseup'])
       document.addEventListener(type, event => event.stopImmediatePropagation(), true)
   })
-  await page.goto('http://localhost:3303/popup/index.html')
+  await routeVideoTestPage(context)
+  await page.goto(videoTestUrl)
   await expect(page.locator('#touch-xxeng-heart')).toBeAttached()
 
   const center = await page.evaluate(() => {

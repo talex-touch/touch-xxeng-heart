@@ -21,3 +21,6 @@ playwright-report/
 vite.config.*.timestamp-*.mjs
 
 .serena/
+
+apps/web/.next/
+apps/web/out/

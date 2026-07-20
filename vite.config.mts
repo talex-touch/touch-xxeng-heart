@@ -9,7 +9,7 @@ import IconsResolver from 'unplugin-icons/resolver'
 import Components from 'unplugin-vue-components/vite'
 import AutoImport from 'unplugin-auto-import/vite'
 import UnoCSS from 'unocss/vite'
-import { isDev, port, r } from './scripts/utils'
+import { isDev, r } from './scripts/utils'
 import packageJson from './package.json'
 
 export const sharedConfig: UserConfig = {
@@ -80,16 +80,9 @@ export const sharedConfig: UserConfig = {
   },
 }
 
-export default defineConfig(({ command }) => ({
+export default defineConfig({
   ...sharedConfig,
-  base: command === 'serve' ? `http://localhost:${port}/` : '/dist/',
-  server: {
-    port,
-    hmr: {
-      host: 'localhost',
-    },
-    origin: `http://localhost:${port}`,
-  },
+  base: '/dist/',
   build: {
     watch: isDev
       ? {}
@@ -113,4 +106,4 @@ export default defineConfig(({ command }) => ({
     globals: true,
     environment: 'jsdom',
   },
-}))
+})

@@ -18,6 +18,11 @@ Changes since v0.1.5.
 
 ## Unreleased
 
+## v0.1.7 - 2026-07-19
+
+### Fixes
+- build development extension views as local assets without a Vite server dependency
+
 ### Changes
 - Support video speed controls for any detected `<video>` tag, including open Shadow DOM and embedded frames.
 

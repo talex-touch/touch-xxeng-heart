@@ -29,8 +29,11 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # --ignore-workspace: every step below builds the extension from the root
+      # package only. Installing apps/* as well would couple the extension release
+      # to the landing page's dependency tree for no benefit.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-workspace
 
       - name: Lint
         run: pnpm lint

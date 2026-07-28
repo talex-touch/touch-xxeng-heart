@@ -1,8 +1,16 @@
 import browser from 'webextension-polyfill'
+import { sendMessage } from 'webext-bridge/content-script'
 import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
+import { findAboutPlacement, getStickyOffset, githubDigestMountAttribute } from '~/contentScripts/githubPlacement'
+import { digestCardKeyframes, digestCardTokens, ensureStyleSheet, morphCardContent, runTypewriterAnimation } from '~/contentScripts/ui/digestCard'
+import { startRouteWatcher } from '~/contentScripts/ui/routeWatcher'
+import type { RouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import { requestGitHubDigest } from '~/logic/aiClient'
 import { mergeSettings } from '~/logic/defaults'
+import { getCurrentDigestCacheEntry } from '~/logic/digestCache'
+import { readJsonValue } from '~/logic/storageJson'
 import { githubDigestStorageKey, settingsStorageKey } from '~/logic/storageKeys'
+import { escapeHtml, normalizeText, simpleHash, uniq, withTimeout } from '~/logic/text'
 import type { GitHubDigestCache, GitHubDigestCacheEntry, GitHubDigestResult, LexiSettings } from '~/logic/types'
 
 interface GitHubRepoInfo {
@@ -35,12 +43,12 @@ interface DigestCardState {
 }
 
 let cardState: DigestCardState | undefined
-let routeInterval: number | undefined
-let mutationTimer: number | undefined
 let autoTimer: number | undefined
-let lastUrl = ''
-let disposed = false
-let stopGitHubDigest: (() => void) | undefined
+let watcher: RouteWatcher | undefined
+/** URL the card last rendered for; a change means the user navigated, so re-collapse. */
+let lastRenderedUrl = ''
+
+const maxDigestCacheEntries = 80
 
 function isGitHubRepoPage() {
   if (location.hostname !== 'github.com')
@@ -104,37 +112,6 @@ function getRepoPath() {
   return { owner, name, repo: `${owner}/${name}` }
 }
 
-function normalizeText(value?: string | null) {
-  return (value ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function uniq(values: string[]) {
-  return [...new Set(values.map(normalizeText).filter(Boolean))]
-}
-
-function simpleHash(value: string) {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1)
-    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0
-
-  return Math.abs(hash).toString(36)
-}
-
-function readJsonValue<T>(value: unknown, fallback: T): T {
-  if (value == null)
-    return fallback
-
-  if (typeof value !== 'string')
-    return value as T
-
-  try {
-    return JSON.parse(value) as T
-  }
-  catch {
-    return fallback
-  }
-}
-
 async function getSettings() {
   const stored = await browser.storage.local.get(settingsStorageKey)
   return mergeSettings(readJsonValue<Partial<LexiSettings> | undefined>(stored[settingsStorageKey], undefined))
@@ -145,17 +122,44 @@ async function getDigestCache() {
   return readJsonValue<GitHubDigestCache>(stored[githubDigestStorageKey], {})
 }
 
-async function saveDigestCache(cache: GitHubDigestCache) {
-  await browser.storage.local.set({ [githubDigestStorageKey]: JSON.stringify(cache) })
+async function saveDigestCacheEntry(key: string, entry: GitHubDigestCacheEntry) {
+  const result = await sendMessage('lexi-upsert-digest-cache', {
+    storageKey: githubDigestStorageKey,
+    cacheKey: key,
+    entry: JSON.stringify(entry),
+    maxEntries: maxDigestCacheEntries,
+  }, 'background') as { ok?: boolean, error?: string }
+  if (!result.ok)
+    throw new Error(result.error || 'GitHub 摘要缓存更新失败')
 }
 
-function findRepoSidebar() {
-  return document.querySelector<HTMLElement>('.Layout-sidebar, [data-testid="repository-sidebar"]')
-    ?? document.querySelector<HTMLElement>('aside[aria-label*="Repository"], aside.Layout-sidebar')
+function removeSidebarMount() {
+  document.querySelector<HTMLElement>(`[${githubDigestMountAttribute}="true"]`)?.remove()
 }
 
-function findAboutBox() {
-  return document.querySelector<HTMLElement>('[data-testid="repository-about"], .BorderGrid')
+/**
+ * A stable wrapper node that owns the sticky positioning. GitHub re-renders the sidebar
+ * on navigation, so the mount is re-anchored on every render rather than assumed to survive.
+ */
+function getSidebarMount() {
+  const placement = findAboutPlacement(document)
+  const existing = document.querySelector<HTMLElement>(`[${githubDigestMountAttribute}="true"]`)
+  if (!placement) {
+    existing?.remove()
+    return undefined
+  }
+
+  const mount = existing ?? document.createElement('div')
+  if (!existing) {
+    mount.className = 'lexi-github-digest-mount'
+    mount.setAttribute(githubDigestMountAttribute, 'true')
+  }
+
+  if (mount.parentElement !== placement.parent || mount.nextElementSibling !== placement.before)
+    placement.parent.insertBefore(mount, placement.before)
+
+  mount.style.setProperty('--lexi-github-sticky-top', `${getStickyOffset(document, window)}px`)
+  return mount
 }
 
 function getDescription() {
@@ -189,8 +193,17 @@ function getReadmeText() {
 }
 
 function getPageText() {
-  const main = document.querySelector<HTMLElement>('main')
-  return normalizeText(main?.textContent ?? document.body.textContent).slice(0, 5200)
+  const root = document.querySelector<HTMLElement>('main') ?? document.body
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  const parts: string[] = []
+  let node = walker.nextNode()
+  while (node) {
+    if (!node.parentElement?.closest('[data-lexi-github-digest="true"]'))
+      parts.push(node.textContent ?? '')
+    node = walker.nextNode()
+  }
+
+  return normalizeText(parts.join(' ')).slice(0, 5200)
 }
 
 function isPrivateRepo() {
@@ -232,15 +245,6 @@ function createList(items: string[], emptyText: string) {
   return `<ul>${items.map(item => `<li class="lexi-github-digest__typewriter">${escapeHtml(item)}</li>`).join('')}</ul>`
 }
 
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;')
-}
-
 function getFallbackQuickSummary(info: GitHubRepoInfo) {
   return {
     oneLine: `${info.repo} 项目速读生成中。`,
@@ -267,70 +271,14 @@ function getDigestSummary(digest: GitHubDigestResult, options: { detail: boolean
   `
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
-    promise
-      .then(resolve, reject)
-      .finally(() => window.clearTimeout(timer))
-  })
-}
-
-function runTypewriterAnimation(element: HTMLElement) {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-    return
-
-  const targets = Array.from(element.querySelectorAll<HTMLElement>('.lexi-github-digest__typewriter'))
-  let groupDelay = 0
-  for (const target of targets) {
-    const text = target.textContent ?? ''
-    if (!text.trim())
-      continue
-
-    target.textContent = ''
-    target.setAttribute('aria-label', text)
-    Array.from(text).forEach((char, index) => {
-      const span = document.createElement('span')
-      span.className = 'lexi-github-digest__char'
-      span.textContent = char
-      span.style.animationDelay = `${groupDelay + Math.min(index * 16, 1200)}ms`
-      target.append(span)
-    })
-    groupDelay += Math.min(520, Math.max(180, text.length * 10))
-  }
+const typewriterOptions = {
+  targetClass: 'lexi-github-digest__typewriter',
+  charClass: 'lexi-github-digest__char',
+  step: 16,
 }
 
 function updateCardContent(element: HTMLElement, html: string) {
-  const from = element.getBoundingClientRect()
-  const fromRadius = getComputedStyle(element).borderRadius
-  element.innerHTML = html
-  runTypewriterAnimation(element)
-  const to = element.getBoundingClientRect()
-  const toRadius = getComputedStyle(element).borderRadius
-  if (!from.height || (!Math.abs(from.height - to.height) && !Math.abs(from.width - to.width)))
-    return
-
-  element.animate([
-    {
-      width: `${from.width}px`,
-      height: `${from.height}px`,
-      borderRadius: fromRadius,
-      opacity: 0.86,
-      filter: 'blur(1px) saturate(1.12)',
-      transform: 'perspective(900px) rotateX(-7deg) scale(0.985)',
-    },
-    {
-      width: `${to.width}px`,
-      height: `${to.height}px`,
-      borderRadius: toRadius,
-      opacity: 1,
-      filter: 'blur(0) saturate(1)',
-      transform: 'perspective(900px) rotateX(0) scale(1)',
-    },
-  ], {
-    duration: 360,
-    easing: 'cubic-bezier(0.2, 0.9, 0.2, 1)',
-  })
+  morphCardContent(element, html, node => runTypewriterAnimation(node, typewriterOptions))
 }
 
 function renderCard() {
@@ -340,7 +288,8 @@ function renderCard() {
   const { element, info, status, quickDigest, detailDigest, error, cachedQuick, cachedDetail } = cardState
   const collapsedClass = cardState.collapsed ? ' lexi-github-digest--collapsed' : ''
   const placeClass = cardState.isHome ? ' lexi-github-digest--home' : ' lexi-github-digest--repo-subpage'
-  element.className = `lexi-github-digest${collapsedClass}${placeClass}${element.classList.contains('lexi-github-digest--floating') ? ' lexi-github-digest--floating' : ''}${element.classList.contains('lexi-github-digest--sticky') ? ' lexi-github-digest--sticky' : ''}`
+  const floatingClass = element.classList.contains('lexi-github-digest--floating') ? ' lexi-github-digest--floating' : ''
+  element.className = `lexi-github-digest${collapsedClass}${placeClass}${floatingClass}`
   element.dataset.lexiCollapsed = cardState.collapsed ? 'true' : 'false'
   const statusLabel = status === 'quick-loading'
     ? '速读中...'
@@ -385,6 +334,9 @@ function renderCard() {
     </div>
   `
 
+  // Re-anchor every render: GitHub's client-side navigation replaces the sidebar subtree.
+  placeCard(element)
+
   if (cardState.lastRenderedHtml === html)
     return
 
@@ -393,13 +345,9 @@ function renderCard() {
 }
 
 function ensureStyles() {
-  if (document.getElementById('lexi-github-digest-style'))
-    return
-
-  const style = document.createElement('style')
-  style.id = 'lexi-github-digest-style'
-  style.textContent = `
+  ensureStyleSheet('lexi-github-digest-style', `
     .lexi-github-digest {
+      ${digestCardTokens}
       box-sizing: border-box;
       margin: 0 0 16px;
       border: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de));
@@ -415,10 +363,11 @@ function ensureStyles() {
       will-change: height, transform, opacity;
     }
     .lexi-github-digest *, .lexi-github-digest *::before, .lexi-github-digest *::after { box-sizing: border-box; }
+    .lexi-github-digest-mount { position: sticky; top: var(--lexi-github-sticky-top, 76px); z-index: 5; width: 100%; margin: 0 0 16px; }
+    .lexi-github-digest-mount .lexi-github-digest { margin: 0; max-height: calc(100vh - var(--lexi-github-sticky-top, 76px) - 24px); overflow: auto; overscroll-behavior: contain; }
     .lexi-github-digest--floating { position: fixed; right: 18px; top: 96px; z-index: 2147483647; width: min(340px, calc(100vw - 36px)); }
-    .lexi-github-digest--sticky { position: sticky; top: 16px; z-index: 20; align-self: flex-start; }
-    .lexi-github-digest__content { transform-origin: top right; animation: lexi-github-digest-content-flip 320ms cubic-bezier(0.2, 0.9, 0.2, 1) both; }
-    .lexi-github-digest__collapsed-toggle { display: none; width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; transform-origin: center; animation: lexi-github-digest-toggle-flip 260ms cubic-bezier(0.2, 0.9, 0.2, 1) both; }
+    .lexi-github-digest__content { transform-origin: top right; animation: lexi-github-digest-content-enter 320ms cubic-bezier(0.2, 0.9, 0.2, 1) both; }
+    .lexi-github-digest__collapsed-toggle { display: none; width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; transform-origin: center; animation: lexi-github-digest-toggle-enter 260ms cubic-bezier(0.2, 0.9, 0.2, 1) both; }
     .lexi-github-digest__collapsed-toggle span { display: block; color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); font-size: 11px; font-weight: 700; }
     .lexi-github-digest__collapsed-toggle strong { display: block; overflow: hidden; margin-top: 1px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .lexi-github-digest--collapsed { width: 132px; min-height: 0; padding: 9px 10px; border-radius: 999px; box-shadow: 0 10px 28px rgba(27, 31, 36, 0.14); }
@@ -446,38 +395,28 @@ function ensureStyles() {
     .lexi-github-digest__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .lexi-github-digest__actions button { border: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de)); border-radius: 6px; background: var(--bgColor-default, var(--color-canvas-default, #ffffff)); color: var(--fgColor-default, var(--color-fg-default, #1f2328)); cursor: pointer; font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 7px 9px; }
     .lexi-github-digest__actions button:first-child { border-color: var(--button-primary-borderColor-rest, #1f883d); background: var(--button-primary-bgColor-rest, #1f883d); color: var(--button-primary-fgColor-rest, #ffffff); }
-    @keyframes lexi-github-digest-content-flip { from { opacity: 0; filter: blur(5px); transform: perspective(900px) rotateX(-12deg) translateY(-6px) scale(0.98); } to { opacity: 1; filter: blur(0); transform: perspective(900px) rotateX(0) translateY(0) scale(1); } }
-    @keyframes lexi-github-digest-toggle-flip { from { opacity: 0; filter: blur(4px); transform: perspective(600px) rotateX(16deg) scale(0.94); } to { opacity: 1; filter: blur(0); transform: perspective(600px) rotateX(0) scale(1); } }
-    @keyframes lexi-github-digest-char-in { to { opacity: 1; filter: blur(0); transform: translateY(0); } }
-    @keyframes lexi-github-digest-ai-gradient { from { background-position-x: 120%; filter: saturate(1); } 50% { filter: saturate(1.32); } to { background-position-x: -120%; filter: saturate(1); } }
+    ${digestCardKeyframes('lexi-github-digest')}
     @media (prefers-reduced-motion: reduce) {
       .lexi-github-digest__content, .lexi-github-digest__collapsed-toggle, .lexi-github-digest__char, .lexi-github-digest__loading { animation: none; opacity: 1; filter: none; transform: none; }
     }
-  `
-  document.documentElement.appendChild(style)
+  `)
 }
 
-function updateStickyCardMode(element: HTMLElement) {
-  if (!findRepoSidebar() || element.classList.contains('lexi-github-digest--floating'))
-    return
-
-  element.classList.add('lexi-github-digest--sticky')
-}
-
+/**
+ * Embed above the About block on the repo home page; only fall back to a floating
+ * panel on sub-pages, which have no sidebar to live in.
+ */
 function placeCard(element: HTMLElement) {
-  if (cardState?.isHome) {
-    const target = findRepoSidebar() ?? findAboutBox()
-    if (target) {
-      element.classList.remove('lexi-github-digest--floating')
-      if (element.parentElement !== target)
-        target.prepend(element)
-      updateStickyCardMode(element)
-      return
-    }
+  const mount = cardState?.isHome ? getSidebarMount() : undefined
+  if (mount) {
+    element.classList.remove('lexi-github-digest--floating')
+    if (element.parentElement !== mount)
+      mount.append(element)
+    return
   }
 
+  removeSidebarMount()
   element.classList.add('lexi-github-digest--floating')
-  element.classList.remove('lexi-github-digest--sticky')
   if (element.parentElement !== document.body)
     document.body.appendChild(element)
 }
@@ -502,6 +441,7 @@ function removeCard() {
   window.clearTimeout(autoTimer)
   cardState?.element.removeEventListener('click', onCardClick)
   cardState?.element.remove()
+  removeSidebarMount()
   cardState = undefined
 }
 
@@ -517,12 +457,9 @@ function getLegacyCacheKeys(info: GitHubRepoInfo) {
 }
 
 function getCachedEntry(cache: GitHubDigestCache, info: GitHubRepoInfo, settings: LexiSettings) {
-  const entry = getLegacyCacheKeys(info).map(key => cache[key]).find(Boolean)
-  if (!entry)
-    return undefined
-
-  const ttl = Math.max(1, settings.githubDigest.cacheDays) * 24 * 60 * 60 * 1000
-  return Date.now() - entry.updatedAt <= ttl ? entry : undefined
+  return getLegacyCacheKeys(info)
+    .map(key => getCurrentDigestCacheEntry(cache[key], info.sourceHash, settings.githubDigest.cacheDays))
+    .find(Boolean)
 }
 
 function createCacheEntry(info: GitHubRepoInfo, current?: GitHubDigestCacheEntry): GitHubDigestCacheEntry {
@@ -540,17 +477,29 @@ function createCacheEntry(info: GitHubRepoInfo, current?: GitHubDigestCacheEntry
   }
 }
 
+function isCurrentDigestRequest(state: DigestCardState, info: GitHubRepoInfo) {
+  return cardState === state
+    && state.info.key === info.key
+    && state.info.sourceHash === info.sourceHash
+}
+
 async function generateQuickDigest(force = false) {
   if (!cardState || cardState.status === 'quick-loading' || cardState.status === 'detail-loading')
     return
 
   const state = cardState
+  const requestInfo: GitHubRepoInfo = {
+    ...state.info,
+    topics: [...state.info.topics],
+    languages: [...state.info.languages],
+    files: [...state.info.files],
+  }
   const settings = await getSettings()
-  if (!settings.githubDigest.enabled)
+  if (!settings.githubDigest.enabled || !isCurrentDigestRequest(state, requestInfo))
     return
 
   const cache = await getDigestCache()
-  const cached = !force ? getCachedEntry(cache, state.info, settings)?.quickDigest : undefined
+  const cached = !force ? getCachedEntry(cache, requestInfo, settings)?.quickDigest : undefined
   if (cached) {
     state.quickDigest = cached
     state.cachedQuick = true
@@ -565,32 +514,40 @@ async function generateQuickDigest(force = false) {
 
   try {
     const digest = await withTimeout(requestGitHubDigest(settings, {
-      repo: state.info.repo,
-      description: state.info.description,
-      topics: state.info.topics,
-      languages: state.info.languages,
-      files: state.info.files,
-      readme: state.info.readme,
-      pageText: state.info.pageText,
+      repo: requestInfo.repo,
+      description: requestInfo.description,
+      topics: requestInfo.topics,
+      languages: requestInfo.languages,
+      files: requestInfo.files,
+      readme: requestInfo.readme,
+      pageText: requestInfo.pageText,
       mode: 'quick',
     }), 25000, '速读生成超时，请稍后重试或检查 AI 后端。')
     if (!digest)
       throw new Error('AI 未返回有效速读。请确认每日推荐 AI 场景已配置。')
+    if (!isCurrentDigestRequest(state, requestInfo))
+      return
 
-    const entry = createCacheEntry(state.info, getCachedEntry(cache, state.info, settings))
+    const entry = createCacheEntry(requestInfo, getCachedEntry(cache, requestInfo, settings))
     entry.quickDigest = digest
-    cache[state.info.key] = entry
-    await saveDigestCache(cache)
+    await saveDigestCacheEntry(requestInfo.key, entry)
+    if (!isCurrentDigestRequest(state, requestInfo))
+      return
+
     state.quickDigest = digest
     state.cachedQuick = false
     state.status = 'quick-ready'
   }
   catch (error) {
+    if (!isCurrentDigestRequest(state, requestInfo))
+      return
+
     state.status = 'error'
     state.error = error instanceof Error ? error.message : '生成失败'
   }
   finally {
-    renderCard()
+    if (cardState === state)
+      renderCard()
   }
 }
 
@@ -599,12 +556,18 @@ async function generateDetailDigest(force = false) {
     return
 
   const state = cardState
+  const requestInfo: GitHubRepoInfo = {
+    ...state.info,
+    topics: [...state.info.topics],
+    languages: [...state.info.languages],
+    files: [...state.info.files],
+  }
   const settings = await getSettings()
-  if (!settings.githubDigest.enabled)
+  if (!settings.githubDigest.enabled || !isCurrentDigestRequest(state, requestInfo))
     return
 
   const cache = await getDigestCache()
-  const cached = !force ? getCachedEntry(cache, state.info, settings)?.digest : undefined
+  const cached = !force ? getCachedEntry(cache, requestInfo, settings)?.digest : undefined
   if (cached) {
     state.detailDigest = cached
     state.cachedDetail = true
@@ -619,32 +582,40 @@ async function generateDetailDigest(force = false) {
 
   try {
     const digest = await withTimeout(requestGitHubDigest(settings, {
-      repo: state.info.repo,
-      description: state.info.description,
-      topics: state.info.topics,
-      languages: state.info.languages,
-      files: state.info.files,
-      readme: state.info.readme,
-      pageText: state.info.pageText,
+      repo: requestInfo.repo,
+      description: requestInfo.description,
+      topics: requestInfo.topics,
+      languages: requestInfo.languages,
+      files: requestInfo.files,
+      readme: requestInfo.readme,
+      pageText: requestInfo.pageText,
       mode: 'detail',
     }), 45000, '详细总览生成超时，请稍后重试或检查 AI 后端。')
     if (!digest)
       throw new Error('AI 未返回有效总览。请确认每日推荐 AI 场景已配置。')
+    if (!isCurrentDigestRequest(state, requestInfo))
+      return
 
-    const entry = createCacheEntry(state.info, getCachedEntry(cache, state.info, settings))
+    const entry = createCacheEntry(requestInfo, getCachedEntry(cache, requestInfo, settings))
     entry.digest = digest
-    cache[state.info.key] = entry
-    await saveDigestCache(cache)
+    await saveDigestCacheEntry(requestInfo.key, entry)
+    if (!isCurrentDigestRequest(state, requestInfo))
+      return
+
     state.detailDigest = digest
     state.cachedDetail = false
     state.status = 'detail-ready'
   }
   catch (error) {
+    if (!isCurrentDigestRequest(state, requestInfo))
+      return
+
     state.status = 'error'
     state.error = error instanceof Error ? error.message : '生成失败'
   }
   finally {
-    renderCard()
+    if (cardState === state)
+      renderCard()
   }
 }
 
@@ -710,9 +681,12 @@ async function scheduleAutoGenerate(info: GitHubRepoInfo) {
 
   const delay = Math.max(1200, settings.githubDigest.autoDelaySeconds * 1000)
   autoTimer = window.setTimeout(() => {
+    if (!cardState || cardState.info.key !== info.key || cardState.info.sourceHash !== info.sourceHash)
+      return
+
     void generateDetailDigest(false).catch((error) => {
       if (isExtensionContextInvalidated(error)) {
-        stopGitHubDigest?.()
+        watcher?.stop()
         return
       }
 
@@ -722,7 +696,7 @@ async function scheduleAutoGenerate(info: GitHubRepoInfo) {
 }
 
 async function refresh() {
-  if (disposed)
+  if (watcher?.disposed)
     return
 
   if (!isGitHubRepoPage()) {
@@ -740,115 +714,90 @@ async function refresh() {
   if (!info)
     return
 
-  if (cardState?.info.key === info.key) {
-    cardState.info = info
-    cardState.isHome = isGitHubRepoHomePage()
-    if (cardState.isHome)
-      cardState.collapsed = false
-    else if (lastUrl !== location.href)
-      cardState.collapsed = true
-    placeCard(cardState.element)
+  const current = cardState
+  const sameRepo = current?.info.key === info.key
+  const sameSource = sameRepo && current?.info.sourceHash === info.sourceHash
+  if (sameSource && current) {
+    current.info = info
+    current.isHome = isGitHubRepoHomePage()
+    if (current.isHome)
+      current.collapsed = false
+    else if (lastRenderedUrl !== location.href)
+      current.collapsed = true
+    lastRenderedUrl = location.href
+    placeCard(current.element)
     renderCard()
     return
   }
 
-  mountCard(info)
-  const cache = await getDigestCache()
-  const cached = getCachedEntry(cache, info, settings)
-  if (cached?.quickDigest && cardState) {
-    cardState.quickDigest = cached.quickDigest
-    cardState.cachedQuick = true
-    cardState.status = cached.digest ? 'detail-ready' : 'quick-ready'
-  }
-
-  if (cached?.digest && cardState) {
-    cardState.detailDigest = cached.digest
-    cardState.cachedDetail = true
-    cardState.status = 'detail-ready'
-  }
-
-  if (cached?.quickDigest || cached?.digest) {
+  if (sameRepo && current) {
+    current.info = info
+    current.isHome = isGitHubRepoHomePage()
+    current.collapsed = current.isHome ? false : lastRenderedUrl !== location.href
+    current.quickDigest = undefined
+    current.detailDigest = undefined
+    current.cachedQuick = false
+    current.cachedDetail = false
+    current.error = undefined
+    current.status = 'quick-ready'
+    lastRenderedUrl = location.href
+    placeCard(current.element)
     renderCard()
   }
   else {
-    void generateQuickDigest(false)
+    lastRenderedUrl = location.href
+    mountCard(info)
   }
+
+  const state = cardState
+  if (!state || !isCurrentDigestRequest(state, info))
+    return
+
+  const cache = await getDigestCache()
+  if (!isCurrentDigestRequest(state, info))
+    return
+
+  const cached = getCachedEntry(cache, info, settings)
+  if (cached?.quickDigest) {
+    state.quickDigest = cached.quickDigest
+    state.cachedQuick = true
+    state.status = cached.digest ? 'detail-ready' : 'quick-ready'
+  }
+
+  if (cached?.digest) {
+    state.detailDigest = cached.digest
+    state.cachedDetail = true
+    state.status = 'detail-ready'
+  }
+
+  if (cached?.quickDigest || cached?.digest)
+    renderCard()
+  else
+    void generateQuickDigest(false)
 
   if (!cached?.digest)
     await scheduleAutoGenerate(info)
 }
 
-function checkRoute() {
-  if (lastUrl === location.href)
-    return
-
-  lastUrl = location.href
-  window.setTimeout(() => {
-    refresh().catch((error) => {
-      if (isExtensionContextInvalidated(error)) {
-        stopGitHubDigest?.()
-        return
-      }
-
-      console.warn('[Lexi] GitHub Digest refresh failed', error)
-    })
-  }, 700)
-}
-
-function onVisibilityChange() {
-  if (document.visibilityState === 'visible') {
-    if (cardState?.status === 'quick-ready' && !cardState.detailDigest)
-      void scheduleAutoGenerate(cardState.info)
-  }
-  else {
-    window.clearTimeout(autoTimer)
-  }
-}
-
-function onScroll() {
-  if (cardState)
-    updateStickyCardMode(cardState.element)
+function onVisible() {
+  if (cardState?.status === 'quick-ready' && !cardState.detailDigest)
+    void scheduleAutoGenerate(cardState.info)
 }
 
 export function startGitHubDigest() {
   if (location.hostname !== 'github.com')
     return () => {}
 
-  let observer: MutationObserver | undefined
-  const stop = () => {
-    disposed = true
-    observer?.disconnect()
-    window.clearInterval(routeInterval)
-    window.clearTimeout(mutationTimer)
-    window.clearTimeout(autoTimer)
-    document.removeEventListener('visibilitychange', onVisibilityChange)
-    window.removeEventListener('scroll', onScroll)
-    removeCard()
-  }
-  const handleRefreshError = (message: string, error: unknown) => {
-    if (isExtensionContextInvalidated(error)) {
-      stop()
-      return
-    }
-
-    console.warn(message, error)
-  }
-  stopGitHubDigest = stop
-
-  disposed = false
-  lastUrl = location.href
-  refresh().catch(error => handleRefreshError('[Lexi] GitHub Digest init failed', error))
-  routeInterval = window.setInterval(checkRoute, 1000)
-  document.addEventListener('visibilitychange', onVisibilityChange)
-  window.addEventListener('scroll', onScroll, { passive: true })
-
-  observer = new MutationObserver(() => {
-    window.clearTimeout(mutationTimer)
-    mutationTimer = window.setTimeout(() => {
-      refresh().catch(error => handleRefreshError('[Lexi] GitHub Digest mutation refresh failed', error))
-    }, 900)
+  watcher = startRouteWatcher({
+    label: 'GitHub Digest',
+    refresh,
+    onDispose: () => {
+      window.clearTimeout(autoTimer)
+      removeCard()
+    },
+    onVisible,
+    onHidden: () => window.clearTimeout(autoTimer),
   })
-  observer.observe(document.body, { childList: true, subtree: true })
 
-  return stop
+  return watcher.stop
 }

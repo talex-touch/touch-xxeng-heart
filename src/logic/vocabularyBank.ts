@@ -183,11 +183,6 @@ export const programmerVocabulary: VocabularyCandidate[] = [
   },
 ]
 
-export function findCandidateByChinese(text: string, maxDifficulty: number) {
-  return programmerVocabulary
-    .filter(item => item.difficulty <= maxDifficulty && text.includes(item.original))
-}
-
 export function findCandidateByText(text: string) {
   const normalized = text.trim().toLowerCase()
   return programmerVocabulary.find((item) => {

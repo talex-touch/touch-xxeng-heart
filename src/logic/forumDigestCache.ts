@@ -45,8 +45,8 @@ export function getForumDigestVersion(entry: ForumDigestCacheEntry | undefined, 
   return entry?.history.find(item => item.sourceHash === sourceHash)
 }
 
-export function shouldAutoGenerateForumDigest(entry: ForumDigestCacheEntry | undefined) {
-  return !entry?.history.length
+export function shouldAutoGenerateForumDigest(entry: ForumDigestCacheEntry | undefined, sourceHash: string) {
+  return !getForumDigestVersion(entry, sourceHash)
 }
 
 export function createForumDigestCacheEntry(

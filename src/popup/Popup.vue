@@ -1,18 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { openOptionsPage } from '~/logic/browserActions'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 
 const appVersion = __VERSION__
 
-function openOptionsPage() {
-  browser.runtime.openOptionsPage()
-}
-
 const totalRecords = computed(() => vocabularyRecords.value.length)
-const enabled = computed({
-  get: () => lexiSettings.value.siteRules.enabled,
-  set: value => lexiSettings.value.siteRules.enabled = value,
-})
 </script>
 
 <template>
@@ -26,11 +19,7 @@ const enabled = computed({
           网页英语渐进学习 · v{{ appVersion }}
         </div>
       </div>
-      <label class="relative inline-flex cursor-pointer items-center">
-        <input v-model="enabled" type="checkbox" class="peer sr-only">
-        <span class="h-6 w-11 rounded-full bg-neutral-200 transition peer-checked:bg-neutral-950" />
-        <span class="absolute left-1 h-4 w-4 rounded-full bg-white transition peer-checked:translate-x-5" />
-      </label>
+      <ToggleSwitch v-model="lexiSettings.siteRules.enabled" label="Lexi 总开关" />
     </header>
 
     <section class="mt-4 grid grid-cols-3 gap-2 text-center">
@@ -60,14 +49,12 @@ const enabled = computed({
       </div>
     </section>
 
-    <div class="mt-4 flex gap-2">
-      <button class="flex-1 rounded-2 border-0 bg-neutral-950 px-3 py-2 text-white cursor-pointer" @click="openOptionsPage">
-        配置
-      </button>
-      <button class="flex-1 rounded-2 border border-neutral-200 bg-white px-3 py-2 text-neutral-700 cursor-pointer" @click="browser.runtime.openOptionsPage()">
-        AI 后端
-      </button>
-    </div>
+    <button
+      class="mt-4 w-full rounded-2 border-0 bg-neutral-950 px-3 py-2 text-white cursor-pointer"
+      @click="openOptionsPage"
+    >
+      打开设置
+    </button>
 
     <p class="mt-3 text-12px leading-5 text-neutral-500">
       开启后会在当前网页中把少量中文术语替换为英文，并记录划词学习历史。GitHub 仓库页会显示 Lexi 速读。

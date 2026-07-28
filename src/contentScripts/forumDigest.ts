@@ -1,9 +1,15 @@
 import browser from 'webextension-polyfill'
+import { sendMessage } from 'webext-bridge/content-script'
 import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
+import { digestCardKeyframes, digestCardTokens, ensureStyleSheet, morphCardContent, runTypewriterAnimation } from '~/contentScripts/ui/digestCard'
+import { startRouteWatcher } from '~/contentScripts/ui/routeWatcher'
+import type { RouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import { requestForumDigest } from '~/logic/aiClient'
 import { mergeSettings } from '~/logic/defaults'
 import { createForumDigestCacheEntry, getCachedForumDigestEntry, getForumDigestVersion, shouldAutoGenerateForumDigest } from '~/logic/forumDigestCache'
+import { readJsonValue } from '~/logic/storageJson'
 import { forumDigestStorageKey, settingsStorageKey } from '~/logic/storageKeys'
+import { escapeHtml, normalizeText, simpleHash, uniq, withTimeout } from '~/logic/text'
 import type { ForumDigestCache, ForumDigestCacheEntry, ForumDigestInfo, ForumDigestResult, LexiSettings } from '~/logic/types'
 
 interface ForumDigestCardState {
@@ -16,67 +22,25 @@ interface ForumDigestCardState {
   error?: string
   history: ForumDigestCacheEntry['history']
   selectedHistoryIndex: number
+  requestId: number
   lastRenderedHtml?: string
 }
 
 let cardState: ForumDigestCardState | undefined
-let routeInterval: number | undefined
-let mutationTimer: number | undefined
 let autoTimer: number | undefined
-let lastUrl = ''
-let disposed = false
-let stopForumDigest: (() => void) | undefined
+let watcher: RouteWatcher | undefined
 
 const knownDiscourseHosts = new Set(['linux.do', 'idcflare.com', 'discourse.org'])
-const maxDigestPosts = 4
+const maxDigestPosts = 8
+const maxDigestCacheEntries = 80
 
 function handleRefreshError(message: string, error: unknown) {
   if (isExtensionContextInvalidated(error)) {
-    stopForumDigest?.()
+    watcher?.stop()
     return
   }
 
   console.warn(message, error)
-}
-
-function normalizeText(value?: string | null) {
-  return (value ?? '').replace(/\s+/g, ' ').trim()
-}
-
-function uniq(values: string[]) {
-  return [...new Set(values.map(normalizeText).filter(Boolean))]
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;')
-}
-
-function simpleHash(value: string) {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1)
-    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0
-
-  return Math.abs(hash).toString(36)
-}
-
-function readJsonValue<T>(value: unknown, fallback: T): T {
-  if (value == null)
-    return fallback
-
-  if (typeof value !== 'string')
-    return value as T
-
-  try {
-    return JSON.parse(value) as T
-  }
-  catch {
-    return fallback
-  }
 }
 
 async function getSettings() {
@@ -89,8 +53,15 @@ async function getDigestCache() {
   return readJsonValue<ForumDigestCache>(stored[forumDigestStorageKey], {})
 }
 
-async function saveDigestCache(cache: ForumDigestCache) {
-  await browser.storage.local.set({ [forumDigestStorageKey]: JSON.stringify(cache) })
+async function saveDigestCacheEntry(key: string, entry: ForumDigestCacheEntry) {
+  const result = await sendMessage('lexi-upsert-digest-cache', {
+    storageKey: forumDigestStorageKey,
+    cacheKey: key,
+    entry: JSON.stringify(entry),
+    maxEntries: maxDigestCacheEntries,
+  }, 'background') as { ok?: boolean, error?: string }
+  if (!result.ok)
+    throw new Error(result.error || '论坛摘要缓存更新失败')
 }
 
 function isDiscourseLikePage() {
@@ -322,42 +293,15 @@ function getHistorySwitcher(state: ForumDigestCardState) {
   return `<div class="lexi-forum-digest__versions"><span>缓存版本</span>${buttons}</div>`
 }
 
-function runTypewriterAnimation(element: HTMLElement) {
-  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches)
-    return
-
-  const targets = Array.from(element.querySelectorAll<HTMLElement>('.lexi-forum-digest__typewriter'))
-  let groupDelay = 0
-  for (const target of targets) {
-    const text = target.textContent ?? ''
-    if (!text.trim())
-      continue
-
-    target.textContent = ''
-    target.setAttribute('aria-label', text)
-    Array.from(text).forEach((char, index) => {
-      const span = document.createElement('span')
-      span.className = 'lexi-forum-digest__char'
-      span.textContent = char
-      span.style.animationDelay = `${groupDelay + Math.min(index * 12, 900)}ms`
-      target.append(span)
-    })
-    groupDelay += Math.min(420, Math.max(160, text.length * 8))
-  }
+const typewriterOptions = {
+  targetClass: 'lexi-forum-digest__typewriter',
+  charClass: 'lexi-forum-digest__char',
+  step: 12,
+  maxDelay: 900,
 }
 
 function updateCardContent(element: HTMLElement, html: string) {
-  const from = element.getBoundingClientRect()
-  element.innerHTML = html
-  runTypewriterAnimation(element)
-  const to = element.getBoundingClientRect()
-  if (!from.height || Math.abs(from.height - to.height) < 2)
-    return
-
-  element.animate([
-    { height: `${from.height}px`, opacity: 0.82, filter: 'blur(1px)', transform: 'translateY(-4px) scale(0.99)' },
-    { height: `${to.height}px`, opacity: 1, filter: 'blur(0)', transform: 'translateY(0) scale(1)' },
-  ], { duration: 300, easing: 'cubic-bezier(0.2, 0.9, 0.2, 1)' })
+  morphCardContent(element, html, node => runTypewriterAnimation(node, typewriterOptions))
 }
 
 function renderCard() {
@@ -421,14 +365,9 @@ function renderCard() {
 }
 
 function ensureStyles() {
-  if (document.getElementById('lexi-forum-digest-style'))
-    return
-
-  const style = document.createElement('style')
-  style.id = 'lexi-forum-digest-style'
-  style.textContent = `
+  ensureStyleSheet('lexi-forum-digest-style', `
     .lexi-forum-digest-mount { width: 100%; margin: 14px 0; }
-    .lexi-forum-digest { --lexi-text: #111827; --lexi-muted: #64748b; --lexi-secondary: #475569; --lexi-accent: #4f46e5; --lexi-accent-strong: #4338ca; --lexi-card-bg: linear-gradient(135deg, rgba(255,255,255,.96), rgba(248,250,252,.9)); --lexi-card-border: rgba(129,140,248,.32); --lexi-card-shadow: 0 18px 50px rgba(15,23,42,.18), 0 0 0 1px rgba(255,255,255,.64) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(15,23,42,.12), 0 0 0 1px rgba(255,255,255,.62) inset; --lexi-pill-bg: rgba(79,70,229,.1); --lexi-button-bg: #fff; --lexi-button-border: rgba(203,213,225,.9); --lexi-divider: rgba(226,232,240,.8); --lexi-error-bg: rgba(254,242,242,.9); --lexi-error-text: #dc2626; --lexi-stale-bg: rgba(251,191,36,.16); --lexi-stale-text: #b45309; --lexi-loading-bg: linear-gradient(100deg, rgba(99,102,241,.12), rgba(14,165,233,.18), rgba(168,85,247,.12), rgba(99,102,241,.12)); box-sizing: border-box; color-scheme: light; position: fixed; right: 18px; top: 96px; z-index: 2147483646; width: min(360px, calc(100vw - 36px)); max-height: min(54vh, 540px); overflow: auto; border: 1px solid var(--lexi-card-border); border-radius: 14px; background: var(--lexi-card-bg); box-shadow: var(--lexi-card-shadow); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); color: var(--lexi-text); padding: 13px; font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .lexi-forum-digest { ${digestCardTokens} --lexi-text: #111827; --lexi-muted: #64748b; --lexi-secondary: #475569; --lexi-accent: #4f46e5; --lexi-accent-strong: #4338ca; --lexi-card-bg: linear-gradient(135deg, rgba(255,255,255,.96), rgba(248,250,252,.9)); --lexi-card-border: rgba(129,140,248,.32); --lexi-card-shadow: 0 18px 50px rgba(15,23,42,.18), 0 0 0 1px rgba(255,255,255,.64) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(15,23,42,.12), 0 0 0 1px rgba(255,255,255,.62) inset; --lexi-pill-bg: rgba(79,70,229,.1); --lexi-button-bg: #fff; --lexi-button-border: rgba(203,213,225,.9); --lexi-divider: rgba(226,232,240,.8); --lexi-error-bg: rgba(254,242,242,.9); --lexi-error-text: #dc2626; --lexi-stale-bg: rgba(251,191,36,.16); --lexi-stale-text: #b45309; --lexi-loading-bg: linear-gradient(100deg, rgba(99,102,241,.12), rgba(14,165,233,.18), rgba(168,85,247,.12), rgba(99,102,241,.12)); box-sizing: border-box; color-scheme: light; position: fixed; right: 18px; top: 96px; z-index: 2147483646; width: min(360px, calc(100vw - 36px)); max-height: min(54vh, 540px); overflow: auto; border: 1px solid var(--lexi-card-border); border-radius: 14px; background: var(--lexi-card-bg); box-shadow: var(--lexi-card-shadow); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); color: var(--lexi-text); padding: 13px; font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .lexi-forum-digest *, .lexi-forum-digest *::before, .lexi-forum-digest *::after { box-sizing: border-box; }
     .lexi-forum-digest[data-lexi-placement="sidebar"] { position: static; right: auto; top: auto; z-index: auto; width: 100%; min-width: 0; max-height: min(43.5vh, 390px); border-radius: 12px; padding: 11px; box-shadow: var(--lexi-sidebar-shadow); }
     .lexi-forum-digest--collapsed { width: 142px; min-height: 0; overflow: hidden; border-radius: 999px; padding: 9px 10px; }
@@ -438,7 +377,7 @@ function ensureStyles() {
     .lexi-forum-digest--collapsed .lexi-forum-digest__content { display: none; }
     .lexi-forum-digest__collapsed-toggle span { display: block; color: var(--lexi-accent); font-size: 11px; font-weight: 800; }
     .lexi-forum-digest__collapsed-toggle strong { display: block; overflow: hidden; margin-top: 1px; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .lexi-forum-digest__content { animation: lexi-forum-digest-enter 260ms cubic-bezier(.2,.9,.2,1) both; }
+    .lexi-forum-digest__content { animation: lexi-forum-digest-content-enter 260ms cubic-bezier(.2,.9,.2,1) both; }
     .lexi-forum-digest__head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
     .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__head { gap: 6px; }
     .lexi-forum-digest__eyebrow { color: var(--lexi-accent); font-size: 11px; font-weight: 800; letter-spacing: .02em; }
@@ -468,15 +407,12 @@ function ensureStyles() {
     .lexi-forum-digest__loading { margin-top: 12px; border-radius: 12px; background: var(--lexi-loading-bg); background-size: 240% 100%; padding: 10px; color: var(--lexi-accent); animation: lexi-forum-digest-ai-gradient 1.15s ease-in-out infinite; }
     .lexi-forum-digest__char { display: inline-block; opacity: 0; filter: blur(2px); transform: translateY(2px); animation: lexi-forum-digest-char-in 160ms cubic-bezier(.2,.7,.2,1) forwards; white-space: pre-wrap; }
     [data-lexi-forum-digest="true"] .lexi-forum-digest__actions button { font: 12px/1 ui-sans-serif, system-ui, sans-serif; }
-    @keyframes lexi-forum-digest-enter { from { opacity: 0; filter: blur(5px); transform: perspective(900px) rotateX(-10deg) translateY(-6px) scale(.98); } to { opacity: 1; filter: blur(0); transform: perspective(900px) rotateX(0) translateY(0) scale(1); } }
-    @keyframes lexi-forum-digest-char-in { to { opacity: 1; filter: blur(0); transform: translateY(0); } }
-    @keyframes lexi-forum-digest-ai-gradient { from { background-position-x: 120%; filter: saturate(1); } 50% { filter: saturate(1.32); } to { background-position-x: -120%; filter: saturate(1); } }
+    ${digestCardKeyframes('lexi-forum-digest')}
     @media (prefers-color-scheme: dark) {
       .lexi-forum-digest { --lexi-text: #f5f5f5; --lexi-muted: #a3a3a3; --lexi-secondary: #d4d4d4; --lexi-accent: #e5e5e5; --lexi-accent-strong: #fafafa; --lexi-card-bg: linear-gradient(135deg, rgba(12,12,12,.97), rgba(24,24,27,.94)); --lexi-card-border: rgba(115,115,115,.34); --lexi-card-shadow: 0 18px 50px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.07) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(0,0,0,.36), 0 0 0 1px rgba(255,255,255,.06) inset; --lexi-pill-bg: rgba(245,245,245,.1); --lexi-button-bg: rgba(23,23,23,.92); --lexi-button-border: rgba(82,82,82,.92); --lexi-divider: rgba(82,82,82,.72); --lexi-error-bg: rgba(127,29,29,.38); --lexi-error-text: #fca5a5; --lexi-stale-bg: rgba(120,53,15,.34); --lexi-stale-text: #facc15; --lexi-loading-bg: linear-gradient(100deg, rgba(64,64,64,.3), rgba(115,115,115,.22), rgba(38,38,38,.32), rgba(64,64,64,.3)); color-scheme: dark; }
     }
     @media (prefers-reduced-motion: reduce) { .lexi-forum-digest__content, .lexi-forum-digest__char, .lexi-forum-digest__loading { animation: none; opacity: 1; filter: none; transform: none; } }
-  `
-  document.documentElement.appendChild(style)
+  `)
 }
 
 function mountCard(info: ForumDigestInfo) {
@@ -487,7 +423,7 @@ function mountCard(info: ForumDigestInfo) {
   const element = document.createElement('section')
   element.className = 'lexi-forum-digest'
   element.dataset.lexiForumDigest = 'true'
-  cardState = { element, info, status: 'ready', collapsed: false, history: [], selectedHistoryIndex: -1 }
+  cardState = { element, info, status: 'ready', collapsed: false, history: [], selectedHistoryIndex: -1, requestId: 0 }
   element.addEventListener('click', onCardClick)
   placeCard(element)
   renderCard()
@@ -514,17 +450,28 @@ function createCacheEntry(info: ForumDigestInfo, digest: ForumDigestResult, curr
   }, digest, current)
 }
 
+function isCurrentDigestRequest(state: ForumDigestCardState, info: ForumDigestInfo, requestId: number) {
+  return cardState === state
+    && state.requestId === requestId
+    && state.info.key === info.key
+    && state.info.sourceHash === info.sourceHash
+}
+
 async function generateDigest(force = false) {
   if (!cardState || cardState.status === 'loading')
     return
 
   const state = cardState
+  const requestId = state.requestId
+  const requestInfo = { ...state.info, posts: [...state.info.posts], tags: [...state.info.tags] }
   const settings = await getSettings()
-  if (!settings.forumDigest.enabled)
+  if (!settings.forumDigest.enabled || !isCurrentDigestRequest(state, requestInfo, requestId))
     return
 
-  const requestInfo = { ...state.info, posts: [...state.info.posts], tags: [...state.info.tags] }
   const cache = await getDigestCache()
+  if (!isCurrentDigestRequest(state, requestInfo, requestId))
+    return
+
   const cachedEntry = getCachedEntry(cache, requestInfo, settings)
   const cached = !force && getForumDigestVersion(cachedEntry, requestInfo.sourceHash)?.digest
   if (cached && cachedEntry) {
@@ -545,45 +492,31 @@ async function generateDigest(force = false) {
     const digest = await withTimeout(requestForumDigest(settings, requestInfo), 30000, '论坛速读生成超时，请稍后重试或检查 AI 后端。')
     if (!digest)
       throw new Error('AI 未返回有效论坛速读。请确认每日推荐 AI 场景已配置。')
+    if (!isCurrentDigestRequest(state, requestInfo, requestId))
+      return
 
     const entry = createCacheEntry(requestInfo, digest, cachedEntry ?? cache[requestInfo.key])
-    cache[requestInfo.key] = entry
-    await saveDigestCache(cache)
-    if (cardState === state && state.info.key === requestInfo.key && state.info.sourceHash === requestInfo.sourceHash) {
-      state.digest = digest
-      state.history = entry.history
-      state.selectedHistoryIndex = 0
-      state.cached = false
-      state.status = 'ready'
-    }
-    else if (cardState === state && state.info.key === requestInfo.key) {
-      state.digest = getForumDigestVersion(entry, state.info.sourceHash)?.digest ?? entry.history[0]?.digest
-      state.history = entry.history
-      state.selectedHistoryIndex = state.history.findIndex(item => item.digest === state.digest)
-      state.cached = true
-      state.status = 'ready'
-    }
+    await saveDigestCacheEntry(requestInfo.key, entry)
+    if (!isCurrentDigestRequest(state, requestInfo, requestId))
+      return
+
+    state.digest = digest
+    state.history = entry.history
+    state.selectedHistoryIndex = 0
+    state.cached = false
+    state.status = 'ready'
   }
   catch (error) {
-    if (cardState === state && state.info.key === requestInfo.key) {
-      state.status = state.info.sourceHash === requestInfo.sourceHash ? 'error' : 'ready'
-      state.error = state.status === 'error'
-        ? error instanceof Error ? error.message : '生成失败'
-        : undefined
-    }
+    if (!isCurrentDigestRequest(state, requestInfo, requestId))
+      return
+
+    state.status = 'error'
+    state.error = error instanceof Error ? error.message : '生成失败'
   }
   finally {
-    renderCard()
+    if (cardState === state)
+      renderCard()
   }
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
-    promise
-      .then(resolve, reject)
-      .finally(() => window.clearTimeout(timer))
-  })
 }
 
 async function copyDigest() {
@@ -644,7 +577,7 @@ function onCardClick(event: Event) {
   }
 }
 
-async function scheduleAutoGenerate(_info: ForumDigestInfo) {
+async function scheduleAutoGenerate(info: ForumDigestInfo) {
   window.clearTimeout(autoTimer)
   const settings = await getSettings()
   if (!settings.forumDigest.enabled || !settings.forumDigest.autoGenerate)
@@ -652,12 +585,15 @@ async function scheduleAutoGenerate(_info: ForumDigestInfo) {
 
   const delay = Math.max(300, settings.forumDigest.autoDelaySeconds * 1000)
   autoTimer = window.setTimeout(() => {
+    if (!cardState || cardState.info.key !== info.key || cardState.info.sourceHash !== info.sourceHash)
+      return
+
     void generateDigest(false).catch(error => handleRefreshError('[Lexi] Forum Digest auto generate failed', error))
   }, delay)
 }
 
 async function refresh() {
-  if (disposed)
+  if (watcher?.disposed)
     return
 
   if (!isForumTopicPage()) {
@@ -675,95 +611,78 @@ async function refresh() {
   if (!info)
     return
 
+  const current = cardState
+  const sameTopic = current?.info.key === info.key
+  const sameSource = sameTopic && current?.info.sourceHash === info.sourceHash
+  if (sameSource && current) {
+    current.info = info
+    renderCard()
+    return
+  }
+
+  if (sameTopic && current) {
+    current.requestId += 1
+    current.info = info
+    current.status = 'ready'
+    current.error = undefined
+    current.cached = false
+    current.digest = undefined
+    current.history = []
+    current.selectedHistoryIndex = -1
+    renderCard()
+  }
+  else {
+    mountCard(info)
+  }
+
+  const state = cardState
+  if (!state)
+    return
+
+  const requestId = state.requestId
   const cache = await getDigestCache()
+  if (!isCurrentDigestRequest(state, info, requestId))
+    return
+
   const cached = getCachedEntry(cache, info, settings)
   const currentVersion = getForumDigestVersion(cached, info.sourceHash)
   const currentVersionIndex = currentVersion
     ? cached?.history.findIndex(item => item.sourceHash === info.sourceHash) ?? -1
     : -1
 
-  if (cardState?.info.key === info.key) {
-    const changed = cardState.info.sourceHash !== info.sourceHash
-    cardState.info = info
-    if (cached) {
-      cardState.history = cached.history
-      if (changed) {
-        cardState.digest = currentVersion?.digest ?? cached.history[0]?.digest
-        cardState.selectedHistoryIndex = currentVersionIndex >= 0 ? currentVersionIndex : 0
-      }
-    }
+  if (cached) {
+    state.history = cached.history
+    state.digest = currentVersion?.digest ?? cached.history[0]?.digest
+    state.selectedHistoryIndex = currentVersionIndex >= 0 ? currentVersionIndex : 0
+    state.cached = Boolean(currentVersion)
+    state.status = 'ready'
     renderCard()
-    if (changed && shouldAutoGenerateForumDigest(cached))
-      await scheduleAutoGenerate(info)
-    return
   }
 
-  mountCard(info)
-  if (cached && cardState) {
-    cardState.history = cached.history
-    cardState.digest = currentVersion?.digest ?? cached.history[0]?.digest
-    cardState.selectedHistoryIndex = currentVersionIndex >= 0 ? currentVersionIndex : 0
-    cardState.cached = Boolean(currentVersion)
-    cardState.status = 'ready'
-    renderCard()
-    if (shouldAutoGenerateForumDigest(cached))
-      await scheduleAutoGenerate(info)
-  }
-  else {
-    renderCard()
+  if (shouldAutoGenerateForumDigest(cached, info.sourceHash))
     await scheduleAutoGenerate(info)
-  }
 }
 
-function checkRoute() {
-  if (lastUrl === location.href)
-    return
-
-  lastUrl = location.href
-  window.setTimeout(() => {
-    refresh().catch(error => handleRefreshError('[Lexi] Forum Digest refresh failed', error))
-  }, 700)
-}
-
-function onVisibilityChange() {
-  if (document.visibilityState === 'visible') {
-    if (cardState?.status === 'ready' && !cardState.digest)
-      void scheduleAutoGenerate(cardState.info)
-  }
-  else {
-    window.clearTimeout(autoTimer)
-  }
+function onVisible() {
+  if (cardState?.status === 'ready' && !cardState.digest)
+    void scheduleAutoGenerate(cardState.info)
 }
 
 export function startForumDigest() {
   if (!isDiscourseLikePage())
     return () => {}
 
-  let observer: MutationObserver | undefined
-  const stop = () => {
-    disposed = true
-    observer?.disconnect()
-    window.clearInterval(routeInterval)
-    window.clearTimeout(mutationTimer)
-    window.clearTimeout(autoTimer)
-    document.removeEventListener('visibilitychange', onVisibilityChange)
-    removeCard()
-  }
-  stopForumDigest = stop
-
-  disposed = false
-  lastUrl = location.href
-  refresh().catch(error => handleRefreshError('[Lexi] Forum Digest init failed', error))
-  routeInterval = window.setInterval(checkRoute, 1000)
-  document.addEventListener('visibilitychange', onVisibilityChange)
-
-  observer = new MutationObserver(() => {
-    window.clearTimeout(mutationTimer)
-    mutationTimer = window.setTimeout(() => {
-      refresh().catch(error => handleRefreshError('[Lexi] Forum Digest mutation refresh failed', error))
-    }, 1200)
+  watcher = startRouteWatcher({
+    label: 'Forum Digest',
+    refresh,
+    onDispose: () => {
+      window.clearTimeout(autoTimer)
+      removeCard()
+    },
+    onVisible,
+    onHidden: () => window.clearTimeout(autoTimer),
+    mutationDelayMs: 1200,
   })
-  observer.observe(document.body, { childList: true, subtree: true })
 
-  return stop
+  return watcher.stop
 }

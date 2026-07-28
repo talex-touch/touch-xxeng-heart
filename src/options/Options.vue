@@ -5,12 +5,13 @@ import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
-import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
+import { estimateStorageBytes, formatBytes, formatDateTime, formatTime } from '~/logic/format'
+import { normalizeForumCacheHistory } from '~/logic/forumDigestCache'
+import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
 const scenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'omni']
-const sceneRuleScenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'omni']
 const tabs: Array<{ id: OptionsTab, label: string }> = [
   { id: 'settings', label: '基础设置' },
   { id: 'special', label: '特殊场景' },
@@ -41,11 +42,7 @@ const domainText = computed({
 
 const visitTrend = computed(() => summarizeByDay(pageVisitLogs.value))
 const aiTrend = computed(() => summarizeByDay(aiCallLogs.value))
-const maxVisitTrend = computed(() => Math.max(1, ...visitTrend.value.map(item => item.value)))
-const maxAiTrend = computed(() => Math.max(1, ...aiTrend.value.map(item => item.value)))
-const recentAiLogs = computed(() => aiCallLogs.value)
 const aiTokenTrend = computed(() => summarizeTokensByDay(aiCallLogs.value))
-const maxAiTokenTrend = computed(() => Math.max(1, ...aiTokenTrend.value.map(item => item.value)))
 const totalAiTokens = computed(() => aiCallLogs.value.reduce((sum, log) => sum + (log.totalTokens ?? 0), 0))
 const aiSceneTokenStats = computed(() => scenes.map(scene => ({
   scene,
@@ -54,7 +51,6 @@ const aiSceneTokenStats = computed(() => scenes.map(scene => ({
     .filter(log => log.scene === scene)
     .reduce((sum, log) => sum + (log.totalTokens ?? 0), 0),
 })))
-const recentPageVisits = computed(() => pageVisitLogs.value)
 const githubDigestEntries = computed(() => Object.entries(githubDigestCache.value)
   .map(([key, entry]) => ({ key, ...entry }))
   .sort((a, b) => b.updatedAt - a.updatedAt))
@@ -92,8 +88,9 @@ const recentVocabularyRecords = computed(() => filteredVocabularyRecords.value.s
 const todayStudySummary = computed(() => createTodayStudySummary(vocabularyRecords.value))
 const productVocabularyCount = computed(() => vocabularyRecords.value.filter(record => record.tags.includes('product')).length)
 const storageStats = computed(() => {
+  const vocabulary = estimateStorageBytes(vocabularyRecords.value)
   const items = [
-    { label: '词库', bytes: estimateStorageBytes(vocabularyRecords.value) },
+    { label: '词库', bytes: vocabulary },
     { label: 'AI 日志', bytes: estimateStorageBytes(aiCallLogs.value) },
     { label: '访问日志', bytes: estimateStorageBytes(pageVisitLogs.value) },
     { label: '设置', bytes: estimateStorageBytes(lexiSettings.value) },
@@ -101,6 +98,10 @@ const storageStats = computed(() => {
 
   return {
     items,
+    // Named rather than read as items[0], which silently mislabelled three call sites
+    // if the array order ever changed.
+    vocabulary,
+    others: items.slice(1),
     total: items.reduce((sum, item) => sum + item.bytes, 0),
   }
 })
@@ -165,23 +166,6 @@ function toggleSceneProvider(scene: FeatureScene, providerId: string, enabled: b
   lexiSettings.value.ai[scene].providerIds = [...current]
 }
 
-function formatTime(value: number) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(new Date(value))
-}
-
-function formatDateTime(value: number) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
 function clearGitHubDigestCache() {
   githubDigestCache.value = {}
 }
@@ -206,8 +190,8 @@ function formatForumDigestSummary(digest: ForumDigestResult) {
   return digest.oneLine || digest.summary[0] || '暂无摘要'
 }
 
-function getForumDigestHistoryCount(entry: { history?: unknown[] }) {
-  return Array.isArray(entry.history) ? entry.history.length : 0
+function getForumDigestHistoryCount(entry: ForumDigestCacheEntry) {
+  return normalizeForumCacheHistory(entry).length
 }
 
 async function testScene(scene: FeatureScene) {
@@ -226,22 +210,6 @@ async function testScene(scene: FeatureScene) {
   finally {
     testingScenes.value[scene] = false
   }
-}
-
-function barHeight(value: number, max: number) {
-  return `${Math.max(4, Math.round((value / max) * 112))}px`
-}
-
-function estimateStorageBytes(value: unknown) {
-  return new Blob([JSON.stringify(value)]).size
-}
-
-function formatBytes(bytes: number) {
-  const kb = bytes / 1024
-  if (kb > 1024)
-    return `${(kb / 1024).toFixed(2)} MB`
-
-  return `${kb.toFixed(1)} KB`
 }
 
 function normalizeSearchText(value: string) {
@@ -303,25 +271,7 @@ function updateSpecialDomains(profile: SpecialSiteProfile, value: string) {
 }
 
 function summarizeTokensByDay(logs: typeof aiCallLogs.value, days = 7) {
-  const result = new Map<string, number>()
-  const formatter = new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-  })
-
-  for (let index = days - 1; index >= 0; index -= 1) {
-    const date = new Date()
-    date.setDate(date.getDate() - index)
-    result.set(formatter.format(date), 0)
-  }
-
-  for (const log of logs) {
-    const key = formatter.format(new Date(log.createdAt))
-    if (result.has(key))
-      result.set(key, (result.get(key) ?? 0) + (log.totalTokens ?? 0))
-  }
-
-  return Array.from(result.entries()).map(([label, value]) => ({ label, value }))
+  return summarizeByDay(logs, days, log => log.totalTokens ?? 0)
 }
 
 function formatTestRequest(result: AiTestResult) {
@@ -400,7 +350,7 @@ function removeSceneRule(index: number) {
                 <span class="block text-14px font-500">总开关</span>
                 <span class="text-12px text-neutral-500">关闭后不替换、不划词翻译。</span>
               </span>
-              <input v-model="lexiSettings.siteRules.enabled" type="checkbox" class="h-5 w-5">
+              <ToggleSwitch v-model="lexiSettings.siteRules.enabled" />
             </label>
 
             <div class="mt-5">
@@ -444,7 +394,7 @@ function removeSceneRule(index: number) {
                     </button>
                   </div>
                   <div class="mt-2 grid grid-cols-2 gap-2 text-12px text-neutral-600 sm:grid-cols-4">
-                    <label v-for="scene in sceneRuleScenes" :key="`${rule.domain}-${scene}`" class="flex items-center gap-1">
+                    <label v-for="scene in scenes" :key="`${rule.domain}-${scene}`" class="flex items-center gap-1">
                       <input v-model="rule[scene]" type="checkbox">
                       <span>{{ featureLabels[scene] }}</span>
                     </label>
@@ -463,10 +413,10 @@ function removeSceneRule(index: number) {
             <h2 class="text-16px font-600">
               替换与学习节奏
             </h2>
-            <label class="mt-4 flex items-center justify-between">
+            <div class="mt-4 flex items-center justify-between">
               <span class="text-14px font-500">自动替换词汇</span>
-              <input v-model="lexiSettings.replacement.enabled" type="checkbox" class="h-5 w-5">
-            </label>
+              <ToggleSwitch v-model="lexiSettings.replacement.enabled" />
+            </div>
             <label class="mt-4 block">
               <span class="text-13px font-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
               <input v-model.number="lexiSettings.replacement.density" type="range" min="0.04" max="0.45" step="0.01" class="mt-2 w-full accent-neutral-950">
@@ -479,16 +429,16 @@ function removeSceneRule(index: number) {
               <span class="text-13px font-500">单页最多替换</span>
               <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="80" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
             </label>
-            <label class="mt-4 flex items-center justify-between">
+            <div class="mt-4 flex items-center justify-between">
               <span class="text-14px font-500">划词自动翻译</span>
-              <input v-model="lexiSettings.selection.autoTranslate" type="checkbox" class="h-5 w-5">
-            </label>
+              <ToggleSwitch v-model="lexiSettings.selection.autoTranslate" />
+            </div>
             <label class="mt-4 flex items-center justify-between gap-4">
               <span>
                 <span class="block text-14px font-500">按住修饰键触发划词翻译</span>
                 <span class="text-12px text-neutral-500">macOS 使用 Command，Windows/Linux 使用 Ctrl。媒体点击可单独配置，默认 meta+shift。</span>
               </span>
-              <input v-model="lexiSettings.selection.requireModifierKey" type="checkbox" class="h-5 w-5">
+              <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" />
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">划词翻译方向</span>
@@ -542,7 +492,7 @@ function removeSceneRule(index: number) {
                 <span class="block text-14px font-500">右下角状态浮标</span>
                 <span class="text-12px text-neutral-500">关闭后不显示“Lexi 已启用”。</span>
               </span>
-              <input v-model="lexiSettings.ui.showFloatingStatus" type="checkbox" class="h-5 w-5">
+              <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" />
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">快捷对话键</span>
@@ -567,14 +517,14 @@ function removeSceneRule(index: number) {
               <p class="mt-1 text-12px leading-5 text-neutral-500">
                 在 GitHub 仓库页先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。使用“每日推荐”AI 场景配置。
               </p>
-              <label class="mt-3 flex items-center justify-between gap-4">
+              <div class="mt-3 flex items-center justify-between gap-4">
                 <span class="text-14px font-500">显示速读卡片</span>
-                <input v-model="lexiSettings.githubDigest.enabled" type="checkbox" class="h-5 w-5">
-              </label>
-              <label class="mt-3 flex items-center justify-between gap-4">
+                <ToggleSwitch v-model="lexiSettings.githubDigest.enabled" />
+              </div>
+              <div class="mt-3 flex items-center justify-between gap-4">
                 <span class="text-14px font-500">停留后自动生成详细总览</span>
-                <input v-model="lexiSettings.githubDigest.autoGenerate" type="checkbox" class="h-5 w-5">
-              </label>
+                <ToggleSwitch v-model="lexiSettings.githubDigest.autoGenerate" />
+              </div>
               <label class="mt-3 block">
                 <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.githubDigest.autoDelaySeconds }} 秒</span>
                 <input v-model.number="lexiSettings.githubDigest.autoDelaySeconds" type="range" min="8" max="45" step="1" class="mt-2 w-full accent-neutral-950">
@@ -588,7 +538,7 @@ function removeSceneRule(index: number) {
                   <span class="block text-14px font-500">私有仓库也允许自动生成</span>
                   <span class="text-12px text-neutral-500">默认关闭；仍可手动点击生成。</span>
                 </span>
-                <input v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" type="checkbox" class="h-5 w-5">
+                <ToggleSwitch v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" />
               </label>
 
               <div class="mt-5 border-t border-neutral-200 pt-4">
@@ -598,14 +548,14 @@ function removeSceneRule(index: number) {
                 <p class="mt-1 text-12px leading-5 text-neutral-500">
                   对 linux.do、idcflare.com 以及自动识别到的 Discourse 帖子，只读取主贴和前几楼做快速总结，降低 token 消耗。使用“每日推荐”AI 场景配置。
                 </p>
-                <label class="mt-3 flex items-center justify-between gap-4">
+                <div class="mt-3 flex items-center justify-between gap-4">
                   <span class="text-14px font-500">显示论坛速读卡片</span>
-                  <input v-model="lexiSettings.forumDigest.enabled" type="checkbox" class="h-5 w-5">
-                </label>
-                <label class="mt-3 flex items-center justify-between gap-4">
+                  <ToggleSwitch v-model="lexiSettings.forumDigest.enabled" />
+                </div>
+                <div class="mt-3 flex items-center justify-between gap-4">
                   <span class="text-14px font-500">自动生成整帖总结</span>
-                  <input v-model="lexiSettings.forumDigest.autoGenerate" type="checkbox" class="h-5 w-5">
-                </label>
+                  <ToggleSwitch v-model="lexiSettings.forumDigest.autoGenerate" />
+                </div>
                 <label class="mt-3 block">
                   <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.forumDigest.autoDelaySeconds }} 秒</span>
                   <input v-model.number="lexiSettings.forumDigest.autoDelaySeconds" type="range" min="1" max="20" step="1" class="mt-2 w-full accent-neutral-950">
@@ -716,7 +666,7 @@ function removeSceneRule(index: number) {
               AI 补充、网页替换和划词翻译都会进入本地记录；产品名会标记为 product，只用于 hover 说明，不改写页面文字。
             </p>
           </div>
-          <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · 产品 {{ productVocabularyCount }} · {{ formatBytes(storageStats.items[0].bytes) }}</span>
+          <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · 产品 {{ productVocabularyCount }} · {{ formatBytes(storageStats.vocabulary) }}</span>
         </div>
         <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
           <input
@@ -743,7 +693,7 @@ function removeSceneRule(index: number) {
               替换 {{ todayStudySummary.auto }}
             </div>
             <div class="rounded-2 bg-white px-3 py-2">
-              词库 {{ formatBytes(storageStats.items[0].bytes) }}
+              词库 {{ formatBytes(storageStats.vocabulary) }}
             </div>
           </div>
           <p class="mt-3 text-12px leading-5 text-neutral-600">
@@ -883,11 +833,8 @@ function removeSceneRule(index: number) {
             </article>
           </div>
 
-          <details class="mt-4 rounded-2 bg-neutral-50 p-3">
-            <summary class="text-13px font-600 cursor-pointer">
-              兼容旧版全局连接 / 场景覆盖
-            </summary>
-            <p class="mt-2 text-12px leading-5 text-neutral-500">
+          <CollapsibleSection title="兼容旧版全局连接 / 场景覆盖" class="mt-4">
+            <p class="text-12px leading-5 text-neutral-500">
               这些字段可作为 Provider 和场景的补全值。一般建议直接把 Endpoint / Model / API Key 写在 Provider 中。
             </p>
             <div class="mt-3 grid gap-3 lg:grid-cols-3">
@@ -904,15 +851,15 @@ function removeSceneRule(index: number) {
                 <input v-model="lexiSettings.ai.global.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
               </label>
             </div>
-          </details>
+          </CollapsibleSection>
         </div>
 
         <div class="mt-4 grid gap-4 lg:grid-cols-3">
           <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
-            <label class="flex items-center justify-between">
+            <div class="flex items-center justify-between">
               <span class="text-14px font-600">{{ featureLabels[scene] }}</span>
-              <input v-model="lexiSettings.ai[scene].enabled" type="checkbox" class="h-5 w-5">
-            </label>
+              <ToggleSwitch v-model="lexiSettings.ai[scene].enabled" />
+            </div>
             <div class="mt-4 rounded-2 bg-neutral-50 p-3">
               <div class="text-12px font-500 text-neutral-600">
                 绑定 Provider
@@ -955,7 +902,7 @@ function removeSceneRule(index: number) {
               <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="testingScenes[scene]" @click="testScene(scene)">
                 {{ testingScenes[scene] ? '测试中' : '测试' }}
               </button>
-              <span v-if="sceneTestResults[scene]" class="truncate text-12px" :class="sceneTestResults[scene] === '测试成功' ? 'text-emerald-600' : 'text-red-600'">
+              <span v-if="sceneTestResults[scene]" class="truncate text-12px" :class="sceneTestDetails[scene]?.ok ? 'text-emerald-600' : 'text-red-600'">
                 {{ sceneTestResults[scene] }}
               </span>
             </div>
@@ -981,13 +928,8 @@ function removeSceneRule(index: number) {
             </h2>
             <span class="text-12px text-neutral-500">{{ aiCallLogs.length }} 条</span>
           </div>
-          <div class="mt-4 h-40 shrink-0 overflow-x-auto border-b border-neutral-100 pb-3">
-            <div class="flex h-full min-w-96 items-end gap-2">
-              <div v-for="item in aiTrend" :key="item.label" class="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxAiTrend) }" />
-                <span class="shrink-0 text-10px text-neutral-500">{{ item.label }}</span>
-              </div>
-            </div>
+          <div class="mt-4 shrink-0 border-b border-neutral-100 pb-3">
+            <TrendBars :items="aiTrend" :height="160" />
           </div>
           <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-3">
             <div class="rounded-2 bg-neutral-50 px-3 py-2">
@@ -1007,13 +949,8 @@ function removeSceneRule(index: number) {
               </div>
             </div>
           </div>
-          <div class="mt-3 h-24 shrink-0 overflow-x-auto border-b border-neutral-100 pb-3">
-            <div class="flex h-full min-w-96 items-end gap-2">
-              <div v-for="item in aiTokenTrend" :key="item.label" class="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                <div class="w-full rounded-1 bg-blue-600" :style="{ height: barHeight(item.value, maxAiTokenTrend) }" />
-                <span class="shrink-0 text-10px text-neutral-500">{{ item.label }}</span>
-              </div>
-            </div>
+          <div class="mt-3 shrink-0 border-b border-neutral-100 pb-3">
+            <TrendBars :items="aiTokenTrend" color="bg-blue-600" :height="96" />
           </div>
           <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-2">
             <div class="rounded-2 bg-neutral-50 px-3 py-2">
@@ -1029,10 +966,10 @@ function removeSceneRule(index: number) {
                 词库占用
               </div>
               <div class="mt-1 text-16px font-700">
-                {{ formatBytes(storageStats.items[0].bytes) }}
+                {{ formatBytes(storageStats.vocabulary) }}
               </div>
             </div>
-            <div v-for="item in storageStats.items.slice(1)" :key="item.label" class="rounded-2 bg-neutral-50 px-3 py-2">
+            <div v-for="item in storageStats.others" :key="item.label" class="rounded-2 bg-neutral-50 px-3 py-2">
               <div class="text-neutral-500">
                 {{ item.label }}
               </div>
@@ -1042,7 +979,7 @@ function removeSceneRule(index: number) {
             </div>
           </div>
           <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <div v-for="log in recentAiLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
+            <div v-for="log in aiCallLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
               <div class="flex items-center justify-between gap-3">
                 <span class="text-13px font-600">{{ featureLabels[log.scene] }}</span>
                 <span class="text-12px" :class="log.ok ? 'text-emerald-600' : 'text-red-600'">{{ log.ok ? '成功' : '失败' }}</span>
@@ -1054,7 +991,7 @@ function removeSceneRule(index: number) {
                 {{ log.error }}
               </div>
             </div>
-            <p v-if="!recentAiLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+            <p v-if="!aiCallLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
               暂无 AI 调用记录。
             </p>
           </div>
@@ -1067,16 +1004,11 @@ function removeSceneRule(index: number) {
             </h2>
             <span class="text-12px text-neutral-500">{{ pageVisitLogs.length }} 条</span>
           </div>
-          <div class="mt-4 h-40 shrink-0 overflow-x-auto border-b border-neutral-100 pb-3">
-            <div class="flex h-full min-w-96 items-end gap-2">
-              <div v-for="item in visitTrend" :key="item.label" class="flex h-full flex-1 flex-col items-center justify-end gap-2">
-                <div class="w-full rounded-1 bg-neutral-900" :style="{ height: barHeight(item.value, maxVisitTrend) }" />
-                <span class="shrink-0 text-10px text-neutral-500">{{ item.label }}</span>
-              </div>
-            </div>
+          <div class="mt-4 shrink-0 border-b border-neutral-100 pb-3">
+            <TrendBars :items="visitTrend" :height="160" />
           </div>
           <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <div v-for="visit in recentPageVisits" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
+            <div v-for="visit in pageVisitLogs" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
               <div class="break-words text-13px font-600 leading-5">
                 {{ visit.title || visit.host }}
               </div>
@@ -1084,7 +1016,7 @@ function removeSceneRule(index: number) {
                 {{ formatTime(visit.createdAt) }} · {{ visit.host }} · 替换 {{ visit.replacements }}
               </div>
             </div>
-            <p v-if="!recentPageVisits.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+            <p v-if="!pageVisitLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
               暂无网页访问记录。
             </p>
           </div>

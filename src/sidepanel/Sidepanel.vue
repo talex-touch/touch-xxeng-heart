@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
+import { estimateStorageBytes, formatBytes } from '~/logic/format'
+import { openOptionsPage } from '~/logic/browserActions'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
-import { getDueRecords, getProgressDifficulty, getTodayRecommendations, normalizeImportedRecord } from '~/logic/vocabularyRecords'
+import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, normalizeImportedRecord, reviewVocabularyRecord } from '~/logic/vocabularyRecords'
+import type { VocabularyReviewResult } from '~/logic/vocabularyRecords'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
 import type { PageTranslationScope, TranslationDirection, VocabularyRecord } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
-
-function openOptionsPage() {
-  browser.runtime.openOptionsPage()
-}
 
 const tabItems: Array<{ value: SidepanelTab, label: string, description: string }> = [
   { value: 'common', label: '常用操作', description: '开关与当前页' },
@@ -50,12 +49,14 @@ const difficulty = computed(() => getProgressDifficulty(
 ))
 
 const dueRecords = computed(() => getDueRecords(vocabularyRecords.value).slice(0, 8))
+const reviewedToday = computed(() => getTodayReviewCount(vocabularyRecords.value))
+const reviewGoal = computed(() => Math.max(1, lexiSettings.value.study.dailyGoal))
+const reviewGoalCompleted = computed(() => reviewedToday.value >= reviewGoal.value)
+const reviewProgress = computed(() => `${Math.min(100, Math.round(reviewedToday.value / reviewGoal.value * 100))}%`)
+const reviewMessage = ref('')
 const manualRecords = computed(() => vocabularyRecords.value.filter(record => record.source === 'manual').slice(0, 8))
 const autoRecords = computed(() => vocabularyRecords.value.filter(record => record.source === 'auto').slice(0, 8))
-const storageBytes = computed(() => new Blob([JSON.stringify(vocabularyRecords.value)]).size)
-const storageSize = computed(() => {
-  return formatBytes(storageBytes.value)
-})
+const storageSize = computed(() => formatBytes(estimateStorageBytes(vocabularyRecords.value)))
 const replacementDensityPercent = computed(() => Math.round(lexiSettings.value.replacement.density * 100))
 const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string, description: string }> = [
   { value: 'url', label: '当前链接', description: '只在当前 URL 自动恢复' },
@@ -128,11 +129,6 @@ function formatBridgeError(error: unknown) {
   return message || '无法连接当前页面'
 }
 
-function formatBytes(bytes: number) {
-  const kb = bytes / 1024
-  return kb > 1024 ? `${(kb / 1024).toFixed(2)} MB` : `${kb.toFixed(1)} KB`
-}
-
 async function controlPageTranslation(action: 'start' | 'stop') {
   pageTranslationLoading.value = true
   try {
@@ -166,6 +162,33 @@ function exportRecords() {
 
 function clearRecords() {
   vocabularyRecords.value = []
+}
+
+function formatReviewDelay(nextReviewAt: number, now: number) {
+  const minutes = Math.max(1, Math.round((nextReviewAt - now) / (60 * 1000)))
+  if (minutes < 60)
+    return `${minutes} 分钟后`
+
+  const hours = Math.round(minutes / 60)
+  if (hours < 24)
+    return `${hours} 小时后`
+
+  return `${Math.max(1, Math.round(hours / 24))} 天后`
+}
+
+function reviewRecord(id: string, result: VocabularyReviewResult) {
+  const now = Date.now()
+  vocabularyRecords.value = reviewVocabularyRecord(vocabularyRecords.value, id, result, now)
+  const reviewed = vocabularyRecords.value.find(record => record.id === id)
+  if (!reviewed)
+    return
+
+  const resultLabel: Record<VocabularyReviewResult, string> = {
+    forgot: '标记为不认识',
+    hard: '标记为模糊',
+    remembered: '标记为认识',
+  }
+  reviewMessage.value = `${reviewed.replacement} 已${resultLabel[result]}，${formatReviewDelay(reviewed.nextReviewAt, now)}再次复盘。`
 }
 
 function cleanupOldRecords() {
@@ -285,36 +308,28 @@ onMounted(() => {
               <span class="block font-500">启用 Lexi</span>
               <span class="text-11px text-neutral-500">控制当前站点功能</span>
             </span>
-            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.siteRules.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.siteRules.enabled" @click="lexiSettings.siteRules.enabled = !lexiSettings.siteRules.enabled">
-              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.siteRules.enabled ? 'left-5' : 'left-0.5'" />
-            </button>
+            <ToggleSwitch v-model="lexiSettings.siteRules.enabled" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
             <span>
               <span class="block font-500">替换网页文本</span>
               <span class="text-11px text-neutral-500">将部分中文替换为英文</span>
             </span>
-            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.replacement.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.replacement.enabled" @click="lexiSettings.replacement.enabled = !lexiSettings.replacement.enabled">
-              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.replacement.enabled ? 'left-5' : 'left-0.5'" />
-            </button>
+            <ToggleSwitch v-model="lexiSettings.replacement.enabled" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
             <span>
               <span class="block font-500">划词翻译</span>
               <span class="text-11px text-neutral-500">选中文本后快速翻译</span>
             </span>
-            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.selection.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.selection.enabled" @click="lexiSettings.selection.enabled = !lexiSettings.selection.enabled">
-              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.selection.enabled ? 'left-5' : 'left-0.5'" />
-            </button>
+            <ToggleSwitch v-model="lexiSettings.selection.enabled" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
             <span>
               <span class="block font-500">保存历史</span>
               <span class="text-11px text-neutral-500">用于复盘和导出</span>
             </span>
-            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.history.enabled ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.history.enabled" @click="lexiSettings.history.enabled = !lexiSettings.history.enabled">
-              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.history.enabled ? 'left-5' : 'left-0.5'" />
-            </button>
+            <ToggleSwitch v-model="lexiSettings.history.enabled" />
           </div>
         </div>
 
@@ -470,18 +485,14 @@ onMounted(() => {
               <span class="block font-500">显示状态浮标</span>
               <span class="text-11px text-neutral-500">在页面上展示 Lexi 运行状态</span>
             </span>
-            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.ui.showFloatingStatus ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.ui.showFloatingStatus" @click="lexiSettings.ui.showFloatingStatus = !lexiSettings.ui.showFloatingStatus">
-              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.ui.showFloatingStatus ? 'left-5' : 'left-0.5'" />
-            </button>
+            <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-neutral-50 px-3 py-2 text-12px">
             <span>
               <span class="block font-500">按修饰键触发划词</span>
               <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl；媒体操作默认 meta+shift</span>
             </span>
-            <button type="button" class="relative h-6 w-11 shrink-0 rounded-full transition" :class="lexiSettings.selection.requireModifierKey ? 'bg-neutral-950' : 'bg-neutral-200'" :aria-pressed="lexiSettings.selection.requireModifierKey" @click="lexiSettings.selection.requireModifierKey = !lexiSettings.selection.requireModifierKey">
-              <span class="absolute top-0.5 h-5 w-5 rounded-full bg-white transition" :class="lexiSettings.selection.requireModifierKey ? 'left-5' : 'left-0.5'" />
-            </button>
+            <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" />
           </div>
         </div>
 
@@ -614,23 +625,60 @@ onMounted(() => {
         </div>
       </section>
 
-      <section>
-        <h2 class="text-14px font-700">
-          待复盘
-        </h2>
-        <div v-if="dueRecords.length" class="mt-3 space-y-2">
-          <div v-for="record in dueRecords" :key="record.id" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-2">
-            <div class="flex items-center justify-between gap-3">
-              <span class="font-600">{{ record.replacement }}</span>
-              <span class="text-12px text-neutral-500">{{ record.original }}</span>
-            </div>
-            <div class="mt-1 text-12px text-neutral-500">
-              见过 {{ record.seenCount }} 次 · 手动记录 {{ record.selectedCount }} 次
-            </div>
+      <section aria-labelledby="review-heading">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h2 id="review-heading" class="text-14px font-700">
+              待复盘
+            </h2>
+            <p class="mt-1 text-12px text-neutral-500">
+              今日已完成 {{ reviewedToday }} / {{ reviewGoal }} 个词
+            </p>
           </div>
+          <span class="shrink-0 rounded-full px-2 py-1 text-11px" :class="reviewGoalCompleted ? 'bg-green-50 text-green-700' : 'bg-neutral-100 text-neutral-600'">
+            {{ reviewGoalCompleted ? '今日完成' : '进行中' }}
+          </span>
         </div>
-        <p v-else class="mt-3 rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-          暂无到期复盘词汇。
+
+        <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-100" aria-hidden="true">
+          <div class="h-full rounded-full bg-neutral-950 transition-[width] duration-200" :style="{ width: reviewProgress }" />
+        </div>
+
+        <p v-if="reviewMessage" class="mt-3 rounded-2 bg-blue-50 px-3 py-2 text-12px leading-5 text-blue-700" aria-live="polite">
+          {{ reviewMessage }}
+        </p>
+
+        <div v-if="dueRecords.length" class="mt-3 space-y-3">
+          <article v-for="record in dueRecords" :key="record.id" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <div class="break-words font-600">
+                  {{ record.replacement }}
+                </div>
+                <div class="mt-0.5 break-words text-12px text-neutral-600">
+                  {{ record.original }}
+                </div>
+              </div>
+              <span class="shrink-0 text-11px text-neutral-500">等级 {{ record.learnedLevel }}</span>
+            </div>
+            <p v-if="record.meaning" class="mt-2 text-12px leading-5 text-neutral-600">
+              {{ record.meaning }}
+            </p>
+            <div class="mt-3 grid grid-cols-3 gap-2">
+              <button type="button" class="rounded-2 border border-red-200 bg-white px-2 py-2 text-12px text-red-700 cursor-pointer hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500" :aria-label="`${record.replacement}：不认识`" @click="reviewRecord(record.id, 'forgot')">
+                不认识
+              </button>
+              <button type="button" class="rounded-2 border border-neutral-300 bg-white px-2 py-2 text-12px text-neutral-700 cursor-pointer hover:bg-neutral-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-500" :aria-label="`${record.replacement}：有点模糊`" @click="reviewRecord(record.id, 'hard')">
+                模糊
+              </button>
+              <button type="button" class="rounded-2 border border-neutral-950 bg-neutral-950 px-2 py-2 text-12px text-white cursor-pointer hover:bg-neutral-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-950" :aria-label="`${record.replacement}：认识`" @click="reviewRecord(record.id, 'remembered')">
+                认识
+              </button>
+            </div>
+          </article>
+        </div>
+        <p v-else class="mt-3 rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px leading-5 text-neutral-500">
+          {{ reviewGoalCompleted ? '今天的复盘目标已完成，可以继续阅读积累新词。' : reviewedToday ? '当前没有更多到期词汇，晚些时候再来看看。' : '暂无到期复盘词汇，继续阅读后会在这里安排复盘。' }}
         </p>
       </section>
     </section>

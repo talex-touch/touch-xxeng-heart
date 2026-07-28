@@ -1,6 +1,7 @@
 import browser from 'webextension-polyfill'
 import { aiCallLogsStorageKey, pageVisitLogsStorageKey } from './storageKeys'
 import { readJsonValue, toStoredJson } from './storageJson'
+import { formatDay } from './format'
 import type { AiCallLog, PageVisitLog } from './types'
 
 const maxLogs = 80
@@ -37,23 +38,30 @@ export async function recordPageVisit(log: Omit<PageVisitLog, 'id' | 'createdAt'
   })
 }
 
-export function summarizeByDay(logs: Array<{ createdAt: number }>, days = 7) {
+/**
+ * Buckets logs into the last `days` days.
+ *
+ * `weight` decides what each log contributes: the default counts calls, and passing
+ * `log => log.totalTokens ?? 0` sums tokens — which is what the options page's
+ * separate `summarizeTokensByDay` copy did.
+ */
+export function summarizeByDay<T extends { createdAt: number }>(
+  logs: T[],
+  days = 7,
+  weight: (log: T) => number = () => 1,
+) {
   const result = new Map<string, number>()
-  const formatter = new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-  })
 
   for (let index = days - 1; index >= 0; index -= 1) {
     const date = new Date()
     date.setDate(date.getDate() - index)
-    result.set(formatter.format(date), 0)
+    result.set(formatDay(date.getTime()), 0)
   }
 
   for (const log of logs) {
-    const key = formatter.format(new Date(log.createdAt))
+    const key = formatDay(log.createdAt)
     if (result.has(key))
-      result.set(key, (result.get(key) ?? 0) + 1)
+      result.set(key, (result.get(key) ?? 0) + weight(log))
   }
 
   return Array.from(result.entries()).map(([label, value]) => ({ label, value }))

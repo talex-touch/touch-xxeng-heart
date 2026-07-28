@@ -2,7 +2,17 @@ import browser from 'webextension-polyfill'
 
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
-import { defaultSettings, mergeSettings } from '~/logic/defaults'
+import type { PageDocument } from '~/logic/contextRetrieval'
+import { defaultSettings } from '~/logic/defaults'
+import type { DialogSelectionContext } from '~/logic/dialogHarness'
+import { findAnchorSegmentId, getPageDocument } from '~/contentScripts/pageContent'
+import { elementToDataUrl } from '~/contentScripts/ui/canvas'
+import { collapsibleStyles, createCollapsible } from '~/contentScripts/ui/collapsible'
+import type { CollapsibleHandle } from '~/contentScripts/ui/collapsible'
+import { createListenerGroup, once, pointerEventName } from '~/contentScripts/ui/listenerGroup'
+import { overlayRect, positionAgainstAnchor } from '~/contentScripts/ui/position'
+import { getStoredState, primeStoredRecords } from '~/logic/settingsCache'
+import { readJsonValue } from '~/logic/storageJson'
 import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessaging'
 import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
@@ -175,6 +185,8 @@ type DialogMessageRole = 'system' | 'user' | 'assistant'
 interface DialogHistoryMessage {
   role: 'user' | 'assistant'
   content: string
+  /** Excerpt ids sent with this turn, so later turns can skip resending them. */
+  segmentIds?: string[]
 }
 
 interface MediaTargetInfo {
@@ -196,6 +208,7 @@ interface MediaToolbarState extends MediaTargetInfo {
   highlight: HTMLElement
   answer?: HTMLElement
   copy?: HTMLButtonElement
+  collapsible?: CollapsibleHandle
   promptText?: string
   frameDataUrl?: string
   mediaDataUrl?: string
@@ -1479,6 +1492,9 @@ function getPageStyleContent(customCss = '') {
       }
     }
 
+    ${collapsibleStyles('lexi-dialog')}
+    ${collapsibleStyles('lexi-media-toolbar')}
+
     ${customCss}
   `
 }
@@ -1568,30 +1584,8 @@ function replaceTextNode(node: Text, matches: ReplacementMatch[]) {
   return applied
 }
 
-function readJsonValue<T>(value: unknown, fallback: T): T {
-  if (value == null)
-    return fallback
-
-  if (typeof value !== 'string')
-    return value as T
-
-  try {
-    return JSON.parse(value) as T
-  }
-  catch {
-    return fallback
-  }
-}
-
-async function getStoredState() {
-  const stored = await browser.storage.local.get([settingsStorageKey, vocabularyStorageKey])
-  const settings = mergeSettings(readJsonValue<Partial<LexiSettings> | undefined>(stored[settingsStorageKey], undefined))
-  const records = readJsonValue<VocabularyRecord[]>(stored[vocabularyStorageKey], [])
-
-  return { settings, records }
-}
-
 async function saveRecords(records: VocabularyRecord[]) {
+  primeStoredRecords(records)
   await browser.storage.local.set({ [vocabularyStorageKey]: JSON.stringify(records) })
 }
 
@@ -1934,10 +1928,6 @@ function getPageTranslationElementAfter(element: HTMLElement, blockId: string) {
     : undefined
 }
 
-function hasPageTranslationElementAfter(element: HTMLElement, blockId: string) {
-  return Boolean(getPageTranslationElementAfter(element, blockId))
-}
-
 function insertPageTranslationElement(
   target: HTMLElement,
   block: PageTranslationBlock,
@@ -2001,7 +1991,7 @@ function getPageTranslationTargets(settings: LexiSettings, limit = 12) {
       continue
 
     const id = createPageTranslationBlockId(text)
-    if (hasPageTranslationElementAfter(element, id))
+    if (getPageTranslationElementAfter(element, id))
       continue
 
     seen.add(text)
@@ -2168,19 +2158,21 @@ function animateSelectionBlockHeight(block: HTMLElement, mutate: () => void) {
   }, 210)
 }
 
-function renderAnimatedText(container: HTMLElement, text: string, previousText: string, revealChunk: boolean) {
-  if (!revealChunk || !previousText || !text.startsWith(previousText)) {
-    container.textContent = text
+function renderAnimatedText(container: HTMLElement, text: string | undefined, previousText: string | undefined, revealChunk: boolean) {
+  const nextText = typeof text === 'string' ? text : ''
+  const stablePreviousText = typeof previousText === 'string' ? previousText : ''
+  if (!revealChunk || !stablePreviousText || !nextText.startsWith(stablePreviousText)) {
+    container.textContent = nextText
     return
   }
 
-  const nextChunk = text.slice(previousText.length)
+  const nextChunk = nextText.slice(stablePreviousText.length)
   if (!nextChunk)
     return
 
-  const stableText = previousText.replace(/\s+$/, '')
-  const chunkPrefix = previousText.slice(stableText.length)
-  container.textContent = previousText
+  const stableText = stablePreviousText.replace(/\s+$/, '')
+  const chunkPrefix = stablePreviousText.slice(stableText.length)
+  container.textContent = stablePreviousText
   const chunk = document.createElement('span')
   chunk.className = 'lexi-selection-translation__chunk'
   chunk.dataset.lexiNew = 'true'
@@ -2192,7 +2184,7 @@ function renderAnimatedText(container: HTMLElement, text: string, previousText: 
     charElement.style.animationDelay = `${Math.min(index * 14, 140)}ms`
     chunk.append(charElement)
   }
-  if (stableText.length !== previousText.length)
+  if (stableText.length !== stablePreviousText.length)
     container.textContent = stableText
   container.append(chunk)
   window.setTimeout(() => {
@@ -2296,34 +2288,43 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   }
 }
 
-function getPageContext(range?: Range) {
-  const fromSelection = range?.commonAncestorContainer.textContent
-  const pageText = fromSelection || document.body.textContent || ''
-  return pageText.replace(/\s+/g, ' ').trim().slice(0, 1200)
+interface DialogContext {
+  page: PageDocument
+  selection?: DialogSelectionContext
 }
 
-function createDialogContext(lastTranslation?: LastTranslationState) {
+/**
+ * Re-read the page and the selection for every question. The old panel froze both at
+ * open time, so the model kept answering about whatever happened to be selected then.
+ */
+function createDialogContext(lastTranslation?: LastTranslationState): DialogContext {
+  const page = getPageDocument()
   const selection = window.getSelection()
-  const selected = selection?.toString().trim()
-  const range = selection?.rangeCount && selected ? selection.getRangeAt(0) : undefined
-  const page = selected
-    ? getPageContext(range) || lastTranslation?.context || ''
-    : getPageContext()
+  const selected = selection?.toString().trim() || lastTranslation?.selected || ''
+  if (!selected)
+    return { page }
 
   return {
-    selected: selected || lastTranslation?.selected || '',
-    translation: selected ? lastTranslation?.translation || '' : '',
-    detail: selected ? lastTranslation?.detail || '' : '',
     page,
+    selection: {
+      text: selected,
+      translation: lastTranslation?.translation || '',
+      detail: lastTranslation?.detail || '',
+      anchorSegmentId: findAnchorSegmentId(page, selected),
+    },
   }
 }
 
-function renderDialogContext(context: ReturnType<typeof createDialogContext>) {
+function renderDialogContext(context: DialogContext, sources: string[] = []) {
+  const page = context.page
   return [
-    context.selected ? `选区：${context.selected}` : '',
-    context.translation ? `最近翻译：${context.translation}` : '',
-    context.detail ? `说明：${context.detail}` : '',
-    context.page ? `页面：${context.page.slice(0, 360)}` : '',
+    context.selection?.text ? `选区：${context.selection.text.slice(0, 160)}` : '',
+    context.selection?.translation ? `最近翻译：${context.selection.translation.slice(0, 120)}` : '',
+    page.title ? `页面：${page.title}` : '',
+    page.segments.length
+      ? `已建索引：${page.segments.length} 个片段 / 约 ${page.charCount} 字（按问题检索，不整篇注入）`
+      : '未能抽取到正文，回答只能依赖选区。',
+    sources.length ? `本轮引用：${sources.slice(0, 4).join(' · ')}` : '',
   ].filter(Boolean).join('\n')
 }
 
@@ -2483,24 +2484,27 @@ function getCurrentDialogAnchor() {
 
 function positionLexiDialog(dialog: HTMLElement, anchor?: DialogAnchor) {
   const margin = 16
-  const gap = 10
-  const width = Math.min(720, Math.max(280, window.innerWidth - margin * 2))
-  dialog.style.width = `${width}px`
+  const collapsed = dialog.getAttribute('data-lexi-collapsed') === 'true'
+  // Collapsed the panel is a pill and must size to its content, not the full width.
+  dialog.style.width = collapsed ? '' : `${Math.min(720, Math.max(280, window.innerWidth - margin * 2))}px`
 
   const measured = dialog.getBoundingClientRect()
   const height = Math.min(measured.height || 420, window.innerHeight - margin * 2)
-  const anchorCenter = anchor ? anchor.left + anchor.width / 2 : window.innerWidth / 2
-  const left = Math.max(margin + width / 2, Math.min(anchorCenter, window.innerWidth - margin - width / 2))
-  let top = anchor ? anchor.bottom + gap : Math.max(margin, window.innerHeight * 0.12)
+  const width = measured.width || 320
 
-  if (anchor && top + height > window.innerHeight - margin)
-    top = anchor.top - height - gap
+  if (!anchor) {
+    dialog.style.left = `${Math.max(margin, (window.innerWidth - width) / 2)}px`
+    dialog.style.top = `${Math.max(margin, window.innerHeight * 0.12)}px`
+    return
+  }
 
-  if (top < margin)
-    top = Math.max(margin, Math.min(window.innerHeight - height - margin, window.innerHeight * 0.12))
-
-  dialog.style.left = `${left}px`
-  dialog.style.top = `${top}px`
+  positionAgainstAnchor(dialog, anchor, {
+    margin,
+    gap: 10,
+    align: 'center',
+    fallbackWidth: width,
+    fallbackHeight: height,
+  })
 }
 
 function closeLexiDialog(dialog: HTMLElement) {
@@ -2517,7 +2521,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
     return undefined
   }
 
-  const context = createDialogContext(lastTranslation)
+  let context = createDialogContext(lastTranslation)
   const history: DialogHistoryMessage[] = []
   let dialogAbortController: AbortController | undefined
   const anchor = getCurrentDialogAnchor()
@@ -2548,10 +2552,10 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   close.type = 'button'
   close.textContent = '×'
   contextBlock.textContent = renderDialogContext(context) || '当前页面暂无可用上下文。'
-  appendDialogMessage(messages, 'system', context.selected
-    ? '输入问题后，Lexi 会结合当前翻译、页面内容和上下文回答。支持 Markdown 渲染，可连续追问。'
-    : '未检测到选区。现在会基于整个页面内容回答，你可以直接提问。支持 Markdown 渲染，可连续追问。')
-  input.placeholder = context.selected ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
+  appendDialogMessage(messages, 'system', context.selection?.text
+    ? '输入问题后，Lexi 会结合选区、译文和检索到的页面片段回答。支持 Markdown 渲染，可连续追问。'
+    : '未检测到选区。Lexi 已为本页正文建立索引，每次提问只检索相关片段作答。支持 Markdown 渲染，可连续追问。')
+  input.placeholder = context.selection?.text ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
   input.rows = 2
   button.type = 'submit'
   button.textContent = '发送'
@@ -2569,22 +2573,36 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
       return
 
     appendDialogMessage(messages, 'user', question)
-    history.push({ role: 'user', content: question })
     input.value = ''
     const assistantBubble = appendDialogMessage(messages, 'assistant', '思考中...', true)
     button.setAttribute('disabled', 'true')
+    dialogAbortController?.abort()
     dialogAbortController = new AbortController()
-    requestLexiDialogAnswer(settings, question, context, text => updateDialogMessage(assistantBubble, text || '思考中...', true), history.slice(0, -1), dialogAbortController.signal)
-      .then((text) => {
-        const answer = text || assistantBubble.textContent || ''
-        updateDialogMessage(assistantBubble, answer || '（无返回内容）')
-        if (answer)
-          history.push({ role: 'assistant', content: answer })
+
+    // Recapture per turn: the page may have navigated, scrolled or changed selection.
+    context = createDialogContext(lastTranslation)
+    const turn: DialogHistoryMessage = { role: 'user', content: question }
+
+    requestLexiDialogAnswer(
+      settings,
+      { question, history: [...history], page: context.page, selection: context.selection },
+      text => updateDialogMessage(assistantBubble, text || '思考中...', true),
+      dialogAbortController.signal,
+    )
+      .then((answer) => {
+        const text = answer?.text || assistantBubble.textContent || ''
+        updateDialogMessage(assistantBubble, text || '（无返回内容）')
+        if (!text)
+          return
+
+        turn.segmentIds = answer?.attachedSegmentIds
+        history.push(turn, { role: 'assistant', content: text })
+        contextBlock.textContent = renderDialogContext(context, answer?.sources)
       })
       .catch((error) => {
-        const message = error instanceof Error ? error.message : '请求失败'
-        updateDialogMessage(assistantBubble, message)
-        history.push({ role: 'assistant', content: message })
+        // Failed turns are dropped rather than pushed as assistant messages — otherwise
+        // an error string poisons every subsequent prompt.
+        updateDialogMessage(assistantBubble, error instanceof Error ? error.message : '请求失败')
       })
       .finally(() => {
         dialogAbortController = undefined
@@ -2593,19 +2611,27 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
       })
   })
 
-  head.append(title, close)
+  const panelListeners = createListenerGroup()
+  const reposition = () => positionLexiDialog(dialog, anchor)
+  const collapsible = createCollapsible(dialog, {
+    block: 'lexi-dialog',
+    label: 'Lexi 对话',
+    summary: context.page.title || '当前页面',
+    onToggle: reposition,
+  })
+
+  head.append(title, collapsible.toggle, close)
   form.append(input, button)
   body.append(contextBlock, messages, form)
-  dialog.append(head, body)
+  dialog.append(collapsible.pill, head, body)
   document.documentElement.appendChild(dialog)
   positionLexiDialog(dialog, anchor)
-  const reposition = () => positionLexiDialog(dialog, anchor)
-  window.addEventListener('resize', reposition)
-  window.addEventListener('scroll', reposition, true)
+  panelListeners.add(window, 'resize', reposition)
+  panelListeners.add(window, 'scroll', reposition, true)
   dialog.addEventListener('lexi-dialog-close', () => {
     dialogAbortController?.abort()
-    window.removeEventListener('resize', reposition)
-    window.removeEventListener('scroll', reposition, true)
+    collapsible.destroy()
+    panelListeners.removeAll()
   }, { once: true })
   input.focus()
 
@@ -2726,32 +2752,14 @@ function getMediaRadius(anchor: Element) {
 }
 
 function positionMediaHighlight(highlight: HTMLElement, anchor: Element) {
-  const rect = anchor.getBoundingClientRect()
-  highlight.style.left = `${rect.left}px`
-  highlight.style.top = `${rect.top}px`
-  highlight.style.width = `${Math.max(0, rect.width)}px`
-  highlight.style.height = `${Math.max(0, rect.height)}px`
-  const radius = getMediaRadius(anchor)
-  highlight.style.borderRadius = radius
-  highlight.style.setProperty('--lexi-media-radius', radius)
+  overlayRect(highlight, anchor, getMediaRadius(anchor))
 }
 
 function positionMediaToolbar(toolbar: HTMLElement, anchor: Element) {
-  const rect = anchor.getBoundingClientRect()
-  const margin = 12
-  const gap = 8
-  const measured = toolbar.getBoundingClientRect()
-  const width = measured.width || Math.min(360, window.innerWidth - margin * 2)
-  const height = measured.height || 160
-  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
-  let top = rect.bottom + gap
-  if (top + height > window.innerHeight - margin)
-    top = rect.top - height - gap
-  if (top < margin)
-    top = Math.max(margin, Math.min(window.innerHeight - height - margin, rect.top))
-
-  toolbar.style.left = `${left}px`
-  toolbar.style.top = `${top}px`
+  positionAgainstAnchor(toolbar, anchor.getBoundingClientRect(), {
+    fallbackWidth: Math.min(360, window.innerWidth - 24),
+    fallbackHeight: 160,
+  })
 }
 
 function positionMediaUi(state: MediaToolbarState) {
@@ -2841,18 +2849,13 @@ function getVideoFromPointerEvent(event: MouseEvent | PointerEvent) {
 }
 
 function positionVideoSpeedMenu(menu: HTMLElement, video: HTMLVideoElement) {
+  // Pinned to the video's top-right corner rather than flipped below it.
   const rect = video.getBoundingClientRect()
-  const margin = 12
-  const menuRect = menu.getBoundingClientRect()
-  const width = menuRect.width || 300
-  const height = menuRect.height || 100
-  const left = Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin))
-  let top = rect.top + 16
-  if (top + height > window.innerHeight - margin)
-    top = Math.max(margin, rect.bottom - height - 16)
-
-  menu.style.left = `${left}px`
-  menu.style.top = `${top}px`
+  positionAgainstAnchor(menu, {
+    ...rect.toJSON(),
+    bottom: rect.top,
+    top: rect.top - 16,
+  }, { align: 'end', gap: 0, fallbackWidth: 300, fallbackHeight: 100 })
 }
 
 function promoteVideoSpeedMenu(menu: HTMLDialogElement) {
@@ -2870,47 +2873,11 @@ function promoteVideoSpeedMenu(menu: HTMLDialogElement) {
 }
 
 function captureVideoFrame(element: HTMLVideoElement) {
-  if (!element.videoWidth || !element.videoHeight)
-    return undefined
-
-  try {
-    const canvas = document.createElement('canvas')
-    const maxSize = 960
-    const scale = Math.min(1, maxSize / Math.max(element.videoWidth, element.videoHeight))
-    canvas.width = Math.max(1, Math.round(element.videoWidth * scale))
-    canvas.height = Math.max(1, Math.round(element.videoHeight * scale))
-    const context = canvas.getContext('2d')
-    if (!context)
-      return undefined
-
-    context.drawImage(element, 0, 0, canvas.width, canvas.height)
-    return canvas.toDataURL('image/jpeg', 0.86)
-  }
-  catch {
-    return undefined
-  }
+  return elementToDataUrl(element, element.videoWidth, element.videoHeight)
 }
 
-async function imageToDataUrl(element: HTMLImageElement) {
-  if (!element.naturalWidth || !element.naturalHeight)
-    return undefined
-
-  try {
-    const canvas = document.createElement('canvas')
-    const maxSize = 960
-    const scale = Math.min(1, maxSize / Math.max(element.naturalWidth, element.naturalHeight))
-    canvas.width = Math.max(1, Math.round(element.naturalWidth * scale))
-    canvas.height = Math.max(1, Math.round(element.naturalHeight * scale))
-    const context = canvas.getContext('2d')
-    if (!context)
-      return undefined
-
-    context.drawImage(element, 0, 0, canvas.width, canvas.height)
-    return canvas.toDataURL('image/jpeg', 0.86)
-  }
-  catch {
-    return undefined
-  }
+function imageToDataUrl(element: HTMLImageElement) {
+  return elementToDataUrl(element, element.naturalWidth, element.naturalHeight)
 }
 
 function getMediaPageContext(element: Element) {
@@ -2934,24 +2901,20 @@ async function translateSelection(
   return localTranslateSelection(selected)
 }
 
-function looksTechnicalTerm(text: string) {
-  return isLikelyTechnicalSelectionTerm(text)
-}
-
 export function startPageEnhancer(events: EnhancerEvents) {
   const mediaPlaybackOnly = window.top !== window
+  const listeners = createListenerGroup()
   let disposed = false
   let tooltip: HTMLElement | undefined
   let dynamicObserver: MutationObserver | undefined
   let dynamicTimer: number | undefined
   let selectionTimer: number | undefined
-  let dialog: HTMLElement | undefined
   let mediaToolbarState: MediaToolbarState | undefined
   let lastTranslation: LastTranslationState | undefined
   let dialogShortcut = defaultSettings.ui.dialogShortcut
   let mediaModifierShortcut = defaultSettings.ui.mediaModifierShortcut
   let videoSpeedMenuState: VideoSpeedMenuState | undefined
-  let activeVideoSpeedGesture: { video: HTMLVideoElement, pointerId: number } | undefined
+  let activeVideoSpeedGesture: { video: HTMLVideoElement, pointerId?: number } | undefined
   let lastVideoSpeedGesture: { video: HTMLVideoElement, at: number } | undefined
   let lastSelectionKey = ''
   let activeSelectionKey = ''
@@ -3508,6 +3471,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   function closeMediaToolbar() {
+    mediaToolbarState?.collapsible?.destroy()
     mediaToolbarState?.highlight.remove()
     mediaToolbarState?.toolbar.remove()
     mediaToolbarState = undefined
@@ -3734,11 +3698,25 @@ export function startPageEnhancer(events: EnhancerEvents) {
       answer.textContent = error instanceof Error ? error.message : '复制失败'
     }))
 
-    head.append(title, close)
+    const collapsible = createCollapsible(toolbar, {
+      block: 'lexi-media-toolbar',
+      label: '媒体操作',
+      summary: info.title || info.alt || getFileNameFromUrl(info.src, info.src),
+      onToggle: () => {
+        const state = mediaToolbarState
+        if (state)
+          positionMediaUi(state)
+      },
+    })
+
+    head.append(title, collapsible.toggle, close)
     actions.append(analyze, copy, download)
-    toolbar.append(head, meta, actions, answer)
+    const body = document.createElement('div')
+    body.className = 'lexi-media-toolbar__body'
+    body.append(meta, actions, answer)
+    toolbar.append(collapsible.pill, head, body)
     document.documentElement.append(highlight, toolbar)
-    mediaToolbarState = { ...info, toolbar, highlight, answer, copy }
+    mediaToolbarState = { ...info, toolbar, highlight, answer, copy, collapsible }
     positionMediaUi(mediaToolbarState)
   }
 
@@ -3749,7 +3727,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
 
     const block = createSelectionTranslationBlock(settings, selected, requestKey, range)
-    let translationVisible = false
     activeSelectionBlock = block
     const updateTranslation = (translation: SelectionTranslation, detailText?: string) => {
       if (requestId === selectionRequestId)
@@ -3761,7 +3738,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return
     }
     updateTranslation(translation)
-    translationVisible = true
     activeSelectionBlock = undefined
 
     let detailView: SelectionDetailView = { terms: [] }
@@ -3769,11 +3745,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     let detailCandidate: VocabularyCandidate | undefined
     try {
       const detail = await requestSelectionDetail(settings, selected, translation.translation, context)
-      if (requestId !== selectionRequestId) {
-        if (!translationVisible)
-          block.remove()
+      if (requestId !== selectionRequestId)
         return
-      }
+
       detailView = normalizeSelectionDetail(detail)
       detailText = formatSelectionDetail(detailView)
       detailCandidate = detail?.candidate
@@ -3781,17 +3755,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
         updateTranslation(translation, detailText)
     }
     catch {
-      if (looksTechnicalTerm(selected)) {
+      if (isLikelyTechnicalSelectionTerm(selected)) {
         detailText = '技术名词：已加入本地词库。'
         updateTranslation(translation, detailText)
       }
     }
 
-    if (requestId !== selectionRequestId) {
-      if (!translationVisible)
-        block.remove()
+    if (requestId !== selectionRequestId)
       return
-    }
 
     lastTranslation = {
       selected,
@@ -3811,7 +3782,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       .filter((candidate): candidate is VocabularyCandidate => candidate != null)
     const candidate = validDetailCandidate
       ?? termCandidates[0]
-      ?? (looksTechnicalTerm(selected) ? createTechnicalCandidate(translation, detailText) : createManualCandidate(translation))
+      ?? (isLikelyTechnicalSelectionTerm(selected) ? createTechnicalCandidate(translation, detailText) : createManualCandidate(translation))
     if (!candidate)
       return
 
@@ -4012,11 +3983,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     activeVideoSpeedGesture = undefined
   }
 
-  const onPointerDown = (event: PointerEvent) => {
+  const onPointerDown = (event: MouseEvent | PointerEvent) => {
     const video = getVideoSpeedGestureVideo(event)
     if (video) {
       toggleVideoSpeedGesture(video)
-      activeVideoSpeedGesture = { video, pointerId: event.pointerId }
+      activeVideoSpeedGesture = { video, pointerId: event instanceof PointerEvent ? event.pointerId : undefined }
 
       consumeVideoSpeedGesture(event)
       return
@@ -4060,7 +4031,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     return true
   }
 
-  const onMouseUp = (event: MouseEvent) => {
+  const onPointerUp = (event: MouseEvent | PointerEvent) => {
     if (finishVideoSpeedGesture(event))
       return
     if (mediaPlaybackOnly)
@@ -4074,29 +4045,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     scheduleSelectionCheck(360)
     window.setTimeout(() => {
-      if (!disposed && getSelectionSnapshot()) {
-        handleSelection().catch(error => console.warn('[Lexi] selection mouseup fallback failed', error))
-      }
-    }, 80)
-  }
-
-  const onPointerUp = (event: PointerEvent) => {
-    if (finishVideoSpeedGesture(event))
-      return
-    if (mediaPlaybackOnly)
-      return
-
-    selectionPointerDown = false
-    selectionFinalizedAt = performance.now()
-    selectionFinalizedWithModifier = selectionModifierPressed(event)
-    if (tryShowMediaToolbarFromEvent(event))
-      return
-
-    scheduleSelectionCheck(360)
-    window.setTimeout(() => {
-      if (!disposed && getSelectionSnapshot()) {
+      if (!disposed && getSelectionSnapshot())
         handleSelection().catch(error => console.warn('[Lexi] selection pointerup fallback failed', error))
-      }
     }, 80)
   }
 
@@ -4140,7 +4090,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
           return
 
         dialogShortcut = settings.ui.dialogShortcut || defaultSettings.ui.dialogShortcut
-        dialog = createLexiDialog(settings, lastTranslation) ?? dialog
+        // The panel owns its own lifetime and is found via `[data-lexi-dialog]`; keeping a
+        // closure reference only retained a detached node after close.
+        createLexiDialog(settings, lastTranslation)
       })
       .catch(error => console.warn('[Lexi] dialog failed', error))
   }
@@ -4319,38 +4271,15 @@ export function startPageEnhancer(events: EnhancerEvents) {
     activeSelectionBlock?.remove()
     activeSelectionBlock = undefined
     removePageTranslationElements()
-    document.removeEventListener('DOMContentLoaded', initializeDocumentFeatures)
+    listeners.removeAll()
     removeContextTranslateListener()
     removePageTranslateStartListener()
     removePageTranslateStopListener()
     removePageTranslateStatusListener()
     removePageStatsListener()
-    window.removeEventListener('pointerdown', onPointerDown, true)
-    window.removeEventListener('pointercancel', onVideoSpeedPointerCancel, true)
-    window.removeEventListener('click', onMediaClickCapture, true)
-    window.removeEventListener('auxclick', onMediaClickCapture, true)
-    window.removeEventListener('contextmenu', onVideoSpeedContextMenu, true)
-    document.removeEventListener('mouseup', onMouseUp)
-    document.removeEventListener('pointerup', onPointerUp)
-    window.removeEventListener('mouseup', onMouseUp, true)
-    window.removeEventListener('pointerup', onPointerUp, true)
-    document.removeEventListener('keyup', onKeyUp, true)
-    document.removeEventListener('selectionchange', onSelectionChange)
-    document.removeEventListener('keydown', onKeyDown, true)
-    document.removeEventListener('keydown', onEscape)
-    window.removeEventListener('resize', onPageScroll)
-    document.removeEventListener('pointerover', onPointerOver, true)
-    document.removeEventListener('pointermove', onPointerMove, true)
-    document.removeEventListener('pointerout', onPointerOut, true)
-    document.removeEventListener('mouseover', onPointerOver, true)
-    document.removeEventListener('mousemove', onPointerMove, true)
-    document.removeEventListener('mouseout', onPointerOut, true)
-    window.removeEventListener('scroll', onPageScroll)
-    window.removeEventListener('scroll', onPageScroll, true)
-    document.removeEventListener('fullscreenchange', onFullscreenChange)
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()
-    dialog?.remove()
+    document.querySelector('[data-lexi-dialog]')?.remove()
     closeMediaToolbar()
     closeVideoSpeedMenu()
   }
@@ -4401,36 +4330,38 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }).catch(handleEnhancerError)
   }
 
-  window.addEventListener('pointerdown', onPointerDown, true)
-  window.addEventListener('pointercancel', onVideoSpeedPointerCancel, true)
-  window.addEventListener('contextmenu', onVideoSpeedContextMenu, true)
-  window.addEventListener('scroll', onPageScroll, { passive: true, capture: true })
-  window.addEventListener('mouseup', onMouseUp, true)
-  window.addEventListener('pointerup', onPointerUp, true)
-  document.addEventListener('keydown', onEscape)
-  window.addEventListener('resize', onPageScroll)
-  document.addEventListener('fullscreenchange', onFullscreenChange)
+  // Pointer-up is bound on both the capture and the bubble phase, because pages that
+  // stopPropagation() on mouseup would otherwise swallow selection handling. `once`
+  // makes the second delivery of the same event a no-op instead of a duplicate run.
+  const onPointerUpGuarded = once(onPointerUp)
+
+  listeners.add(window, pointerEventName('down'), onPointerDown, true)
+  listeners.add(window, 'pointercancel', onVideoSpeedPointerCancel, true)
+  listeners.add(window, 'contextmenu', onVideoSpeedContextMenu, true)
+  listeners.add(window, 'scroll', onPageScroll, { passive: true, capture: true })
+  listeners.add(window, pointerEventName('up'), onPointerUpGuarded, true)
+  listeners.add(document, 'keydown', onEscape)
+  listeners.add(window, 'resize', onPageScroll)
+  listeners.add(document, 'fullscreenchange', onFullscreenChange)
 
   if (!mediaPlaybackOnly) {
-    window.addEventListener('click', onMediaClickCapture, true)
-    window.addEventListener('auxclick', onMediaClickCapture, true)
-    document.addEventListener('mouseup', onMouseUp)
-    document.addEventListener('pointerup', onPointerUp)
-    document.addEventListener('keyup', onKeyUp, true)
-    document.addEventListener('selectionchange', onSelectionChange)
-    document.addEventListener('keydown', onKeyDown, true)
-    document.addEventListener('pointerover', onPointerOver, true)
-    document.addEventListener('pointermove', onPointerMove, true)
-    document.addEventListener('pointerout', onPointerOut, true)
-    document.addEventListener('mouseover', onPointerOver, true)
-    document.addEventListener('mousemove', onPointerMove, true)
-    document.addEventListener('mouseout', onPointerOut, true)
+    listeners.add(window, 'click', onMediaClickCapture, true)
+    listeners.add(window, 'auxclick', onMediaClickCapture, true)
+    listeners.add(document, pointerEventName('up'), onPointerUpGuarded)
+    listeners.add(document, 'keyup', onKeyUp, true)
+    listeners.add(document, 'selectionchange', onSelectionChange)
+    listeners.add(document, 'keydown', onKeyDown, true)
+    // Only the pointer variants: browsers emit pointer *and* mouse events for a mouse,
+    // so binding both ran the tooltip handler twice on every single mousemove.
+    listeners.add(document, pointerEventName('over'), onPointerOver, true)
+    listeners.add(document, pointerEventName('move'), onPointerMove, true)
+    listeners.add(document, pointerEventName('out'), onPointerOut, true)
     browser.storage.onChanged.addListener(onStorageChanged)
 
     if (document.body)
       initializeDocumentFeatures()
     else
-      document.addEventListener('DOMContentLoaded', initializeDocumentFeatures, { once: true })
+      listeners.add(document, 'DOMContentLoaded', initializeDocumentFeatures, { once: true })
   }
 
   return stop

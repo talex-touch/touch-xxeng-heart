@@ -1,5 +1,7 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
 import { recordAiCall } from './analytics'
+import { buildDialogMessages } from './dialogHarness'
+import type { DialogHarnessInput, DialogHarnessResult } from './dialogHarness'
 import type { AiConnectionConfig, AiTestResult, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
 
 interface AiReplacementResponse {
@@ -63,6 +65,11 @@ type ChatMessageContentPart =
   | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }
 
 type ChatMessageContent = string | ChatMessageContentPart[]
+
+export interface AiChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: ChatMessageContent
+}
 
 interface MediaAnalysisInput {
   kind: 'image' | 'video' | 'audio' | 'media'
@@ -227,19 +234,10 @@ function modelAcceptsTemperature(model: string) {
   return !modelPrefersNonStreaming(model)
 }
 
-function buildChatBody(model: string, system: string, user: ChatMessageContent, stream: boolean) {
+function buildChatBody(model: string, messages: AiChatMessage[], stream: boolean) {
   const body: Record<string, unknown> = {
     model,
-    messages: [
-      {
-        role: 'system',
-        content: system,
-      },
-      {
-        role: 'user',
-        content: user,
-      },
-    ],
+    messages,
     stream,
   }
 
@@ -247,6 +245,17 @@ function buildChatBody(model: string, system: string, user: ChatMessageContent, 
     body.temperature = 0.2
 
   return JSON.stringify(body)
+}
+
+/** Scene prompts stay the default system message unless the caller supplied its own. */
+function withSystemMessage(messages: AiChatMessage[], system: string): AiChatMessage[] {
+  return messages[0]?.role === 'system' ? messages : [{ role: 'system', content: system }, ...messages]
+}
+
+function getPromptText(messages: AiChatMessage[]) {
+  return messages
+    .map(message => (typeof message.content === 'string' ? message.content : JSON.stringify(message.content)))
+    .join('\n')
 }
 
 function estimateTokens(value: string) {
@@ -442,17 +451,12 @@ function normalizeMarkdownAnswerText(value: string) {
   return content.replace(/^(回答|answer)\s*[:：]\s*/i, '').trim()
 }
 
-async function fetchChatCompletion(request: AiRequestContext, system: string, user: ChatMessageContent, stream: boolean, signal?: AbortSignal) {
+async function fetchChatCompletion(request: AiRequestContext, messages: AiChatMessage[], stream: boolean, signal?: AbortSignal) {
   return fetch(request.endpoint, {
     method: 'POST',
     headers: request.headers,
     signal,
-    body: buildChatBody(
-      request.model,
-      system,
-      user,
-      stream,
-    ),
+    body: buildChatBody(request.model, messages, stream),
   })
 }
 
@@ -669,8 +673,9 @@ async function postAiJsonWithRequest<T>(
   try {
     const user = JSON.stringify({ scene, ...payload })
     const system = promptOverride ?? request.prompt
+    const messages: AiChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: user }]
     const stream = !modelPrefersNonStreaming(request.model)
-    let response = await fetchChatCompletion(request, system, user, stream, signal)
+    let response = await fetchChatCompletion(request, messages, stream, signal)
     let retryError: string | undefined
     let firstError: string | undefined
 
@@ -679,7 +684,7 @@ async function postAiJsonWithRequest<T>(
       if (stream && shouldRetryWithoutStream(response.status, firstError)) {
         retryError = firstError
         firstError = undefined
-        response = await fetchChatCompletion(request, system, user, false, signal)
+        response = await fetchChatCompletion(request, messages, false, signal)
       }
     }
 
@@ -714,7 +719,7 @@ async function postAiJsonWithRequest<T>(
         throw error
 
       retryError = getErrorMessage(error)
-      response = await fetchChatCompletion(request, system, user, false, signal)
+      response = await fetchChatCompletion(request, messages, false, signal)
       if (!response.ok) {
         const responseError = await readErrorText(response)
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
@@ -776,21 +781,18 @@ async function postAiJson<T>(
 async function postAiTextWithRequest(
   request: AiRequestContext,
   scene: FeatureScene,
-  text: ChatMessageContent,
+  inputMessages: AiChatMessage[],
   onText: ((text: string) => void) | undefined,
-  promptOverride: string | undefined,
   signal: AbortSignal,
   normalizeText = normalizeTranslationText,
 ) {
   let failureLogged = false
 
   try {
-    const system = promptOverride ?? request.prompt
-    const promptText = typeof text === 'string'
-      ? `${system}\n${text}`
-      : `${system}\n${JSON.stringify(text)}`
+    const messages = withSystemMessage(inputMessages, request.prompt)
+    const promptText = getPromptText(messages)
     const stream = !modelPrefersNonStreaming(request.model)
-    let response = await fetchChatCompletion(request, system, text, stream, signal)
+    let response = await fetchChatCompletion(request, messages, stream, signal)
     let retryError: string | undefined
     let firstError: string | undefined
 
@@ -799,7 +801,7 @@ async function postAiTextWithRequest(
       if (stream && shouldRetryWithoutStream(response.status, firstError)) {
         retryError = firstError
         firstError = undefined
-        response = await fetchChatCompletion(request, system, text, false, signal)
+        response = await fetchChatCompletion(request, messages, false, signal)
       }
     }
 
@@ -836,7 +838,7 @@ async function postAiTextWithRequest(
         throw error
 
       retryError = getErrorMessage(error)
-      response = await fetchChatCompletion(request, system, text, false, signal)
+      response = await fetchChatCompletion(request, messages, false, signal)
       if (!response.ok) {
         const responseError = await readErrorText(response)
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
@@ -887,22 +889,21 @@ async function postAiTextWithRequest(
 async function postAiText(
   settings: LexiSettings,
   scene: FeatureScene,
-  text: ChatMessageContent,
+  messages: AiChatMessage[],
   onText?: (text: string) => void,
-  promptOverride?: string,
   signal?: AbortSignal,
   normalizeText = normalizeTranslationText,
 ): Promise<string | undefined> {
   const requests = createAiRequestContexts(settings, scene)
   const run = runProviderRace(requests, (request, providerSignal, index) => {
     if (!signal)
-      return postAiTextWithRequest(request, scene, text, index === 0 ? onText : undefined, promptOverride, providerSignal, normalizeText)
+      return postAiTextWithRequest(request, scene, messages, index === 0 ? onText : undefined, providerSignal, normalizeText)
 
     const controller = new AbortController()
     const abort = () => controller.abort()
     signal.addEventListener('abort', abort, { once: true })
     providerSignal.addEventListener('abort', abort, { once: true })
-    return postAiTextWithRequest(request, scene, text, index === 0 ? onText : undefined, promptOverride, controller.signal, normalizeText)
+    return postAiTextWithRequest(request, scene, messages, index === 0 ? onText : undefined, controller.signal, normalizeText)
       .finally(() => {
         signal.removeEventListener('abort', abort)
         providerSignal.removeEventListener('abort', abort)
@@ -923,46 +924,46 @@ async function postAiText(
   ])
 }
 
+export interface LexiDialogAnswer {
+  text: string
+  /** Segment ids attached to this turn; store them so the next turn can skip resending. */
+  attachedSegmentIds: string[]
+  sources: string[]
+  trace: DialogHarnessResult['trace']
+  promptTokens: number
+}
+
+/**
+ * Answers a dialog question by *retrieving* the relevant page excerpts rather than
+ * injecting the page wholesale, and sends a real multi-turn message array so the
+ * transcript prefix stays stable (and cacheable) across turns.
+ */
 export async function requestLexiDialogAnswer(
   settings: LexiSettings,
-  question: string,
-  context: {
-    selected?: string
-    translation?: string
-    detail?: string
-    page?: string
-  },
+  input: DialogHarnessInput,
   onText?: (text: string) => void,
-  history: Array<{ role: 'user' | 'assistant', content: string }> = [],
   signal?: AbortSignal,
-) {
-  const historyText = history
-    .slice(-8)
-    .map(item => `${item.role === 'user' ? '用户' : 'Lexi'}：${item.content}`)
-    .join('\n\n')
-
-  return postAiText(
+): Promise<LexiDialogAnswer | undefined> {
+  const harness = buildDialogMessages(input)
+  const text = await postAiText(
     settings,
     'selection',
-    [
-      historyText ? `历史对话：\n${historyText}` : '',
-      `用户问题：${question}`,
-      context.selected ? `当前选区：${context.selected}` : '',
-      context.translation ? `最近翻译：${context.translation}` : '',
-      context.detail ? `翻译说明：${context.detail}` : '',
-      context.page ? `页面上下文：${context.page}` : '',
-    ].filter(Boolean).join('\n\n'),
+    harness.messages,
     onText,
-    [
-      '你是 Lexi 的网页上下文助手。',
-      '基于用户选区、最近翻译、历史对话和页面上下文回答。',
-      '回答要简洁、直接、中文优先；如涉及术语，给出短解释。',
-      '可以使用简洁 Markdown（列表、行内代码、代码块、引用）增强可读性。',
-      '不要输出 JSON 或思考过程。',
-    ].join(' '),
     signal,
     normalizeMarkdownAnswerText,
   )
+
+  if (typeof text !== 'string' || !text)
+    return undefined
+
+  return {
+    text,
+    attachedSegmentIds: harness.attachedSegmentIds,
+    sources: harness.sources,
+    trace: harness.trace,
+    promptTokens: harness.totalTokens,
+  }
 }
 
 export async function requestReplacementCandidates(
@@ -1002,24 +1003,32 @@ export async function requestSelectionTranslation(
   const translated = await postAiText(
     settings,
     'selection',
-    [
-      getTranslationDirectionInstruction(settings.selection.translationDirection),
-      'Translate ONLY the text between <selected> and </selected>.',
-      'Use context only to disambiguate meaning, tone, speaker intent and subtext; do not translate or paraphrase the context.',
-      'Make the final translation accurate, natural and human-sounding. Avoid translationese; rewrite sentence order when needed.',
-      'Return only the final polished translation, with no explanation.',
-      `<selected>${text}</selected>`,
-      `<context>${context.slice(0, 360)}</context>`,
-    ].join('\n'),
-    value => onTranslation?.({
-      original: text,
-      translation: value,
-      explanation: '由已配置 AI 服务生成。',
-      source: 'ai',
-    }),
+    [{
+      role: 'user',
+      content: [
+        getTranslationDirectionInstruction(settings.selection.translationDirection),
+        'Translate ONLY the text between <selected> and </selected>.',
+        'Use context only to disambiguate meaning, tone, speaker intent and subtext; do not translate or paraphrase the context.',
+        'Make the final translation accurate, natural and human-sounding. Avoid translationese; rewrite sentence order when needed.',
+        'Return only the final polished translation, with no explanation.',
+        `<selected>${text}</selected>`,
+        `<context>${context.slice(0, 360)}</context>`,
+      ].join('\n'),
+    }],
+    (value) => {
+      if (typeof value !== 'string' || !value)
+        return
+
+      onTranslation?.({
+        original: text,
+        translation: value,
+        explanation: '由已配置 AI 服务生成。',
+        source: 'ai',
+      })
+    },
   )
 
-  if (!translated)
+  if (typeof translated !== 'string' || !translated)
     return undefined
 
   return {
@@ -1227,7 +1236,7 @@ export async function requestMediaAnalysis(
         metadata,
       ].join('\n\n')
 
-  return postAiText(settings, 'omni', content, onText)
+  return postAiText(settings, 'omni', [{ role: 'user', content }], onText)
 }
 
 export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
@@ -1261,7 +1270,11 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
       })
 
   const requestUser = typeof user === 'string' ? user : JSON.stringify(user)
-  const body = buildChatBody(request.model, request.prompt, user, false)
+  const body = buildChatBody(
+    request.model,
+    [{ role: 'system', content: request.prompt }, { role: 'user', content: user }],
+    false,
+  )
 
   try {
     const response = await fetch(request.endpoint, {

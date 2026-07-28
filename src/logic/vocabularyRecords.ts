@@ -7,8 +7,12 @@ const maxContextLength = 1200
 const maxTagLength = 32
 const maxTags = 12
 const productVocabularyTags = new Set(['product', 'product-name', 'brand', 'tool', 'platform', 'service'])
+const minute = 60 * 1000
+const reviewIntervals = [day, 2 * day, 4 * day, 7 * day, 14 * day, 30 * day, 60 * day, 120 * day, 240 * day] as const
 
-export function hasVocabularyTag(candidate: Pick<VocabularyCandidate, 'tags'>, tags: Iterable<string>) {
+export type VocabularyReviewResult = 'forgot' | 'hard' | 'remembered'
+
+function hasVocabularyTag(candidate: Pick<VocabularyCandidate, 'tags'>, tags: Iterable<string>) {
   const normalizedTags = new Set(candidate.tags.map(tag => tag.trim().toLowerCase()))
   for (const tag of tags) {
     if (normalizedTags.has(tag.trim().toLowerCase()))
@@ -26,7 +30,7 @@ export function getVocabularyId(original: string, replacement: string) {
   return `${original.trim()}:${replacement.trim().toLowerCase()}`
 }
 
-export function createRecord(request: RecordVocabularyRequest, now = Date.now()): VocabularyRecord {
+function createRecord(request: RecordVocabularyRequest, now = Date.now()): VocabularyRecord {
   const { candidate } = request
   return {
     ...candidate,
@@ -38,6 +42,7 @@ export function createRecord(request: RecordVocabularyRequest, now = Date.now())
     seenCount: request.source === 'auto' ? 1 : 0,
     selectedCount: request.source === 'manual' ? 1 : 0,
     learnedLevel: 0,
+    reviewCount: 0,
     createdAt: now,
     updatedAt: now,
     nextReviewAt: now + day,
@@ -109,6 +114,8 @@ export function normalizeImportedRecord(value: unknown, now = Date.now()): Vocab
     seenCount: clampInteger(value.seenCount, 0, 9999, 0),
     selectedCount: clampInteger(value.selectedCount, 0, 9999, 0),
     learnedLevel: clampInteger(value.learnedLevel, 0, 8, 0),
+    reviewCount: clampInteger(value.reviewCount, 0, 9999, 0),
+    lastReviewedAt: sanitizeOptionalTimestamp(value.lastReviewedAt),
     createdAt,
     updatedAt,
     nextReviewAt: sanitizeTimestamp(value.nextReviewAt, updatedAt + day),
@@ -157,6 +164,14 @@ function sanitizeTimestamp(value: unknown, fallback: number) {
   return timestamp > 0 ? timestamp : fallback
 }
 
+function sanitizeOptionalTimestamp(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    return undefined
+
+  const timestamp = Math.trunc(value)
+  return timestamp > 0 ? timestamp : undefined
+}
+
 export function getProgressDifficulty(records: VocabularyRecord[], baseDifficulty: number) {
   const reviewed = records.filter(record => record.selectedCount > 0 || record.learnedLevel > 0).length
   const levelBonus = Math.min(3, Math.floor(reviewed / 12))
@@ -167,6 +182,51 @@ export function getDueRecords(records: VocabularyRecord[], now = Date.now()) {
   return records
     .filter(record => record.nextReviewAt <= now)
     .sort((a, b) => a.nextReviewAt - b.nextReviewAt)
+}
+
+export function getTodayReviewCount(records: VocabularyRecord[], now = Date.now()) {
+  const startOfDay = new Date(now)
+  startOfDay.setHours(0, 0, 0, 0)
+  return records.filter(record => (record.lastReviewedAt ?? 0) >= startOfDay.getTime()).length
+}
+
+export function reviewVocabularyRecord(
+  records: VocabularyRecord[],
+  id: string,
+  result: VocabularyReviewResult,
+  now = Date.now(),
+) {
+  const index = records.findIndex(record => record.id === id)
+  if (index < 0)
+    return records
+
+  const record = records[index]
+  const currentLevel = clampInteger(record.learnedLevel, 0, 8, 0)
+  let learnedLevel = currentLevel
+  let reviewDelay = reviewIntervals[currentLevel]
+
+  if (result === 'forgot') {
+    learnedLevel = Math.max(0, currentLevel - 1)
+    reviewDelay = 10 * minute
+  }
+  else if (result === 'hard') {
+    reviewDelay = Math.max(day, Math.round(reviewIntervals[currentLevel] / 2))
+  }
+  else {
+    learnedLevel = Math.min(8, currentLevel + 1)
+    reviewDelay = reviewIntervals[learnedLevel]
+  }
+
+  const nextRecords = [...records]
+  nextRecords[index] = {
+    ...record,
+    learnedLevel,
+    reviewCount: (record.reviewCount ?? 0) + 1,
+    lastReviewedAt: now,
+    updatedAt: now,
+    nextReviewAt: now + reviewDelay,
+  }
+  return nextRecords
 }
 
 export function getTodayRecommendations(records: VocabularyRecord[], dailyGoal: number, maxDifficulty: number) {

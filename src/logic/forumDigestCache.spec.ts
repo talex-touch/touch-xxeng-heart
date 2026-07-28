@@ -41,7 +41,7 @@ describe('forum digest cache', () => {
     expect(getCachedForumDigestEntry(cache, 'linux.do:https://linux.do/t/a/1', 1, 1000 + 25 * 60 * 60 * 1000)).toBeUndefined()
   })
 
-  it('does not auto generate when any valid cached version exists', () => {
+  it('auto generates only when the current source has no cached digest', () => {
     const entry = createForumDigestCacheEntry({
       host: 'linux.do',
       title: '缓存问题',
@@ -49,7 +49,8 @@ describe('forum digest cache', () => {
       sourceHash: 'hash-1',
     }, digest, undefined, 1000)
 
-    expect(shouldAutoGenerateForumDigest(undefined)).toBe(true)
-    expect(shouldAutoGenerateForumDigest(entry)).toBe(false)
+    expect(shouldAutoGenerateForumDigest(undefined, 'hash-1')).toBe(true)
+    expect(shouldAutoGenerateForumDigest(entry, 'hash-1')).toBe(false)
+    expect(shouldAutoGenerateForumDigest(entry, 'hash-2')).toBe(true)
   })
 })

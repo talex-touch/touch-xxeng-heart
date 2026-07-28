@@ -295,6 +295,8 @@ export interface VocabularyRecord extends VocabularyCandidate {
   seenCount: number
   selectedCount: number
   learnedLevel: number
+  reviewCount?: number
+  lastReviewedAt?: number
   createdAt: number
   updatedAt: number
   nextReviewAt: number

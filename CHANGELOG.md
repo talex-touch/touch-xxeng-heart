@@ -18,6 +18,10 @@ Changes since v0.1.5.
 
 ## Unreleased
 
+### Fixes
+- publish the Lexi privacy policy at `https://lexi.tagzxia.com/privacy`
+- remove the unnecessary `tabs` permission from Chrome packages
+
 ## v0.1.7 - 2026-07-19
 
 ### Fixes

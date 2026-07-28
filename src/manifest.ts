@@ -1,7 +1,7 @@
 import fs from 'fs-extra'
 import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
-import { isDev, isFirefox, r } from '../scripts/utils'
+import { isBeta, isDev, isFirefox, r } from '../scripts/utils'
 
 type ChromiumManifest = Manifest.WebExtensionManifest & {
   side_panel?: {
@@ -23,9 +23,10 @@ export async function getManifest() {
   // can also be conditional based on your need
   const manifest: ChromiumManifest = {
     manifest_version: 3,
-    name: pkg.displayName || pkg.name,
+    name: isBeta ? `${pkg.displayName || pkg.name} BETA` : pkg.displayName || pkg.name,
     version: pkg.version,
-    description: pkg.description,
+    description: isBeta ? `${pkg.description} THIS EXTENSION IS FOR BETA TESTING.` : pkg.description,
+    minimum_chrome_version: '114',
     action: {
       default_icon: extensionIcons,
       default_popup: 'dist/popup/index.html',
@@ -44,9 +45,7 @@ export async function getManifest() {
         },
     icons: extensionIcons,
     permissions: [
-      'tabs',
       'storage',
-      'activeTab',
       'contextMenus',
       'downloads',
       ...isFirefox ? [] : ['sidePanel'],

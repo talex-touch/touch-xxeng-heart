@@ -89,6 +89,9 @@ export function Footer() {
       <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-4 px-6 py-10 text-sm text-zinc-500 md:flex-row md:items-center">
         <span>Lexi · 面向程序员的语境英语学习</span>
         <div className="flex gap-6">
+          <a href="/privacy" className="transition-colors hover:text-zinc-200">
+            隐私政策
+          </a>
           <a href={GITHUB} target="_blank" rel="noreferrer" className="transition-colors hover:text-zinc-200">
             GitHub
           </a>

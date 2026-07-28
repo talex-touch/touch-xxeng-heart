@@ -5,6 +5,7 @@ import { bgCyan, black } from 'kolorist'
 export const r = (...args: string[]) => resolve(__dirname, '..', ...args)
 export const isDev = process.env.NODE_ENV !== 'production'
 export const isFirefox = process.env.EXTENSION === 'firefox'
+export const isBeta = process.env.CWS_CHANNEL === 'beta'
 
 export function log(name: string, message: string) {
   console.log(black(bgCyan(` ${name} `)), message)

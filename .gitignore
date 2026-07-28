@@ -24,3 +24,6 @@ vite.config.*.timestamp-*.mjs
 
 apps/web/.next/
 apps/web/out/
+
+# packaged tarballs
+*.tgz

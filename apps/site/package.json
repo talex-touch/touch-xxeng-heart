@@ -1,0 +1,9 @@
+{
+  "name": "@lexi/site",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm dlx wrangler pages dev public",
+    "deploy": "pnpm dlx wrangler pages deploy public --project-name=lexi-tagzxia"
+  }
+}

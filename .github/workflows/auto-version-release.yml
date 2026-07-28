@@ -37,8 +37,9 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # Root package only, same as the release job — see release-extension.yml.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-workspace
 
       - name: Prepare version and changelog
         id: release

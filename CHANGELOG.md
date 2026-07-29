@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.2 - 2026-07-29
+
+Changes since v0.2.1.
+
+### Maintenance
+- dispatch the extension build after auto version bumps (32dd7f9)
+
 ## v0.2.1 - 2026-07-29
 
 Changes since v0.2.0.
@@ -68,5 +75,6 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 

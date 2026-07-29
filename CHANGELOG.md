@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.1 - 2026-07-29
+
+Changes since v0.2.0.
+
+### Features
+- redesign the AI dialog in a ChatGPT-style visual language (b0019a6)
+
+### Maintenance
+- fix workspace install in the auto-version workflow (461c97b)
+
 ## v0.1.6 - 2026-07-16
 
 Changes since v0.1.5.
@@ -58,4 +68,5 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 

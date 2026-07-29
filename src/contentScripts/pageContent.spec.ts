@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
-import { capturePageDocument, clearPageDocumentCache, findAnchorSegmentId } from './pageContent'
+import { capturePageDocument, clearPageDocumentCache, findAnchorSegmentId, revealPageSegment } from './pageContent'
 import { rankSegments, selectSegments } from '~/logic/contextRetrieval'
 
 /**
@@ -139,5 +139,41 @@ describe('retrieval over a captured page', () => {
 
     expect(anchor).toBeDefined()
     expect(captured.segments.find(segment => segment.id === anchor)?.text).toContain('PORT')
+  })
+})
+
+describe('revealPageSegment', () => {
+  beforeEach(() => {
+    document.body.innerHTML = articlePage
+    clearPageDocumentCache()
+  })
+
+  it('flashes the captured element behind a segment', () => {
+    const captured = capturePageDocument()
+    const segment = captured.segments.find(item => item.text.includes('PORT 环境变量'))!
+
+    expect(revealPageSegment(segment)).toBe(true)
+    const flashed = document.querySelector('.lexi-segment-flash')
+    expect(flashed?.textContent).toContain('PORT 环境变量')
+  })
+
+  it('falls back to a text search when the captured element was replaced', () => {
+    const captured = capturePageDocument()
+    const segment = captured.segments.find(item => item.text.includes('PORT 环境变量'))!
+
+    // Simulate an SPA re-render: same content, brand-new DOM nodes.
+    const html = document.body.innerHTML
+    document.body.innerHTML = html
+
+    expect(revealPageSegment(segment)).toBe(true)
+    expect(document.querySelector('.lexi-segment-flash')?.textContent).toContain('PORT 环境变量')
+  })
+
+  it('reports failure when the content is gone entirely', () => {
+    const captured = capturePageDocument()
+    const segment = captured.segments.find(item => item.text.includes('PORT 环境变量'))!
+    document.body.innerHTML = '<main><article><p>完全不同的内容，原来的段落已经不存在了。</p></article></main>'
+
+    expect(revealPageSegment(segment)).toBe(false)
   })
 })

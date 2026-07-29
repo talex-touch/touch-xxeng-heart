@@ -1,3 +1,4 @@
+import { ensureStyleSheet } from '~/contentScripts/ui/digestCard'
 import type { PageDocument, PageSegment, PageSegmentKind } from '~/logic/contextRetrieval'
 
 const blockSelector = 'h1,h2,h3,h4,h5,h6,p,li,pre,blockquote,dd,figcaption,td,summary'
@@ -144,12 +145,20 @@ function formatHeadingTrail(trail: Array<{ level: number, text: string }>) {
   return trail.map(item => item.text).join(' › ')
 }
 
+/**
+ * Elements behind the latest capture, so "引用" chips in the dialog can scroll back to
+ * the paragraph an excerpt came from. WeakRefs: retaining detached subtrees of an SPA
+ * page for the tab's lifetime would be a leak.
+ */
+let segmentElements = new Map<string, WeakRef<HTMLElement>>()
+
 export function capturePageDocument(): PageDocument {
   const root = pickContentRoot()
   const segments: PageSegment[] = []
   const outline: string[] = []
   const trail: Array<{ level: number, text: string }> = []
   const seen = new Set<string>()
+  const elements = new Map<string, WeakRef<HTMLElement>>()
   let charCount = 0
   let order = 0
 
@@ -189,8 +198,10 @@ export function capturePageDocument(): PageDocument {
 
     const clipped = text.slice(0, maxSegmentChars)
     charCount += clipped.length
+    const id = `s${order}`
+    elements.set(id, new WeakRef(element))
     segments.push({
-      id: `s${order}`,
+      id,
       heading: kind === 'heading' ? formatHeadingTrail(trail.slice(0, -1)) : formatHeadingTrail(trail),
       text: clipped,
       kind,
@@ -200,6 +211,7 @@ export function capturePageDocument(): PageDocument {
     order += 1
   }
 
+  segmentElements = elements
   return {
     title: normalize(document.title),
     url: location.href,
@@ -207,6 +219,50 @@ export function capturePageDocument(): PageDocument {
     outline: outline.slice(0, 60),
     charCount,
   }
+}
+
+const segmentFlashClass = 'lexi-segment-flash'
+
+function ensureFlashStyles() {
+  ensureStyleSheet('lexi-segment-flash-style', `
+    .${segmentFlashClass} { animation: lexi-segment-flash 1.8s ease-out 1; border-radius: 4px; }
+    @keyframes lexi-segment-flash {
+      0% { background: rgba(255, 212, 0, 0.4); box-shadow: 0 0 0 6px rgba(255, 212, 0, 0.4); }
+      100% { background: transparent; box-shadow: 0 0 0 6px transparent; }
+    }
+    @media (prefers-reduced-motion: reduce) { .${segmentFlashClass} { animation: none; background: rgba(255, 212, 0, 0.3); } }
+  `)
+}
+
+function findSegmentElementByText(segment: PageSegment) {
+  const needle = segment.text.slice(0, 60)
+  if (!needle)
+    return undefined
+
+  return Array.from(document.querySelectorAll<HTMLElement>(blockSelector))
+    .slice(0, 500)
+    .find(element => !element.closest(excludedSelector) && normalize(element.textContent ?? '').includes(needle))
+}
+
+/**
+ * Scrolls the page to the paragraph a dialog excerpt came from and flashes it.
+ * Falls back to a text search when the captured element is gone (SPA re-render,
+ * or the chip belongs to an older capture whose ids no longer line up).
+ */
+export function revealPageSegment(segment: PageSegment): boolean {
+  const captured = segmentElements.get(segment.id)?.deref()
+  const target = captured?.isConnected ? captured : findSegmentElementByText(segment)
+  if (!target)
+    return false
+
+  ensureFlashStyles()
+  target.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  target.classList.remove(segmentFlashClass)
+  // Force a reflow so re-clicking the same chip restarts the animation.
+  void target.offsetWidth
+  target.classList.add(segmentFlashClass)
+  window.setTimeout(() => target.classList.remove(segmentFlashClass), 2000)
+  return true
 }
 
 /**

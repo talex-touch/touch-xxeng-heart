@@ -2,10 +2,10 @@ import browser from 'webextension-polyfill'
 
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
-import type { PageDocument } from '~/logic/contextRetrieval'
+import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
 import { defaultSettings } from '~/logic/defaults'
 import type { DialogSelectionContext } from '~/logic/dialogHarness'
-import { findAnchorSegmentId, getPageDocument } from '~/contentScripts/pageContent'
+import { findAnchorSegmentId, getPageDocument, revealPageSegment } from '~/contentScripts/pageContent'
 import { elementToDataUrl } from '~/contentScripts/ui/canvas'
 import { collapsibleStyles, createCollapsible } from '~/contentScripts/ui/collapsible'
 import type { CollapsibleHandle } from '~/contentScripts/ui/collapsible'
@@ -1229,267 +1229,346 @@ function getPageStyleContent(customCss = '') {
     }
 
     .lexi-dialog {
+      /* ChatGPT-style surface: flat, quiet, generous radius, one strong shadow. */
+      --ld-bg: #ffffff;
+      --ld-text: #0d0d0d;
+      --ld-muted: #8f8f8f;
+      --ld-faint: #b4b4b4;
+      --ld-border: rgba(13, 13, 13, 0.1);
+      --ld-hover: rgba(13, 13, 13, 0.05);
+      --ld-bubble: #f4f4f4;
+      --ld-code-bg: #f9f9f9;
+      --ld-code-border: rgba(13, 13, 13, 0.08);
+      --ld-link: #2964aa;
+      --ld-composer-bg: #ffffff;
+      --ld-composer-border: rgba(13, 13, 13, 0.16);
+      --ld-composer-focus: rgba(13, 13, 13, 0.42);
+      --ld-send-bg: #0d0d0d;
+      --ld-send-fg: #ffffff;
+      --ld-send-disabled: #e3e3e3;
+      --ld-send-disabled-fg: #a6a6a6;
+      --ld-chip-bg: #ffffff;
+      --ld-chip-border: rgba(13, 13, 13, 0.12);
+      --ld-shadow: 0 24px 70px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.06);
       all: initial;
       box-sizing: border-box;
       position: fixed;
       z-index: 2147483647;
-      top: 12vh;
-      left: 50%;
-      transform: translateX(-50%) translateY(-4px);
-      width: min(720px, calc(100vw - 32px));
-      border: 1px solid rgba(129, 140, 248, 0.34);
-      border-radius: 10px;
-      background:
-        radial-gradient(circle at 0% 0%, rgba(99, 102, 241, 0.16), transparent 34%),
-        radial-gradient(circle at 100% 8%, rgba(14, 165, 233, 0.14), transparent 30%),
-        linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
-      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(255, 255, 255, 0.7) inset;
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      color: #111827;
-      font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      width: min(680px, calc(100vw - 32px));
+      max-height: min(72vh, 640px);
+      border: 1px solid var(--ld-border);
+      border-radius: 18px;
+      background: var(--ld-bg);
+      box-shadow: var(--ld-shadow);
+      color: var(--ld-text);
+      color-scheme: light;
+      font: 14px/1.6 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
       overflow: hidden;
-      opacity: 0;
-      animation: lexi-dialog-enter 160ms ease-out forwards;
+      animation: lexi-dialog-enter 180ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
     }
 
     .lexi-dialog * {
       box-sizing: border-box;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
     }
 
     .lexi-dialog__head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      border-bottom: 1px solid rgba(148, 163, 184, 0.3);
-      background: linear-gradient(90deg, rgba(79, 70, 229, 0.08), rgba(14, 165, 233, 0.05), transparent);
-      padding: 12px 14px;
+      flex: none;
+      gap: 8px;
+      border-bottom: 1px solid var(--ld-border);
+      padding: 10px 14px;
     }
 
     .lexi-dialog__title {
-      background: linear-gradient(90deg, #111827, #4f46e5 58%, #0284c7);
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
+      flex: none;
+      color: var(--ld-text);
       font-size: 14px;
-      font-weight: 700;
+      font-weight: 650;
+      letter-spacing: 0.01em;
     }
 
-    .lexi-dialog__close {
+    .lexi-dialog__subtitle {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      color: var(--ld-muted);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .lexi-dialog__close,
+    .lexi-dialog__collapse-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      flex: none;
       border: 0;
+      border-radius: 8px;
       background: transparent;
-      color: #525252;
+      color: var(--ld-muted);
       cursor: pointer;
-      font-size: 18px;
+      font-size: 16px;
       line-height: 1;
-      padding: 2px;
+      padding: 0;
+    }
+
+    .lexi-dialog__close:hover,
+    .lexi-dialog__collapse-toggle:hover {
+      background: var(--ld-hover);
+      color: var(--ld-text);
+      opacity: 1;
     }
 
     .lexi-dialog__body {
-      display: grid;
-      gap: 12px;
-      padding: 14px;
-    }
-
-    .lexi-dialog__context {
-      position: relative;
-      max-height: 118px;
-      overflow: auto;
-      border: 1px solid rgba(203, 213, 225, 0.72);
-      background:
-        linear-gradient(90deg, rgba(99, 102, 241, 0.07), transparent 22%),
-        rgba(248, 250, 252, 0.72);
-      padding: 11px 12px;
-      color: #4b5563;
-      font-size: 12px;
-      line-height: 1.6;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
+      display: flex;
+      min-height: 0;
+      flex: 1;
+      flex-direction: column;
     }
 
     .lexi-dialog__messages {
       display: flex;
-      max-height: min(50vh, 420px);
+      min-height: 96px;
+      flex: 1;
       flex-direction: column;
-      gap: 10px;
-      overflow: auto;
-      padding: 2px 1px 4px;
+      gap: 16px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 16px 18px 8px;
       scroll-behavior: smooth;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(127, 127, 127, 0.35) transparent;
     }
 
+    .lexi-dialog__messages::-webkit-scrollbar { width: 6px; }
+    .lexi-dialog__messages::-webkit-scrollbar-thumb { border-radius: 999px; background: rgba(127, 127, 127, 0.35); }
+    .lexi-dialog__messages::-webkit-scrollbar-track { background: transparent; }
+
+    .lexi-dialog__msg {
+      display: flex;
+      flex-direction: column;
+      animation: lexi-dialog-msg-in 180ms ease-out both;
+    }
+
+    .lexi-dialog__msg--user { align-items: flex-end; }
+    .lexi-dialog__msg--assistant { align-items: stretch; }
+
+    /* User turns: quiet gray bubble on the right, like ChatGPT. */
     .lexi-dialog__bubble {
-      max-width: min(88%, 38rem);
-      border: 1px solid rgba(203, 213, 225, 0.66);
-      border-radius: 16px;
-      padding: 10px 12px;
-      font-size: 13px;
-      line-height: 1.62;
+      max-width: 85%;
+      border-radius: 18px;
+      background: var(--ld-bubble);
+      padding: 9px 14px;
+      color: var(--ld-text);
+      font-size: 14px;
+      line-height: 1.6;
       overflow-wrap: anywhere;
       white-space: normal;
-      animation: lexi-dialog-bubble-enter 160ms ease-out both;
     }
 
-    .lexi-dialog__bubble--system,
-    .lexi-dialog__bubble--assistant {
-      align-self: flex-start;
-      border-bottom-left-radius: 6px;
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.78));
-      color: #111827;
+    /* Assistant turns: no bubble, plain text on the surface. */
+    .lexi-dialog__md {
+      color: var(--ld-text);
+      font-size: 14px;
+      line-height: 1.65;
+      overflow-wrap: anywhere;
     }
 
-    .lexi-dialog__bubble--system {
-      max-width: 100%;
-      border-style: dashed;
-      background: rgba(248, 250, 252, 0.62);
-      color: #64748b;
+    .lexi-dialog__note {
+      align-self: center;
+      max-width: 88%;
+      color: var(--ld-faint);
       font-size: 12px;
+      line-height: 1.5;
+      text-align: center;
     }
 
-    .lexi-dialog__bubble--user {
-      align-self: flex-end;
-      border-color: rgba(37, 99, 235, 0.22);
-      border-bottom-right-radius: 6px;
-      background: linear-gradient(135deg, #2563eb, #4f46e5 58%, #7c3aed);
-      color: #fff;
+    .lexi-dialog__md p { margin: 0 0 10px; }
+    .lexi-dialog__md p:last-child, .lexi-dialog__bubble p { margin: 0; }
+    .lexi-dialog__md ul, .lexi-dialog__md ol { margin: 0 0 10px; padding-left: 22px; }
+    .lexi-dialog__md li { margin: 3px 0; }
+    .lexi-dialog__md blockquote { margin: 0 0 10px; border-left: 3px solid var(--ld-border); padding: 2px 0 2px 12px; color: var(--ld-muted); }
+    .lexi-dialog__md a { color: var(--ld-link); text-decoration: underline; text-underline-offset: 2px; }
+    .lexi-dialog__md code, .lexi-dialog__bubble code {
+      border: 1px solid var(--ld-code-border);
+      border-radius: 6px;
+      background: var(--ld-code-bg);
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12.5px;
     }
-
-    .lexi-dialog__bubble[data-lexi-pending="true"] {
-      background: linear-gradient(100deg, rgba(255,255,255,0.9), rgba(238,242,255,0.9), rgba(255,255,255,0.9));
-      background-size: 220% 100%;
-      color: #4f46e5;
-      animation: lexi-dialog-bubble-enter 160ms ease-out both, lexi-shimmer-surface 1000ms ease-in-out infinite;
-    }
-
-    .lexi-dialog__bubble p {
-      margin: 0.45em 0;
-    }
-
-    .lexi-dialog__bubble p:first-child {
-      margin-top: 0;
-    }
-
-    .lexi-dialog__bubble p:last-child {
-      margin-bottom: 0;
-    }
-
-    .lexi-dialog__bubble ul,
-    .lexi-dialog__bubble ol {
-      margin: 0.45em 0;
-      padding-left: 1.35em;
-    }
-
-    .lexi-dialog__bubble li {
-      margin: 0.18em 0;
-    }
-
-    .lexi-dialog__bubble code {
-      border-radius: 5px;
-      background: rgba(15, 23, 42, 0.08);
-      padding: 0.1em 0.32em;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      font-size: 0.92em;
-    }
-
-    .lexi-dialog__bubble--user code {
-      background: rgba(255, 255, 255, 0.18);
-    }
-
-    .lexi-dialog__bubble pre {
-      max-width: 100%;
-      overflow: auto;
+    .lexi-dialog__md pre {
+      margin: 0 0 10px;
+      border: 1px solid var(--ld-code-border);
       border-radius: 10px;
-      background: rgba(15, 23, 42, 0.9);
-      color: #e5e7eb;
-      padding: 10px;
-      white-space: pre;
+      background: var(--ld-code-bg);
+      padding: 12px 14px;
+      overflow-x: auto;
+    }
+    .lexi-dialog__md pre code { border: 0; background: transparent; padding: 0; font-size: 12.5px; line-height: 1.55; }
+
+    /* Streaming indicator: ChatGPT's pulsing dot at the end of the draft. */
+    .lexi-dialog__cursor {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-left: 3px;
+      border-radius: 50%;
+      background: var(--ld-text);
+      vertical-align: baseline;
+      animation: lexi-dialog-cursor 900ms ease-in-out infinite;
     }
 
-    .lexi-dialog__bubble pre code {
-      background: transparent;
-      padding: 0;
-      color: inherit;
+    .lexi-dialog__sources {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
     }
 
-    .lexi-dialog__bubble blockquote {
-      margin: 0.5em 0;
-      border-left: 3px solid rgba(99, 102, 241, 0.35);
-      padding-left: 0.75em;
-      color: #475569;
+    .lexi-dialog__source-chip {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      gap: 5px;
+      border: 1px solid var(--ld-chip-border);
+      border-radius: 999px;
+      background: var(--ld-chip-bg);
+      color: var(--ld-muted);
+      cursor: pointer;
+      font-size: 11.5px;
+      line-height: 1;
+      padding: 5px 10px;
     }
 
-    .lexi-dialog__bubble a {
-      color: #2563eb;
-      text-decoration: underline;
-      text-underline-offset: 2px;
+    .lexi-dialog__source-chip:hover { background: var(--ld-hover); color: var(--ld-text); }
+    .lexi-dialog__source-chip span { overflow: hidden; max-width: 200px; text-overflow: ellipsis; white-space: nowrap; }
+
+    .lexi-dialog__composer { flex: none; padding: 8px 14px 12px; }
+
+    .lexi-dialog__context {
+      overflow: hidden;
+      margin: 0 4px 6px;
+      color: var(--ld-faint);
+      font-size: 11.5px;
+      line-height: 1.5;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    .lexi-dialog__bubble--user a {
-      color: #fff;
-    }
-
+    /* The composer: one rounded field with the send control inside, ChatGPT-style. */
     .lexi-dialog__form {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: end;
+      display: flex;
+      align-items: flex-end;
       gap: 8px;
+      border: 1px solid var(--ld-composer-border);
+      border-radius: 24px;
+      background: var(--ld-composer-bg);
+      padding: 8px 8px 8px 16px;
+      transition: border-color 120ms ease;
     }
+
+    .lexi-dialog__form:focus-within { border-color: var(--ld-composer-focus); }
 
     .lexi-dialog__input {
       display: block;
       min-width: 0;
-      min-height: 54px;
-      max-height: 120px;
-      resize: vertical;
-      border: 1px solid rgba(148, 163, 184, 0.78);
-      border-radius: 6px;
-      background: rgba(255, 255, 255, 0.78);
-      padding: 10px 11px;
-      color: #111827;
+      flex: 1;
+      min-height: 24px;
+      max-height: 160px;
+      resize: none;
+      border: 0;
+      background: transparent;
+      padding: 3px 0;
+      color: var(--ld-text);
       font-size: 14px;
-      line-height: 1.45;
+      line-height: 1.55;
       outline: none;
+      overflow-y: auto;
+      scrollbar-width: thin;
     }
 
-    .lexi-dialog__input:focus {
-      border-color: rgba(79, 70, 229, 0.72);
-      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.12);
-    }
+    .lexi-dialog__input::placeholder { color: var(--ld-faint); }
 
-    .lexi-dialog__button {
-      align-self: end;
-      min-width: 76px;
-      height: 42px;
-      border: 1px solid #312e81;
-      border-radius: 6px;
-      background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7);
-      color: #fff;
+    .lexi-dialog__send {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      flex: none;
+      border: 0;
+      border-radius: 50%;
+      background: var(--ld-send-bg);
+      color: var(--ld-send-fg);
       cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
-      padding: 0 16px;
+      padding: 0;
+      transition: opacity 120ms ease, transform 120ms ease;
+    }
+
+    .lexi-dialog__send:hover { opacity: 0.85; }
+    .lexi-dialog__send:active { transform: scale(0.94); }
+    .lexi-dialog__send[data-lexi-idle="true"] { background: var(--ld-send-disabled); color: var(--ld-send-disabled-fg); cursor: default; }
+    .lexi-dialog__send svg { display: block; }
+
+    .lexi-dialog__hint {
+      margin: 7px 4px 0;
+      color: var(--ld-faint);
+      font-size: 11px;
+      text-align: center;
     }
 
     @keyframes lexi-dialog-enter {
-      to {
-        opacity: 1;
-        transform: translateX(-50%) translateY(0);
+      from { opacity: 0; transform: translateY(6px) scale(0.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @keyframes lexi-dialog-msg-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes lexi-dialog-cursor {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.82); }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .lexi-dialog {
+        --ld-bg: #212121;
+        --ld-text: #ececec;
+        --ld-muted: #9b9b9b;
+        --ld-faint: #7c7c7c;
+        --ld-border: rgba(255, 255, 255, 0.09);
+        --ld-hover: rgba(255, 255, 255, 0.08);
+        --ld-bubble: #303030;
+        --ld-code-bg: #171717;
+        --ld-code-border: rgba(255, 255, 255, 0.08);
+        --ld-link: #7ab7ff;
+        --ld-composer-bg: #2f2f2f;
+        --ld-composer-border: rgba(255, 255, 255, 0.12);
+        --ld-composer-focus: rgba(255, 255, 255, 0.36);
+        --ld-send-bg: #ececec;
+        --ld-send-fg: #0d0d0d;
+        --ld-send-disabled: #3a3a3a;
+        --ld-send-disabled-fg: #737373;
+        --ld-chip-bg: #2a2a2a;
+        --ld-chip-border: rgba(255, 255, 255, 0.12);
+        --ld-shadow: 0 24px 70px rgba(0, 0, 0, 0.55), 0 4px 14px rgba(0, 0, 0, 0.3);
+        color-scheme: dark;
       }
     }
 
-    @keyframes lexi-dialog-bubble-enter {
-      from {
-        opacity: 0;
-        filter: blur(2px);
-        transform: translateY(4px) scale(0.99);
-      }
-      to {
-        opacity: 1;
-        filter: blur(0);
-        transform: translateY(0) scale(1);
-      }
+    @media (prefers-reduced-motion: reduce) {
+      .lexi-dialog, .lexi-dialog__msg { animation: none; }
+      .lexi-dialog__cursor { animation: none; opacity: 0.6; }
     }
 
     ${collapsibleStyles('lexi-dialog')}
@@ -2315,17 +2394,14 @@ function createDialogContext(lastTranslation?: LastTranslationState): DialogCont
   }
 }
 
-function renderDialogContext(context: DialogContext, sources: string[] = []) {
+function renderDialogContext(context: DialogContext) {
   const page = context.page
   return [
-    context.selection?.text ? `选区：${context.selection.text.slice(0, 160)}` : '',
-    context.selection?.translation ? `最近翻译：${context.selection.translation.slice(0, 120)}` : '',
-    page.title ? `页面：${page.title}` : '',
     page.segments.length
-      ? `已建索引：${page.segments.length} 个片段 / 约 ${page.charCount} 字（按问题检索，不整篇注入）`
-      : '未能抽取到正文，回答只能依赖选区。',
-    sources.length ? `本轮引用：${sources.slice(0, 4).join(' · ')}` : '',
-  ].filter(Boolean).join('\n')
+      ? `已索引本页 ${page.segments.length} 段 · 按问题检索作答`
+      : '未抽取到正文，仅依赖选区回答',
+    context.selection?.text ? `选区：${context.selection.text.slice(0, 60)}` : '',
+  ].filter(Boolean).join(' · ')
 }
 
 function escapeMarkdownHtml(value: string) {
@@ -2434,27 +2510,86 @@ function renderMarkdown(value: string) {
   return html.join('') || '<p></p>'
 }
 
+function isDialogNearBottom(container: HTMLElement) {
+  return container.scrollHeight - container.scrollTop - container.clientHeight < 90
+}
+
+function scrollDialogMessages(container: HTMLElement, force = false) {
+  if (force || isDialogNearBottom(container))
+    container.scrollTop = container.scrollHeight
+}
+
+/**
+ * ChatGPT-style turns: user text sits in a quiet gray bubble on the right, assistant
+ * text renders plain on the surface, system notes are small and centered.
+ * Returns the content element, which `updateDialogMessage` re-renders while streaming.
+ */
 function appendDialogMessage(container: HTMLElement, role: DialogMessageRole, text: string, pending = false) {
-  const bubble = document.createElement('div')
-  bubble.className = `lexi-dialog__bubble lexi-dialog__bubble--${role}`
-  bubble.dataset.lexiRole = role
-  if (pending)
-    bubble.dataset.lexiPending = 'true'
-  bubble.innerHTML = renderMarkdown(text)
-  container.append(bubble)
-  container.scrollTop = container.scrollHeight
-  return bubble
+  const message = document.createElement('article')
+  message.className = `lexi-dialog__msg lexi-dialog__msg--${role}`
+
+  const content = document.createElement('div')
+  content.className = role === 'user'
+    ? 'lexi-dialog__bubble'
+    : role === 'system'
+      ? 'lexi-dialog__note'
+      : 'lexi-dialog__md'
+  content.dataset.lexiRole = role
+  message.append(content)
+  container.append(message)
+  updateDialogMessage(content, text, pending)
+  scrollDialogMessages(container, true)
+  return content
 }
 
 function updateDialogMessage(bubble: HTMLElement, text: string, pending = false) {
   bubble.innerHTML = renderMarkdown(text)
-  if (pending)
-    bubble.dataset.lexiPending = 'true'
-  else
-    delete bubble.dataset.lexiPending
-  const container = bubble.parentElement
+  if (pending) {
+    // The pulsing dot rides at the end of the draft, inside the last block.
+    const cursor = document.createElement('span')
+    cursor.className = 'lexi-dialog__cursor'
+    ;(bubble.lastElementChild ?? bubble).append(cursor)
+  }
+
+  const container = bubble.closest<HTMLElement>('.lexi-dialog__messages')
   if (container)
-    container.scrollTop = container.scrollHeight
+    scrollDialogMessages(container)
+}
+
+/**
+ * "引用" chips under an assistant reply. Clicking one collapses the panel to its pill
+ * and scrolls the page to the paragraph the excerpt came from, flashing it.
+ */
+function appendDialogSources(
+  bubble: HTMLElement,
+  page: PageDocument,
+  segmentIds: string[],
+  onNavigate: () => void,
+) {
+  const segments = segmentIds
+    .map(id => page.segments.find(segment => segment.id === id))
+    .filter((segment): segment is PageSegment => Boolean(segment))
+  if (!segments.length)
+    return
+
+  const row = document.createElement('div')
+  row.className = 'lexi-dialog__sources'
+  for (const segment of segments) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'lexi-dialog__source-chip'
+    chip.title = segment.text.slice(0, 160)
+    const label = document.createElement('span')
+    label.textContent = segment.heading || segment.text.slice(0, 24)
+    chip.append('↗', label)
+    chip.addEventListener('click', () => {
+      if (revealPageSegment(segment))
+        onNavigate()
+    })
+    row.append(chip)
+  }
+
+  bubble.append(row)
 }
 
 function getDialogAnchorFromRange(range?: Range): DialogAnchor | undefined {
@@ -2512,6 +2647,14 @@ function closeLexiDialog(dialog: HTMLElement) {
   dialog.remove()
 }
 
+const dialogSendIcon = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 4.5l6.5 6.5-1.42 1.42L13 8.34V19.5h-2V8.34l-4.08 4.08L5.5 11z" fill="currentColor"/></svg>'
+const dialogStopIcon = '<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5" fill="currentColor"/></svg>'
+
+function isAbortLikeError(error: unknown) {
+  return (error instanceof DOMException && error.name === 'AbortError')
+    || (error instanceof Error && error.name === 'AbortError')
+}
+
 function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslationState) {
   ensurePageStyles(settings.ui.customCss)
 
@@ -2525,91 +2668,101 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   const history: DialogHistoryMessage[] = []
   let dialogAbortController: AbortController | undefined
   const anchor = getCurrentDialogAnchor()
+
   const dialog = document.createElement('section')
-  const head = document.createElement('div')
+  const head = document.createElement('header')
   const title = document.createElement('div')
+  const subtitle = document.createElement('div')
   const close = document.createElement('button')
   const body = document.createElement('div')
-  const contextBlock = document.createElement('div')
   const messages = document.createElement('div')
+  const composer = document.createElement('div')
+  const contextLine = document.createElement('div')
   const form = document.createElement('form')
   const input = document.createElement('textarea')
-  const button = document.createElement('button')
+  const send = document.createElement('button')
+  const hint = document.createElement('div')
 
   dialog.dataset.lexiDialog = 'true'
   dialog.className = 'lexi-dialog'
   head.className = 'lexi-dialog__head'
   title.className = 'lexi-dialog__title'
+  subtitle.className = 'lexi-dialog__subtitle'
   close.className = 'lexi-dialog__close'
   body.className = 'lexi-dialog__body'
-  contextBlock.className = 'lexi-dialog__context'
   messages.className = 'lexi-dialog__messages'
+  composer.className = 'lexi-dialog__composer'
+  contextLine.className = 'lexi-dialog__context'
   form.className = 'lexi-dialog__form'
   input.className = 'lexi-dialog__input'
-  button.className = 'lexi-dialog__button'
+  send.className = 'lexi-dialog__send'
+  hint.className = 'lexi-dialog__hint'
 
-  title.textContent = 'Lexi 对话'
+  title.textContent = 'Lexi'
+  subtitle.textContent = context.page.title || location.hostname
   close.type = 'button'
   close.textContent = '×'
-  contextBlock.textContent = renderDialogContext(context) || '当前页面暂无可用上下文。'
+  close.setAttribute('aria-label', '关闭对话')
+  contextLine.textContent = renderDialogContext(context)
   appendDialogMessage(messages, 'system', context.selection?.text
-    ? '输入问题后，Lexi 会结合选区、译文和检索到的页面片段回答。支持 Markdown 渲染，可连续追问。'
-    : '未检测到选区。Lexi 已为本页正文建立索引，每次提问只检索相关片段作答。支持 Markdown 渲染，可连续追问。')
-  input.placeholder = context.selection?.text ? '解释这段内容，或继续追问...' : '基于当前页面提问...'
-  input.rows = 2
-  button.type = 'submit'
-  button.textContent = '发送'
+    ? '会结合选区、译文和检索到的页面片段回答，可连续追问。'
+    : '已为本页正文建立索引，提问时只检索相关片段作答。')
+  input.placeholder = context.selection?.text ? '解释这段内容，或继续追问' : '基于当前页面提问'
+  input.rows = 1
+  send.type = 'button'
+  send.setAttribute('aria-label', '发送')
+  hint.textContent = 'Enter 发送 · Shift+Enter 换行'
 
+  const inFlight = () => dialogAbortController != null
+
+  const setSendState = () => {
+    if (inFlight()) {
+      send.innerHTML = dialogStopIcon
+      send.setAttribute('aria-label', '停止生成')
+      send.removeAttribute('data-lexi-idle')
+      return
+    }
+
+    send.innerHTML = dialogSendIcon
+    send.setAttribute('aria-label', '发送')
+    send.toggleAttribute('data-lexi-idle', false)
+    if (!input.value.trim())
+      send.setAttribute('data-lexi-idle', 'true')
+  }
+
+  const autosize = () => {
+    input.style.height = 'auto'
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`
+  }
+
+  input.addEventListener('input', () => {
+    autosize()
+    setSendState()
+  })
+
+  // Enter sends, Shift+Enter breaks the line — with an IME guard so confirming a
+  // Chinese composition with Enter never fires the request.
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey))
+    if (event.key !== 'Enter' || event.shiftKey)
+      return
+    if (event.isComposing || event.keyCode === 229)
+      return
+
+    event.preventDefault()
+    if (!inFlight())
       form.requestSubmit()
   })
 
-  close.addEventListener('click', () => closeLexiDialog(dialog))
-  form.addEventListener('submit', (event) => {
-    event.preventDefault()
-    const question = input.value.trim()
-    if (!question)
+  send.addEventListener('click', () => {
+    if (inFlight()) {
+      dialogAbortController?.abort()
       return
+    }
 
-    appendDialogMessage(messages, 'user', question)
-    input.value = ''
-    const assistantBubble = appendDialogMessage(messages, 'assistant', '思考中...', true)
-    button.setAttribute('disabled', 'true')
-    dialogAbortController?.abort()
-    dialogAbortController = new AbortController()
-
-    // Recapture per turn: the page may have navigated, scrolled or changed selection.
-    context = createDialogContext(lastTranslation)
-    const turn: DialogHistoryMessage = { role: 'user', content: question }
-
-    requestLexiDialogAnswer(
-      settings,
-      { question, history: [...history], page: context.page, selection: context.selection },
-      text => updateDialogMessage(assistantBubble, text || '思考中...', true),
-      dialogAbortController.signal,
-    )
-      .then((answer) => {
-        const text = answer?.text || assistantBubble.textContent || ''
-        updateDialogMessage(assistantBubble, text || '（无返回内容）')
-        if (!text)
-          return
-
-        turn.segmentIds = answer?.attachedSegmentIds
-        history.push(turn, { role: 'assistant', content: text })
-        contextBlock.textContent = renderDialogContext(context, answer?.sources)
-      })
-      .catch((error) => {
-        // Failed turns are dropped rather than pushed as assistant messages — otherwise
-        // an error string poisons every subsequent prompt.
-        updateDialogMessage(assistantBubble, error instanceof Error ? error.message : '请求失败')
-      })
-      .finally(() => {
-        dialogAbortController = undefined
-        button.removeAttribute('disabled')
-        input.focus()
-      })
+    form.requestSubmit()
   })
+
+  close.addEventListener('click', () => closeLexiDialog(dialog))
 
   const panelListeners = createListenerGroup()
   const reposition = () => positionLexiDialog(dialog, anchor)
@@ -2620,11 +2773,72 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
     onToggle: reposition,
   })
 
-  head.append(title, collapsible.toggle, close)
-  form.append(input, button)
-  body.append(contextBlock, messages, form)
+  form.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const question = input.value.trim()
+    if (!question || inFlight())
+      return
+
+    appendDialogMessage(messages, 'user', question)
+    input.value = ''
+    autosize()
+    const assistantBubble = appendDialogMessage(messages, 'assistant', '', true)
+    dialogAbortController = new AbortController()
+    setSendState()
+
+    // Recapture per turn: the page may have navigated, scrolled or changed selection.
+    context = createDialogContext(lastTranslation)
+    contextLine.textContent = renderDialogContext(context)
+    subtitle.textContent = context.page.title || location.hostname
+    const page = context.page
+    const turn: DialogHistoryMessage = { role: 'user', content: question }
+
+    const finalizeAnswer = (answerText: string, segmentIds?: string[]) => {
+      updateDialogMessage(assistantBubble, answerText || '（无返回内容）')
+      if (!answerText)
+        return
+
+      turn.segmentIds = segmentIds
+      history.push(turn, { role: 'assistant', content: answerText })
+      if (segmentIds?.length)
+        appendDialogSources(assistantBubble, page, segmentIds, () => collapsible.setCollapsed(true))
+    }
+
+    requestLexiDialogAnswer(
+      settings,
+      { question, history: [...history], page, selection: context.selection },
+      text => updateDialogMessage(assistantBubble, text, true),
+      dialogAbortController.signal,
+    )
+      .then((answer) => {
+        finalizeAnswer(answer?.text || assistantBubble.textContent || '', answer?.attachedSegmentIds)
+      })
+      .catch((error) => {
+        if (isAbortLikeError(error)) {
+          // Stopped by the user: keep the partial draft as a real turn so follow-ups
+          // still have its context, instead of discarding what already streamed in.
+          finalizeAnswer(assistantBubble.textContent?.trim() ?? '')
+          return
+        }
+
+        // Failed turns are dropped rather than pushed as assistant messages — otherwise
+        // an error string poisons every subsequent prompt.
+        updateDialogMessage(assistantBubble, error instanceof Error ? error.message : '请求失败')
+      })
+      .finally(() => {
+        dialogAbortController = undefined
+        setSendState()
+        input.focus()
+      })
+  })
+
+  head.append(title, subtitle, collapsible.toggle, close)
+  form.append(input, send)
+  composer.append(contextLine, form, hint)
+  body.append(messages, composer)
   dialog.append(collapsible.pill, head, body)
   document.documentElement.appendChild(dialog)
+  setSendState()
   positionLexiDialog(dialog, anchor)
   panelListeners.add(window, 'resize', reposition)
   panelListeners.add(window, 'scroll', reposition, true)

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: auto-version-release-${{ github.ref }}
@@ -68,3 +69,11 @@ jobs:
           git tag "${{ steps.release.outputs.tag }}"
           git push origin "HEAD:${{ github.ref_name }}"
           git push origin "${{ steps.release.outputs.tag }}"
+
+      # Tags pushed with GITHUB_TOKEN never fire on-push workflows, so the release
+      # build must be dispatched explicitly (API dispatch is exempt from that rule).
+      - name: Trigger extension release
+        if: steps.release.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-extension.yml --ref "${{ steps.release.outputs.tag }}"

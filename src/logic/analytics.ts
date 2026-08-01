@@ -1,40 +1,43 @@
-import browser from 'webextension-polyfill'
-import { aiCallLogsStorageKey, pageVisitLogsStorageKey } from './storageKeys'
-import { readJsonValue, toStoredJson } from './storageJson'
+import { sendRuntimeMessage } from './runtimeMessaging'
 import { formatDay } from './format'
 import type { AiCallLog, PageVisitLog } from './types'
 
-const maxLogs = 80
+export type AnalyticsLogPayload =
+  | { kind: 'ai', item: AiCallLog }
+  | { kind: 'page', item: PageVisitLog }
 
 function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-async function readList<T>(key: string) {
-  const stored = await browser.storage.local.get(key)
-  return readJsonValue<T[]>(stored[key], [])
-}
-
-async function prependLog<T>(key: string, item: T) {
-  const current = await readList<T>(key)
-  await browser.storage.local.set({
-    [key]: toStoredJson([item, ...current].slice(0, maxLogs)),
-  })
+async function sendAnalyticsLog(payload: AnalyticsLogPayload) {
+  try {
+    await sendRuntimeMessage('lexi-record-analytics', payload)
+  }
+  catch (error) {
+    console.warn('[Lexi] analytics log write failed', error)
+  }
 }
 
 export async function recordAiCall(log: Omit<AiCallLog, 'id' | 'createdAt'>) {
-  await prependLog<AiCallLog>(aiCallLogsStorageKey, {
-    ...log,
-    id: createId('ai'),
-    createdAt: Date.now(),
+  await sendAnalyticsLog({
+    kind: 'ai',
+    item: {
+      ...log,
+      id: createId('ai'),
+      createdAt: Date.now(),
+    },
   })
 }
 
 export async function recordPageVisit(log: Omit<PageVisitLog, 'id' | 'createdAt'>) {
-  await prependLog<PageVisitLog>(pageVisitLogsStorageKey, {
-    ...log,
-    id: createId('page'),
-    createdAt: Date.now(),
+  await sendAnalyticsLog({
+    kind: 'page',
+    item: {
+      ...log,
+      id: createId('page'),
+      createdAt: Date.now(),
+    },
   })
 }
 
@@ -42,8 +45,7 @@ export async function recordPageVisit(log: Omit<PageVisitLog, 'id' | 'createdAt'
  * Buckets logs into the last `days` days.
  *
  * `weight` decides what each log contributes: the default counts calls, and passing
- * `log => log.totalTokens ?? 0` sums tokens — which is what the options page's
- * separate `summarizeTokensByDay` copy did.
+ * `log => log.totalTokens ?? 0` sums tokens.
  */
 export function summarizeByDay<T extends { createdAt: number }>(
   logs: T[],

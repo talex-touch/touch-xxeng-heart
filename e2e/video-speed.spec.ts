@@ -260,9 +260,11 @@ test('video speed menu detects video tags in embedded media frames', async ({ co
   const video = mediaFrame.locator('video[data-test-frame-video]')
   await expect(mediaFrame.locator('#touch-xxeng-heart')).toHaveCount(0)
 
-  await page.keyboard.down('Control')
-  await page.mouse.click(400, 225)
-  await page.keyboard.up('Control')
+  const framePlatform = await video.evaluate(() => navigator.platform)
+  if (/\bMac|iPhone|iPad|iPod\b/i.test(framePlatform))
+    await video.click({ button: 'right', modifiers: ['Meta'] })
+  else
+    await video.click({ modifiers: ['Control'] })
 
   await expect(mediaFrame.locator('[data-lexi-video-speed-menu]')).toBeVisible()
   await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).playbackRate)).toBe(2)

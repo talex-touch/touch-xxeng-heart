@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill'
 import { sendMessage } from 'webext-bridge/content-script'
 import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
-import { digestCardKeyframes, digestCardTokens, ensureStyleSheet, morphCardContent, runTypewriterAnimation } from '~/contentScripts/ui/digestCard'
+import { digestCardKeyframes, digestCardTokens, ensureStyleSheet, morphCardContent } from '~/contentScripts/ui/digestCard'
 import { startRouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import type { RouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import { requestForumDigest } from '~/logic/aiClient'
@@ -293,15 +293,8 @@ function getHistorySwitcher(state: ForumDigestCardState) {
   return `<div class="lexi-forum-digest__versions"><span>缓存版本</span>${buttons}</div>`
 }
 
-const typewriterOptions = {
-  targetClass: 'lexi-forum-digest__typewriter',
-  charClass: 'lexi-forum-digest__char',
-  step: 12,
-  maxDelay: 900,
-}
-
 function updateCardContent(element: HTMLElement, html: string) {
-  morphCardContent(element, html, node => runTypewriterAnimation(node, typewriterOptions))
+  morphCardContent(element, html)
 }
 
 function renderCard() {
@@ -367,7 +360,7 @@ function renderCard() {
 function ensureStyles() {
   ensureStyleSheet('lexi-forum-digest-style', `
     .lexi-forum-digest-mount { width: 100%; margin: 14px 0; }
-    .lexi-forum-digest { ${digestCardTokens} --lexi-text: #111827; --lexi-muted: #64748b; --lexi-secondary: #475569; --lexi-accent: #4f46e5; --lexi-accent-strong: #4338ca; --lexi-card-bg: linear-gradient(135deg, rgba(255,255,255,.96), rgba(248,250,252,.9)); --lexi-card-border: rgba(129,140,248,.32); --lexi-card-shadow: 0 18px 50px rgba(15,23,42,.18), 0 0 0 1px rgba(255,255,255,.64) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(15,23,42,.12), 0 0 0 1px rgba(255,255,255,.62) inset; --lexi-pill-bg: rgba(79,70,229,.1); --lexi-button-bg: #fff; --lexi-button-border: rgba(203,213,225,.9); --lexi-divider: rgba(226,232,240,.8); --lexi-error-bg: rgba(254,242,242,.9); --lexi-error-text: #dc2626; --lexi-stale-bg: rgba(251,191,36,.16); --lexi-stale-text: #b45309; --lexi-loading-bg: linear-gradient(100deg, rgba(99,102,241,.12), rgba(14,165,233,.18), rgba(168,85,247,.12), rgba(99,102,241,.12)); box-sizing: border-box; color-scheme: light; position: fixed; right: 18px; top: 96px; z-index: 2147483646; width: min(360px, calc(100vw - 36px)); max-height: min(54vh, 540px); overflow: auto; border: 1px solid var(--lexi-card-border); border-radius: 14px; background: var(--lexi-card-bg); box-shadow: var(--lexi-card-shadow); backdrop-filter: blur(14px) saturate(1.1); -webkit-backdrop-filter: blur(14px) saturate(1.1); color: var(--lexi-text); padding: 13px; font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .lexi-forum-digest { ${digestCardTokens} --lexi-text: #111827; --lexi-muted: #64748b; --lexi-secondary: #475569; --lexi-accent: #4f46e5; --lexi-accent-strong: #4338ca; --lexi-card-bg: #ffffff; --lexi-card-border: rgba(129,140,248,.32); --lexi-card-shadow: 0 18px 50px rgba(15,23,42,.18), 0 0 0 1px rgba(255,255,255,.64) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(15,23,42,.12), 0 0 0 1px rgba(255,255,255,.62) inset; --lexi-pill-bg: rgba(79,70,229,.1); --lexi-button-bg: #fff; --lexi-button-border: rgba(203,213,225,.9); --lexi-divider: rgba(226,232,240,.8); --lexi-error-bg: rgba(254,242,242,.9); --lexi-error-text: #dc2626; --lexi-stale-bg: rgba(251,191,36,.16); --lexi-stale-text: #b45309; --lexi-loading-bg: rgba(79,70,229,.1); box-sizing: border-box; color-scheme: light; position: fixed; right: 18px; top: 96px; z-index: 2147483646; width: min(360px, calc(100vw - 36px)); max-height: min(54vh, 540px); overflow: auto; border: 1px solid var(--lexi-card-border); border-radius: 14px; background: var(--lexi-card-bg); box-shadow: var(--lexi-card-shadow); color: var(--lexi-text); padding: 13px; font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     .lexi-forum-digest *, .lexi-forum-digest *::before, .lexi-forum-digest *::after { box-sizing: border-box; }
     .lexi-forum-digest[data-lexi-placement="sidebar"] { position: static; right: auto; top: auto; z-index: auto; width: 100%; min-width: 0; max-height: min(43.5vh, 390px); border-radius: 12px; padding: 11px; box-shadow: var(--lexi-sidebar-shadow); }
     .lexi-forum-digest--collapsed { width: 142px; min-height: 0; overflow: hidden; border-radius: 999px; padding: 9px 10px; }
@@ -399,19 +392,18 @@ function ensureStyles() {
     .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__actions { gap: 6px; }
     .lexi-forum-digest__actions button { border: 1px solid var(--lexi-button-border); border-radius: 999px; background: var(--lexi-button-bg); color: var(--lexi-text); cursor: pointer; font: 12px/1 ui-sans-serif, system-ui, sans-serif; padding: 7px 10px; }
     .lexi-forum-digest[data-lexi-placement="sidebar"] .lexi-forum-digest__actions button { font-size: 11px; padding: 6px 8px; }
-    .lexi-forum-digest__actions button:first-child { border-color: #312e81; background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7); color: #fff; }
+    .lexi-forum-digest__actions button:first-child { border-color: #312e81; background: #312e81; color: #fff; }
     .lexi-forum-digest__versions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 11px; border-top: 1px solid var(--lexi-divider); padding-top: 10px; }
     .lexi-forum-digest__versions span { width: 100%; color: var(--lexi-muted); font-size: 11px; font-weight: 700; }
     .lexi-forum-digest__versions button { border: 1px solid var(--lexi-button-border); border-radius: 999px; background: var(--lexi-button-bg); color: var(--lexi-secondary); cursor: pointer; font-size: 11px; padding: 5px 8px; }
     .lexi-forum-digest__versions button.is-active { border-color: rgba(79,70,229,.45); background: var(--lexi-pill-bg); color: var(--lexi-accent-strong); }
-    .lexi-forum-digest__loading { margin-top: 12px; border-radius: 12px; background: var(--lexi-loading-bg); background-size: 240% 100%; padding: 10px; color: var(--lexi-accent); animation: lexi-forum-digest-ai-gradient 1.15s ease-in-out infinite; }
-    .lexi-forum-digest__char { display: inline-block; opacity: 0; filter: blur(2px); transform: translateY(2px); animation: lexi-forum-digest-char-in 160ms cubic-bezier(.2,.7,.2,1) forwards; white-space: pre-wrap; }
+    .lexi-forum-digest__loading { margin-top: 12px; border-radius: 12px; background: var(--lexi-loading-bg); padding: 10px; color: var(--lexi-accent); animation: lexi-forum-digest-loading-pulse 1.2s ease-in-out infinite; }
     [data-lexi-forum-digest="true"] .lexi-forum-digest__actions button { font: 12px/1 ui-sans-serif, system-ui, sans-serif; }
     ${digestCardKeyframes('lexi-forum-digest')}
     @media (prefers-color-scheme: dark) {
-      .lexi-forum-digest { --lexi-text: #f5f5f5; --lexi-muted: #a3a3a3; --lexi-secondary: #d4d4d4; --lexi-accent: #e5e5e5; --lexi-accent-strong: #fafafa; --lexi-card-bg: linear-gradient(135deg, rgba(12,12,12,.97), rgba(24,24,27,.94)); --lexi-card-border: rgba(115,115,115,.34); --lexi-card-shadow: 0 18px 50px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.07) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(0,0,0,.36), 0 0 0 1px rgba(255,255,255,.06) inset; --lexi-pill-bg: rgba(245,245,245,.1); --lexi-button-bg: rgba(23,23,23,.92); --lexi-button-border: rgba(82,82,82,.92); --lexi-divider: rgba(82,82,82,.72); --lexi-error-bg: rgba(127,29,29,.38); --lexi-error-text: #fca5a5; --lexi-stale-bg: rgba(120,53,15,.34); --lexi-stale-text: #facc15; --lexi-loading-bg: linear-gradient(100deg, rgba(64,64,64,.3), rgba(115,115,115,.22), rgba(38,38,38,.32), rgba(64,64,64,.3)); color-scheme: dark; }
+      .lexi-forum-digest { --lexi-text: #f5f5f5; --lexi-muted: #a3a3a3; --lexi-secondary: #d4d4d4; --lexi-accent: #e5e5e5; --lexi-accent-strong: #fafafa; --lexi-card-bg: #171717; --lexi-card-border: rgba(115,115,115,.34); --lexi-card-shadow: 0 18px 50px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.07) inset; --lexi-sidebar-shadow: 0 12px 32px rgba(0,0,0,.36), 0 0 0 1px rgba(255,255,255,.06) inset; --lexi-pill-bg: rgba(245,245,245,.1); --lexi-button-bg: rgba(23,23,23,.92); --lexi-button-border: rgba(82,82,82,.92); --lexi-divider: rgba(82,82,82,.72); --lexi-error-bg: rgba(127,29,29,.38); --lexi-error-text: #fca5a5; --lexi-stale-bg: rgba(120,53,15,.34); --lexi-stale-text: #facc15; --lexi-loading-bg: rgba(64,64,64,.3); color-scheme: dark; }
     }
-    @media (prefers-reduced-motion: reduce) { .lexi-forum-digest__content, .lexi-forum-digest__char, .lexi-forum-digest__loading { animation: none; opacity: 1; filter: none; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { .lexi-forum-digest__content, .lexi-forum-digest__loading { animation: none; opacity: 1; filter: none; transform: none; } }
   `)
 }
 

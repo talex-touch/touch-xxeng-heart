@@ -183,6 +183,7 @@ export const defaultSettings: LexiSettings = {
   ai: {
     global: { ...emptyAiConnection },
     providers: [createDefaultProvider()],
+    approvedHttpEndpoints: [],
     replacement: createAiSceneConfig('replacement'),
     selection: createAiSceneConfig('selection'),
     daily: createAiSceneConfig('daily'),
@@ -262,6 +263,7 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
         ...value?.ai?.global,
       },
       providers,
+      approvedHttpEndpoints: value?.ai?.approvedHttpEndpoints ?? defaultSettings.ai.approvedHttpEndpoints,
       replacement: {
         ...defaultSettings.ai.replacement,
         ...value?.ai?.replacement,

@@ -7,6 +7,8 @@ export type LexiRuntimeMessageType =
   | 'lexi-page-translate-start'
   | 'lexi-page-translate-status'
   | 'lexi-page-translate-stop'
+  | 'lexi-record-analytics'
+  | 'lexi-write-page-translation-cache'
 
 interface LexiRuntimeMessage<T = unknown> {
   channel: 'lexi'

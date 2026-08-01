@@ -18,24 +18,29 @@ export const { data: lexiSettings } = useWebExtensionStorage<LexiSettings>(
 export const { data: vocabularyRecords } = useWebExtensionStorage<VocabularyRecord[]>(
   vocabularyStorageKey,
   [],
+  { writeDefaults: false },
 )
 
 export const { data: aiCallLogs } = useWebExtensionStorage<AiCallLog[]>(
   aiCallLogsStorageKey,
   [],
+  { writeDefaults: false },
 )
 
 export const { data: pageVisitLogs } = useWebExtensionStorage<PageVisitLog[]>(
   pageVisitLogsStorageKey,
   [],
+  { writeDefaults: false },
 )
 
 export const { data: githubDigestCache } = useWebExtensionStorage<GitHubDigestCache>(
   githubDigestStorageKey,
   {},
+  { writeDefaults: false },
 )
 
 export const { data: forumDigestCache } = useWebExtensionStorage<ForumDigestCache>(
   forumDigestStorageKey,
   {},
+  { writeDefaults: false },
 )

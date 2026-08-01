@@ -2,7 +2,7 @@ import browser from 'webextension-polyfill'
 import { sendMessage } from 'webext-bridge/content-script'
 import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
 import { findAboutPlacement, getStickyOffset, githubDigestMountAttribute } from '~/contentScripts/githubPlacement'
-import { digestCardKeyframes, digestCardTokens, ensureStyleSheet, morphCardContent, runTypewriterAnimation } from '~/contentScripts/ui/digestCard'
+import { digestCardKeyframes, digestCardTokens, ensureStyleSheet, morphCardContent } from '~/contentScripts/ui/digestCard'
 import { startRouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import type { RouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import { requestGitHubDigest } from '~/logic/aiClient'
@@ -271,14 +271,8 @@ function getDigestSummary(digest: GitHubDigestResult, options: { detail: boolean
   `
 }
 
-const typewriterOptions = {
-  targetClass: 'lexi-github-digest__typewriter',
-  charClass: 'lexi-github-digest__char',
-  step: 16,
-}
-
 function updateCardContent(element: HTMLElement, html: string) {
-  morphCardContent(element, html, node => runTypewriterAnimation(node, typewriterOptions))
+  morphCardContent(element, html)
 }
 
 function renderCard() {
@@ -354,8 +348,6 @@ function ensureStyles() {
       border-radius: 12px;
       background: color-mix(in srgb, var(--bgColor-default, var(--color-canvas-default, #ffffff)) 92%, transparent);
       box-shadow: 0 8px 22px rgba(27, 31, 36, 0.08);
-      backdrop-filter: blur(8px) saturate(1.04);
-      -webkit-backdrop-filter: blur(8px) saturate(1.04);
       color: var(--fgColor-default, var(--color-fg-default, #1f2328));
       padding: 12px;
       font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
@@ -390,14 +382,13 @@ function ensureStyles() {
     .lexi-github-digest ul { margin: 0; padding-left: 18px; }
     .lexi-github-digest li { margin: 2px 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); }
     .lexi-github-digest__terms, .lexi-github-digest__hint, .lexi-github-digest__muted { margin: 10px 0 0; color: var(--fgColor-muted, var(--color-fg-muted, #656d76)); font-size: 12px; }
-    .lexi-github-digest__char { display: inline-block; opacity: 0; filter: blur(2px); transform: translateY(2px); animation: lexi-github-digest-char-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1) forwards; white-space: pre-wrap; }
-    .lexi-github-digest__loading { margin-top: 12px; border-radius: 10px; background: linear-gradient(100deg, rgba(99,102,241,0.12), rgba(14,165,233,0.18), rgba(168,85,247,0.12), rgba(99,102,241,0.12)); background-size: 240% 100%; padding: 10px; color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); animation: lexi-github-digest-ai-gradient 1.15s ease-in-out infinite; }
+    .lexi-github-digest__loading { margin-top: 12px; border-radius: 10px; background: var(--bgColor-accent-muted, var(--color-accent-subtle, #ddf4ff)); padding: 10px; color: var(--fgColor-accent, var(--color-accent-fg, #0969da)); animation: lexi-github-digest-loading-pulse 1.2s ease-in-out infinite; }
     .lexi-github-digest__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
     .lexi-github-digest__actions button { border: 1px solid var(--borderColor-default, var(--color-border-default, #d0d7de)); border-radius: 6px; background: var(--bgColor-default, var(--color-canvas-default, #ffffff)); color: var(--fgColor-default, var(--color-fg-default, #1f2328)); cursor: pointer; font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 7px 9px; }
     .lexi-github-digest__actions button:first-child { border-color: var(--button-primary-borderColor-rest, #1f883d); background: var(--button-primary-bgColor-rest, #1f883d); color: var(--button-primary-fgColor-rest, #ffffff); }
     ${digestCardKeyframes('lexi-github-digest')}
     @media (prefers-reduced-motion: reduce) {
-      .lexi-github-digest__content, .lexi-github-digest__collapsed-toggle, .lexi-github-digest__char, .lexi-github-digest__loading { animation: none; opacity: 1; filter: none; transform: none; }
+      .lexi-github-digest__content, .lexi-github-digest__collapsed-toggle, .lexi-github-digest__loading { animation: none; opacity: 1; filter: none; transform: none; }
     }
   `)
 }

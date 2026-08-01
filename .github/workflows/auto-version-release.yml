@@ -58,6 +58,18 @@ jobs:
         if: steps.release.outputs.changed == 'true'
         run: pnpm test
 
+      - name: Build extension
+        if: steps.release.outputs.changed == 'true'
+        run: pnpm build
+
+      - name: Install Playwright Chromium
+        if: steps.release.outputs.changed == 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: End-to-end test
+        if: steps.release.outputs.changed == 'true'
+        run: pnpm test:e2e:run
+
       - name: Commit version and tag
         if: steps.release.outputs.changed == 'true'
         shell: bash

@@ -24,6 +24,7 @@ export interface AiSceneConfig extends AiConnectionConfig {
 export type AiSettings = Record<FeatureScene, AiSceneConfig> & {
   global: AiConnectionConfig
   providers: AiProviderConfig[]
+  approvedHttpEndpoints: string[]
 }
 
 export interface AiTestResult {

@@ -79,6 +79,25 @@ const dailyRecommendations = computed(() => getTodayRecommendations(
   difficulty.value,
 ))
 
+function onSidepanelTabKeydown(event: KeyboardEvent, index: number) {
+  let nextIndex = index
+  if (event.key === 'ArrowRight')
+    nextIndex = (index + 1) % tabItems.length
+  else if (event.key === 'ArrowLeft')
+    nextIndex = (index - 1 + tabItems.length) % tabItems.length
+  else if (event.key === 'Home')
+    nextIndex = 0
+  else if (event.key === 'End')
+    nextIndex = tabItems.length - 1
+  else
+    return
+
+  event.preventDefault()
+  const tab = tabItems[nextIndex]
+  activeTab.value = tab.value
+  requestAnimationFrame(() => document.getElementById(`sidepanel-tab-${tab.value}`)?.focus())
+}
+
 async function getActiveTabId() {
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id)
@@ -254,21 +273,27 @@ onMounted(() => {
       </button>
     </header>
 
-    <nav class="mt-4 grid grid-cols-3 gap-2 rounded-3 bg-neutral-100 p-1" aria-label="侧边栏标签页">
+    <nav class="mt-4 grid grid-cols-3 gap-2 rounded-3 bg-neutral-100 p-1" role="tablist" aria-label="侧边栏标签页">
       <button
         v-for="tab in tabItems"
+        :id="`sidepanel-tab-${tab.value}`"
         :key="tab.value"
+        role="tab"
+        :aria-selected="activeTab === tab.value"
+        :aria-controls="`sidepanel-panel-${tab.value}`"
+        :tabindex="activeTab === tab.value ? 0 : -1"
         type="button"
         class="rounded-2 px-2 py-2 text-center transition cursor-pointer"
         :class="activeTab === tab.value ? 'bg-neutral-950 text-white shadow-sm' : 'text-neutral-500 hover:bg-white hover:text-neutral-950'"
         @click="activeTab = tab.value"
+        @keydown="onSidepanelTabKeydown($event, tabItems.indexOf(tab))"
       >
         <span class="block text-12px font-600">{{ tab.label }}</span>
         <span class="mt-0.5 block text-10px opacity-75">{{ tab.description }}</span>
       </button>
     </nav>
 
-    <section v-if="activeTab === 'common'" class="mt-4 space-y-4">
+    <section v-if="activeTab === 'common'" id="sidepanel-panel-common" role="tabpanel" aria-labelledby="sidepanel-tab-common" class="mt-4 space-y-4">
       <section v-if="pageStats.specialProfile" class="rounded-3 border border-purple-200 bg-purple-50 px-3 py-3 text-purple-950">
         <div class="flex items-start justify-between gap-3">
           <div>
@@ -308,28 +333,28 @@ onMounted(() => {
               <span class="block font-500">启用 Lexi</span>
               <span class="text-11px text-neutral-500">控制当前站点功能</span>
             </span>
-            <ToggleSwitch v-model="lexiSettings.siteRules.enabled" />
+            <ToggleSwitch v-model="lexiSettings.siteRules.enabled" label="启用 Lexi" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
             <span>
               <span class="block font-500">替换网页文本</span>
               <span class="text-11px text-neutral-500">将部分中文替换为英文</span>
             </span>
-            <ToggleSwitch v-model="lexiSettings.replacement.enabled" />
+            <ToggleSwitch v-model="lexiSettings.replacement.enabled" label="替换网页文本" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
             <span>
               <span class="block font-500">划词翻译</span>
               <span class="text-11px text-neutral-500">选中文本后快速翻译</span>
             </span>
-            <ToggleSwitch v-model="lexiSettings.selection.enabled" />
+            <ToggleSwitch v-model="lexiSettings.selection.enabled" label="划词翻译" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2 text-12px">
             <span>
               <span class="block font-500">保存历史</span>
               <span class="text-11px text-neutral-500">用于复盘和导出</span>
             </span>
-            <ToggleSwitch v-model="lexiSettings.history.enabled" />
+            <ToggleSwitch v-model="lexiSettings.history.enabled" label="保存历史" />
           </div>
         </div>
 
@@ -436,7 +461,7 @@ onMounted(() => {
       </section>
     </section>
 
-    <section v-else-if="activeTab === 'advanced'" class="mt-4 space-y-4">
+    <section v-else-if="activeTab === 'advanced'" id="sidepanel-panel-advanced" role="tabpanel" aria-labelledby="sidepanel-tab-advanced" class="mt-4 space-y-4">
       <section class="rounded-3 border border-neutral-200 bg-neutral-50 px-3 py-3">
         <div class="flex items-center justify-between gap-3">
           <div>
@@ -485,14 +510,14 @@ onMounted(() => {
               <span class="block font-500">显示状态浮标</span>
               <span class="text-11px text-neutral-500">在页面上展示 Lexi 运行状态</span>
             </span>
-            <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" />
+            <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" label="显示状态浮标" />
           </div>
           <div class="flex items-center justify-between gap-3 rounded-2 bg-neutral-50 px-3 py-2 text-12px">
             <span>
               <span class="block font-500">按修饰键触发划词</span>
               <span class="text-11px text-neutral-500">macOS Command / Windows Ctrl；媒体操作默认 meta+shift</span>
             </span>
-            <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" />
+            <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" label="按修饰键触发划词" />
           </div>
         </div>
 
@@ -503,7 +528,7 @@ onMounted(() => {
       </section>
     </section>
 
-    <section v-else class="mt-4 space-y-5">
+    <section v-else id="sidepanel-panel-history" role="tabpanel" aria-labelledby="sidepanel-tab-history" class="mt-4 space-y-5">
       <section class="rounded-3 border border-neutral-200 bg-white px-3 py-3">
         <div class="flex items-center justify-between gap-3">
           <h2 class="text-14px font-700">

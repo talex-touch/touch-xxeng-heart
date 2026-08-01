@@ -1,6 +1,7 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
 import { recordAiCall } from './analytics'
 import { buildDialogMessages } from './dialogHarness'
+import { assertEndpointAllowed } from './endpointPolicy'
 import type { DialogHarnessInput, DialogHarnessResult } from './dialogHarness'
 import type { AiConnectionConfig, AiTestResult, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
 
@@ -152,6 +153,8 @@ function getAiConfigs(settings: LexiSettings, scene: FeatureScene) {
       const connection = mergeConnection(settings.ai.global, provider, config)
       if (!connection.endpoint)
         return undefined
+
+      assertEndpointAllowed(connection.endpoint, settings.ai.approvedHttpEndpoints ?? [])
 
       return {
         ...connection,
@@ -455,6 +458,7 @@ async function fetchChatCompletion(request: AiRequestContext, messages: AiChatMe
   return fetch(request.endpoint, {
     method: 'POST',
     headers: request.headers,
+    redirect: 'error',
     signal,
     body: buildChatBody(request.model, messages, stream),
   })
@@ -773,9 +777,41 @@ async function postAiJson<T>(
   scene: FeatureScene,
   payload: Record<string, unknown>,
   promptOverride?: string,
+  signal?: AbortSignal,
 ): Promise<T | undefined> {
   const requests = createAiRequestContexts(settings, scene)
-  return runProviderRace(requests, (request, signal) => postAiJsonWithRequest<T>(request, scene, payload, promptOverride, signal))
+  const run = runProviderRace(requests, (request, providerSignal) => {
+    if (!signal)
+      return postAiJsonWithRequest<T>(request, scene, payload, promptOverride, providerSignal)
+
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    signal.addEventListener('abort', abort, { once: true })
+    providerSignal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted || providerSignal.aborted)
+      controller.abort()
+
+    return postAiJsonWithRequest<T>(request, scene, payload, promptOverride, controller.signal)
+      .finally(() => {
+        signal.removeEventListener('abort', abort)
+        providerSignal.removeEventListener('abort', abort)
+      })
+  })
+
+  if (!signal)
+    return run
+
+  return Promise.race([
+    run,
+    new Promise<undefined>((_, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException('AI request aborted', 'AbortError'))
+        return
+      }
+
+      signal.addEventListener('abort', () => reject(new DOMException('AI request aborted', 'AbortError')), { once: true })
+    }),
+  ])
 }
 
 async function postAiTextWithRequest(
@@ -1043,6 +1079,7 @@ export async function requestPageTranslationBatch(
   settings: LexiSettings,
   items: Array<{ id: string, text: string }>,
   context: string,
+  signal?: AbortSignal,
 ) {
   if (!items.length)
     return []
@@ -1061,7 +1098,7 @@ export async function requestPageTranslationBatch(
   }, [
     'You are Lexi page auto-translator. Return only compact JSON matching the requested schema.',
     'Translations must be natural, concise and human-sounding. No markdown, no hidden reasoning.',
-  ].join(' '))
+  ].join(' '), signal)
 
   return data?.items
     ?.filter(item => item.id && item.translation)
@@ -1280,6 +1317,7 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
     const response = await fetch(request.endpoint, {
       method: 'POST',
       headers: request.headers,
+      redirect: 'error',
       body,
     })
 

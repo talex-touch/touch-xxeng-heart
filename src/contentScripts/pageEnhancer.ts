@@ -10,8 +10,13 @@ import { elementToDataUrl } from '~/contentScripts/ui/canvas'
 import { collapsibleStyles, createCollapsible } from '~/contentScripts/ui/collapsible'
 import type { CollapsibleHandle } from '~/contentScripts/ui/collapsible'
 import { createListenerGroup, once, pointerEventName } from '~/contentScripts/ui/listenerGroup'
+import { renderMarkdown } from '~/contentScripts/ui/markdown'
 import { overlayRect, positionAgainstAnchor } from '~/contentScripts/ui/position'
+import { startVideoSpeedControl } from '~/contentScripts/ui/videoSpeed'
 import { getStoredState, primeStoredRecords } from '~/logic/settingsCache'
+import { createSerializedTaskQueue } from '~/logic/asyncQueue'
+import { createOperationEpoch } from '~/logic/operationEpoch'
+import type { OperationEpochHandle } from '~/logic/operationEpoch'
 import { readJsonValue } from '~/logic/storageJson'
 import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessaging'
 import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
@@ -212,13 +217,6 @@ interface MediaToolbarState extends MediaTargetInfo {
   promptText?: string
   frameDataUrl?: string
   mediaDataUrl?: string
-}
-
-interface VideoSpeedMenuState {
-  menu: HTMLDialogElement
-  video: HTMLVideoElement
-  previousRate: number
-  selectedRate: number
 }
 
 const discourseTitleSelectors = [
@@ -1149,85 +1147,6 @@ function getPageStyleContent(customCss = '') {
       overflow-wrap: anywhere;
     }
 
-    .lexi-video-speed-menu {
-      all: initial;
-      box-sizing: border-box;
-      position: fixed;
-      inset: auto;
-      z-index: 2147483647;
-      display: grid;
-      margin: 0;
-      gap: 10px;
-      width: min(300px, calc(100vw - 24px));
-      border: 1px solid rgba(191, 219, 254, 0.72);
-      border-radius: 16px;
-      background: linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(30, 41, 59, 0.9));
-      box-shadow: 0 18px 48px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-      backdrop-filter: blur(18px) saturate(1.2);
-      -webkit-backdrop-filter: blur(18px) saturate(1.2);
-      color: #f8fafc;
-      padding: 12px;
-      font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      animation: lexi-card-enter 140ms ease-out both;
-    }
-
-    .lexi-video-speed-menu:not([open]) {
-      display: none;
-    }
-
-    .lexi-video-speed-menu::backdrop {
-      background: transparent;
-    }
-
-    .lexi-video-speed-menu * {
-      box-sizing: border-box;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-
-    .lexi-video-speed-menu__head {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 12px;
-    }
-
-    .lexi-video-speed-menu__title {
-      font-weight: 750;
-      letter-spacing: 0.01em;
-    }
-
-    .lexi-video-speed-menu__hint {
-      color: #93c5fd;
-      font-size: 11px;
-    }
-
-    .lexi-video-speed-menu__rates {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap: 6px;
-    }
-
-    .lexi-video-speed-menu__rate {
-      border: 1px solid rgba(148, 163, 184, 0.32);
-      border-radius: 9px;
-      background: rgba(15, 23, 42, 0.38);
-      color: #cbd5e1;
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 700;
-      line-height: 1;
-      padding: 9px 4px;
-      text-align: center;
-    }
-
-    .lexi-video-speed-menu__rate:hover,
-    .lexi-video-speed-menu__rate--active {
-      border-color: rgba(125, 211, 252, 0.9);
-      background: linear-gradient(135deg, #0284c7, #4f46e5);
-      color: #fff;
-      box-shadow: 0 5px 15px rgba(37, 99, 235, 0.3);
-    }
-
     .lexi-dialog {
       /* ChatGPT-style surface: flat, quiet, generous radius, one strong shadow. */
       --ld-bg: #ffffff;
@@ -1809,6 +1728,12 @@ interface PageTranslationTarget {
 
 type PageTranslationActivations = Record<string, PageTranslationActivation>
 
+const enqueuePageTranslationActivationWrite = createSerializedTaskQueue()
+const enqueuePageTranslationCacheWrite = createSerializedTaskQueue()
+const enqueuePageTranslationMemoryWrite = createSerializedTaskQueue()
+let pageTranslationCacheWritesSettled: Promise<unknown> = Promise.resolve()
+let pageTranslationMemoryWritesSettled: Promise<unknown> = Promise.resolve()
+
 function normalizePageTranslationUrl(url = location.href) {
   try {
     const parsed = new URL(url)
@@ -1920,15 +1845,19 @@ async function findMatchingPageTranslationActivation() {
 }
 
 async function savePageTranslationActivation(activation: PageTranslationActivation) {
-  const activations = await readPageTranslationActivations()
-  activations[getPageTranslationActivationKey(activation)] = activation
-  await savePageTranslationActivations(activations)
+  await enqueuePageTranslationActivationWrite(async () => {
+    const activations = await readPageTranslationActivations()
+    activations[getPageTranslationActivationKey(activation)] = activation
+    await savePageTranslationActivations(activations)
+  })
 }
 
 async function removePageTranslationActivation(activation: PageTranslationActivation) {
-  const activations = await readPageTranslationActivations()
-  delete activations[getPageTranslationActivationKey(activation)]
-  await savePageTranslationActivations(activations)
+  await enqueuePageTranslationActivationWrite(async () => {
+    const activations = await readPageTranslationActivations()
+    delete activations[getPageTranslationActivationKey(activation)]
+    await savePageTranslationActivations(activations)
+  })
 }
 
 async function readPageTranslationMemory() {
@@ -1936,8 +1865,14 @@ async function readPageTranslationMemory() {
   return readJsonValue<PageTranslationMemory>(stored[pageTranslationMemoryStorageKey], {})
 }
 
-async function savePageTranslationMemory(memory: PageTranslationMemory) {
-  await browser.storage.local.set({ [pageTranslationMemoryStorageKey]: JSON.stringify(memory) })
+async function savePageTranslationMemory(memory: PageTranslationMemory, operation: OperationEpochHandle) {
+  const write = enqueuePageTranslationMemoryWrite(async () => {
+    if (!operation.isCurrent())
+      return
+    await browser.storage.local.set({ [pageTranslationMemoryStorageKey]: JSON.stringify(memory) })
+  })
+  pageTranslationMemoryWritesSettled = write.then(() => undefined, () => undefined)
+  await write
 }
 
 function prunePageTranslationMemory(memory: PageTranslationMemory, settings: LexiSettings) {
@@ -2095,7 +2030,14 @@ async function readPageTranslationCache() {
 }
 
 async function savePageTranslationCache(cache: PageTranslationCache) {
-  await browser.storage.local.set({ [getPageTranslationCacheKey()]: JSON.stringify(cache) })
+  const key = getPageTranslationCacheKey()
+  const write = enqueuePageTranslationCacheWrite(async () => {
+    const result = await sendRuntimeMessage<{ ok?: boolean, error?: string }>('lexi-write-page-translation-cache', { key, cache })
+    if (!result?.ok)
+      throw new Error(result?.error || '页面翻译缓存写入失败')
+  })
+  pageTranslationCacheWritesSettled = write.then(() => undefined, () => undefined)
+  await write
 }
 
 async function restorePageTranslationCache(settings: LexiSettings, force = false, isActive: () => boolean = () => true) {
@@ -2402,112 +2344,6 @@ function renderDialogContext(context: DialogContext) {
       : '未抽取到正文，仅依赖选区回答',
     context.selection?.text ? `选区：${context.selection.text.slice(0, 60)}` : '',
   ].filter(Boolean).join(' · ')
-}
-
-function escapeMarkdownHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;')
-}
-
-function renderInlineMarkdown(value: string) {
-  const escaped = escapeMarkdownHtml(value)
-  return escaped
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-    .replace(/(\*\*|__)(.+?)\1/g, '<strong>$2</strong>')
-    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
-}
-
-function renderMarkdown(value: string) {
-  const lines = value.replace(/\r\n?/g, '\n').split('\n')
-  const html: string[] = []
-  let paragraph: string[] = []
-  let list: { ordered: boolean, items: string[] } | undefined
-  let codeLines: string[] | undefined
-  let codeLanguage = ''
-
-  const flushParagraph = () => {
-    if (!paragraph.length)
-      return
-
-    html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`)
-    paragraph = []
-  }
-  const flushList = () => {
-    if (!list)
-      return
-
-    const tag = list.ordered ? 'ol' : 'ul'
-    html.push(`<${tag}>${list.items.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${tag}>`)
-    list = undefined
-  }
-
-  for (const line of lines) {
-    const fenceText = line.trim()
-    if (fenceText.startsWith('```')) {
-      if (codeLines) {
-        html.push(`<pre><code${codeLanguage ? ` class="language-${escapeMarkdownHtml(codeLanguage)}"` : ''}>${escapeMarkdownHtml(codeLines.join('\n'))}</code></pre>`)
-        codeLines = undefined
-        codeLanguage = ''
-      }
-      else if (/^```[\w-]*$/.test(fenceText)) {
-        flushParagraph()
-        flushList()
-        codeLines = []
-        codeLanguage = fenceText.slice(3)
-      }
-      continue
-    }
-
-    if (codeLines) {
-      codeLines.push(line)
-      continue
-    }
-
-    const trimmed = line.trim()
-    if (!trimmed) {
-      flushParagraph()
-      flushList()
-      continue
-    }
-
-    const quote = trimmed.match(/^>\s?(.*)$/)
-    if (quote) {
-      flushParagraph()
-      flushList()
-      html.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`)
-      continue
-    }
-
-    const bulletPrefix = trimmed.slice(0, 2)
-    const bulletItem = ['- ', '* ', '+ '].includes(bulletPrefix)
-      ? trimmed.slice(2).trim()
-      : ''
-    const orderedMatch = trimmed.match(/^(\d{1,3})[.)] (.*)$/)
-    if (bulletItem || orderedMatch) {
-      flushParagraph()
-      const isOrdered = Boolean(orderedMatch)
-      if (!list || list.ordered !== isOrdered) {
-        flushList()
-        list = { ordered: isOrdered, items: [] }
-      }
-      list.items.push(bulletItem || (orderedMatch?.[2] ?? '').trim())
-      continue
-    }
-
-    paragraph.push(trimmed)
-  }
-
-  if (codeLines)
-    html.push(`<pre><code${codeLanguage ? ` class="language-${escapeMarkdownHtml(codeLanguage)}"` : ''}>${escapeMarkdownHtml(codeLines.join('\n'))}</code></pre>`)
-  flushParagraph()
-  flushList()
-
-  return html.join('') || '<p></p>'
 }
 
 function isDialogNearBottom(container: HTMLElement) {
@@ -2981,111 +2817,6 @@ function positionMediaUi(state: MediaToolbarState) {
   positionMediaToolbar(state.toolbar, state.element)
 }
 
-function getVideoFromEventTarget(target: EventTarget | null) {
-  const element = target instanceof Element ? target : undefined
-  if (!element)
-    return undefined
-
-  if (element instanceof HTMLVideoElement)
-    return element
-
-  return element.closest<HTMLVideoElement>('video') ?? undefined
-}
-
-function getVideoAtPoint(clientX: number, clientY: number, root: Document | ShadowRoot = document) {
-  let bestMatch: HTMLVideoElement | undefined
-  let bestArea = Number.POSITIVE_INFINITY
-
-  const videos = root.querySelectorAll<HTMLVideoElement>('video')
-  for (let index = 0; index < videos.length; index += 1) {
-    const video = videos[index]
-    const rect = video.getBoundingClientRect()
-    if (rect.width <= 0 || rect.height <= 0 || clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom)
-      continue
-
-    const style = getComputedStyle(video)
-    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0)
-      continue
-
-    const area = rect.width * rect.height
-    if (area < bestArea) {
-      bestMatch = video
-      bestArea = area
-    }
-  }
-
-  const elements = root instanceof Document
-    ? root.elementsFromPoint(clientX, clientY)
-    : root.querySelectorAll('*')
-  for (let index = 0; index < elements.length; index += 1) {
-    const element = elements[index]
-    if (!element.shadowRoot)
-      continue
-
-    const shadowVideo = getVideoAtPoint(clientX, clientY, element.shadowRoot)
-    if (!shadowVideo)
-      continue
-
-    const rect = shadowVideo.getBoundingClientRect()
-    const area = rect.width * rect.height
-    if (area < bestArea) {
-      bestMatch = shadowVideo
-      bestArea = area
-    }
-  }
-
-  return bestMatch
-}
-
-function getVideoFromPointerTarget(target: EventTarget | null, clientX: number, clientY: number) {
-  const video = getVideoFromEventTarget(target)
-  if (video)
-    return video
-
-  const element = target instanceof Element ? target : undefined
-  return element?.shadowRoot ? getVideoAtPoint(clientX, clientY, element.shadowRoot) : undefined
-}
-
-function getVideoFromPointerEvent(event: MouseEvent | PointerEvent) {
-  for (const target of event.composedPath()) {
-    const video = getVideoFromPointerTarget(target, event.clientX, event.clientY)
-    if (video)
-      return video
-  }
-
-  for (const element of document.elementsFromPoint(event.clientX, event.clientY)) {
-    const video = getVideoFromPointerTarget(element, event.clientX, event.clientY)
-    if (video)
-      return video
-  }
-
-  return getVideoAtPoint(event.clientX, event.clientY)
-}
-
-function positionVideoSpeedMenu(menu: HTMLElement, video: HTMLVideoElement) {
-  // Pinned to the video's top-right corner rather than flipped below it.
-  const rect = video.getBoundingClientRect()
-  positionAgainstAnchor(menu, {
-    ...rect.toJSON(),
-    bottom: rect.top,
-    top: rect.top - 16,
-  }, { align: 'end', gap: 0, fallbackWidth: 300, fallbackHeight: 100 })
-}
-
-function promoteVideoSpeedMenu(menu: HTMLDialogElement) {
-  const container = document.documentElement
-  if (menu.parentElement !== container)
-    container.append(menu)
-
-  if (menu.open)
-    menu.close()
-
-  if (document.fullscreenElement)
-    menu.showModal()
-  else
-    menu.show()
-}
-
 function captureVideoFrame(element: HTMLVideoElement) {
   return elementToDataUrl(element, element.videoWidth, element.videoHeight)
 }
@@ -3118,6 +2849,7 @@ async function translateSelection(
 export function startPageEnhancer(events: EnhancerEvents) {
   const mediaPlaybackOnly = window.top !== window
   const listeners = createListenerGroup()
+  const stopVideoSpeedControl = startVideoSpeedControl()
   let disposed = false
   let tooltip: HTMLElement | undefined
   let dynamicObserver: MutationObserver | undefined
@@ -3127,9 +2859,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let lastTranslation: LastTranslationState | undefined
   let dialogShortcut = defaultSettings.ui.dialogShortcut
   let mediaModifierShortcut = defaultSettings.ui.mediaModifierShortcut
-  let videoSpeedMenuState: VideoSpeedMenuState | undefined
-  let activeVideoSpeedGesture: { video: HTMLVideoElement, pointerId?: number } | undefined
-  let lastVideoSpeedGesture: { video: HTMLVideoElement, at: number } | undefined
   let lastSelectionKey = ''
   let activeSelectionKey = ''
   let latestSelectionSnapshot = ''
@@ -3139,15 +2868,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let selectionFinalizedAt = 0
   let selectionFinalizedWithModifier = false
   let activeSelectionBlock: { remove: () => void } | undefined
-  let pageTranslationRunning = false
+  let pageTranslationRunningId: number | undefined
   let pageTranslationEnabled = false
   let pageTranslationTimer: number | undefined
   let pageTranslationObserver: MutationObserver | undefined
   let pageTranslationScanPending = false
   let pageTranslationRunId = 0
+  const pageTranslationEpoch = createOperationEpoch()
+  let pageTranslationOperation: OperationEpochHandle | undefined
   let pageTranslationActivation: PageTranslationActivation | undefined
   const pageTranslationSources = new Map<string, PageTranslationBlock>()
-  const pageTranslationInFlight = new Set<string>()
+  const pageTranslationInFlight = new Map<string, number>()
   const recentSelectionKeys = new Set<string>()
   let stats: PageStats = {
     replacements: 0,
@@ -3345,12 +3076,18 @@ export function startPageEnhancer(events: EnhancerEvents) {
     return nearest || document.body.textContent?.replace(/\s+/g, ' ').slice(0, 1200) || ''
   }
 
-  async function translatePageTargetBatch(settings: LexiSettings, targets: PageTranslationTarget[], memory: PageTranslationMemory) {
+  async function translatePageTargetBatch(
+    settings: LexiSettings,
+    targets: PageTranslationTarget[],
+    memory: PageTranslationMemory,
+    operation: OperationEpochHandle,
+  ) {
+    const runId = operation.id
     const uniqueTargets = targets.filter(target => !pageTranslationSources.has(target.id) && !pageTranslationInFlight.has(target.id))
-    if (!uniqueTargets.length)
+    if (!uniqueTargets.length || !operation.isCurrent())
       return
 
-    uniqueTargets.forEach(target => pageTranslationInFlight.add(target.id))
+    uniqueTargets.forEach(target => pageTranslationInFlight.set(target.id, runId))
     updateTranslationLoadingState(uniqueTargets)
 
     try {
@@ -3358,11 +3095,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
         settings,
         uniqueTargets.map(target => ({ id: target.id, text: target.text })),
         getPageTranslationContext(uniqueTargets),
+        operation.signal,
       )
       const byId = new Map(results.map(item => [item.id, item.translation]))
 
       for (const target of uniqueTargets) {
-        if (!pageTranslationEnabled || disposed)
+        if (!pageTranslationEnabled || disposed || !operation.isCurrent())
           break
 
         const translatedText = byId.get(target.id)
@@ -3389,11 +3127,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
         }
       }
 
-      await savePageTranslationSnapshot(settings)
-      await savePageTranslationMemory(prunePageTranslationMemory(memory, settings))
+      if (operation.isCurrent()) {
+        await savePageTranslationSnapshot(settings)
+        if (operation.isCurrent())
+          await savePageTranslationMemory(prunePageTranslationMemory(memory, settings), operation)
+      }
     }
     finally {
       uniqueTargets.forEach((target) => {
+        if (pageTranslationInFlight.get(target.id) !== runId)
+          return
+
         pageTranslationInFlight.delete(target.id)
         if (!pageTranslationSources.has(target.id)) {
           const element = getPageTranslationElementAfter(target.element, target.id)
@@ -3404,12 +3148,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   }
 
-  async function runPageTranslation(settings: LexiSettings, runId: number) {
-    if (pageTranslationRunning)
+  async function runPageTranslation(settings: LexiSettings, operation: OperationEpochHandle) {
+    if (pageTranslationRunningId != null || !operation.isCurrent())
       return
 
+    const runId = operation.id
     ensurePageStyles(settings.ui.customCss)
-    pageTranslationRunning = true
+    pageTranslationRunningId = runId
     pageTranslationScanPending = false
 
     try {
@@ -3471,30 +3216,35 @@ export function startPageEnhancer(events: EnhancerEvents) {
           break
 
         const batch = orderedTargets.slice(index, index + batchSize)
-        await translatePageTargetBatch(settings, batch, memory)
+        await translatePageTargetBatch(settings, batch, memory, operation)
       }
     }
     finally {
-      pageTranslationRunning = false
+      if (pageTranslationRunningId === runId)
+        pageTranslationRunningId = undefined
     }
 
-    if (pageTranslationScanPending && pageTranslationEnabled && runId === pageTranslationRunId)
+    if (pageTranslationScanPending && pageTranslationEnabled && operation.isCurrent())
       schedulePageTranslationScan(settings, 260)
   }
 
   function schedulePageTranslationScan(settings: LexiSettings, delay = 700) {
-    if (!pageTranslationEnabled)
+    const operation = pageTranslationOperation
+    if (!pageTranslationEnabled || !operation?.isCurrent())
       return
 
-    if (pageTranslationRunning) {
+    if (pageTranslationRunningId != null) {
       pageTranslationScanPending = true
       return
     }
 
     window.clearTimeout(pageTranslationTimer)
     pageTranslationTimer = window.setTimeout(() => {
-      runPageTranslation(settings, pageTranslationRunId)
-        .catch(error => console.warn('[Lexi] page translation failed', error))
+      runPageTranslation(settings, operation)
+        .catch((error) => {
+          if (!isAbortLikeError(error))
+            console.warn('[Lexi] page translation failed', error)
+        })
     }, delay)
   }
 
@@ -3518,21 +3268,33 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (pageTranslationEnabled)
       return { ok: true, message: '当前页面自动翻译已启用。', blocks: pageTranslationSources.size }
 
+    const operation = pageTranslationEpoch.begin()
+    pageTranslationOperation = operation
+    pageTranslationRunId = operation.id
+    const failStart = (message: string) => {
+      if (pageTranslationOperation === operation) {
+        pageTranslationEpoch.invalidate()
+        pageTranslationOperation = undefined
+        pageTranslationRunId += 1
+      }
+      return { ok: false, message, blocks: 0 }
+    }
+
     const { settings } = await getStoredState()
-    if (disposed)
-      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+    if (disposed || !operation.isCurrent())
+      return failStart('页面自动翻译已停止。')
 
     const siteHints = detectSpecialSiteHints()
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
-      return { ok: false, message: '划词翻译场景未启用。', blocks: 0 }
+      return failStart('划词翻译场景未启用。')
 
     const activation = createPageTranslationActivation(settings)
     if (!activation)
-      return { ok: false, message: '自动翻译 Regex 无效或为空，请在设置中修正。', blocks: 0 }
+      return failStart('自动翻译 Regex 无效或为空，请在设置中修正。')
 
-    const cache = await restorePageTranslationCache(settings, true, () => !disposed)
-    if (disposed)
-      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+    const cache = await restorePageTranslationCache(settings, true, () => !disposed && operation.isCurrent())
+    if (disposed || !operation.isCurrent())
+      return failStart('页面自动翻译已停止。')
 
     pageTranslationSources.clear()
     for (const block of cache?.blocks ?? [])
@@ -3540,14 +3302,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     pageTranslationActivation = activation
     pageTranslationEnabled = true
-    pageTranslationRunId += 1
     await savePageTranslationActivation(activation)
-    if (disposed)
-      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+    if (disposed || !operation.isCurrent())
+      return failStart('页面自动翻译已停止。')
 
     await savePageTranslationSnapshot(settings)
-    if (disposed)
-      return { ok: false, message: '页面增强器已停止。', blocks: 0 }
+    if (disposed || !operation.isCurrent())
+      return failStart('页面自动翻译已停止。')
 
     ensurePageTranslationWatcher(settings)
     schedulePageTranslationScan(settings, 0)
@@ -3557,15 +3318,19 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   async function stopPageTranslation() {
+    pageTranslationEpoch.invalidate()
+    pageTranslationOperation = undefined
     pageTranslationRunId += 1
     pageTranslationEnabled = false
-    pageTranslationRunning = false
+    pageTranslationRunningId = undefined
     pageTranslationScanPending = false
     pageTranslationInFlight.clear()
     window.clearTimeout(pageTranslationTimer)
     pageTranslationObserver?.disconnect()
     window.removeEventListener('scroll', onPageScroll)
     removePageTranslationElements()
+    await pageTranslationCacheWritesSettled
+    await pageTranslationMemoryWritesSettled
     const cache = await readPageTranslationCache()
     pageTranslationSources.clear()
     for (const block of cache?.blocks ?? [])
@@ -3626,7 +3391,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     pageTranslationActivation = activation ?? createPageTranslationActivation(settings)
     pageTranslationEnabled = true
-    pageTranslationRunId += 1
+    pageTranslationOperation = pageTranslationEpoch.begin()
+    pageTranslationRunId = pageTranslationOperation.id
     ensurePageTranslationWatcher(settings)
     schedulePageTranslationScan(settings, 220)
   }
@@ -3689,88 +3455,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
     mediaToolbarState?.highlight.remove()
     mediaToolbarState?.toolbar.remove()
     mediaToolbarState = undefined
-  }
-
-  function closeVideoSpeedMenu() {
-    const state = videoSpeedMenuState
-    if (!state)
-      return
-
-    state.video.removeEventListener('playing', onVideoSpeedChange)
-    state.video.removeEventListener('ratechange', onVideoSpeedChange)
-    if (state.menu.open)
-      state.menu.close()
-    state.menu.remove()
-    videoSpeedMenuState = undefined
-    state.video.playbackRate = state.previousRate
-  }
-
-  function updateVideoSpeedMenu(state: VideoSpeedMenuState) {
-    state.video.playbackRate = state.selectedRate
-    state.menu.querySelectorAll<HTMLButtonElement>('[data-lexi-video-rate]').forEach((button) => {
-      button.classList.toggle('lexi-video-speed-menu__rate--active', Number(button.dataset.lexiVideoRate) === state.selectedRate)
-    })
-  }
-
-  function showVideoSpeedMenu(video: HTMLVideoElement) {
-    if (videoSpeedMenuState?.video === video) {
-      positionVideoSpeedMenu(videoSpeedMenuState.menu, video)
-      return
-    }
-
-    closeVideoSpeedMenu()
-    const existingStyle = document.getElementById('lexi-page-style')
-    if (!existingStyle)
-      ensurePageStyles(defaultSettings.ui.customCss)
-
-    const menu = document.createElement('dialog')
-    const head = document.createElement('div')
-    const title = document.createElement('strong')
-    const hint = document.createElement('span')
-    const rates = document.createElement('div')
-    const state: VideoSpeedMenuState = {
-      menu,
-      video,
-      previousRate: video.playbackRate,
-      selectedRate: 2,
-    }
-
-    menu.dataset.lexiVideoSpeedMenu = 'true'
-    menu.className = 'lexi-video-speed-menu'
-    menu.addEventListener('cancel', (event) => {
-      event.preventDefault()
-      closeVideoSpeedMenu()
-    })
-    head.className = 'lexi-video-speed-menu__head'
-    title.className = 'lexi-video-speed-menu__title'
-    hint.className = 'lexi-video-speed-menu__hint'
-    rates.className = 'lexi-video-speed-menu__rates'
-    title.textContent = '倍速播放'
-    hint.textContent = isMacPlatform()
-      ? '⌘ + 双指点按/右键再次关闭 · Esc 恢复原速'
-      : 'Ctrl + 左键再次关闭 · Esc 恢复原速'
-
-    for (const rate of [1, 1.25, 1.5, 2, 3, 4]) {
-      const button = document.createElement('button')
-      button.type = 'button'
-      button.className = 'lexi-video-speed-menu__rate'
-      button.dataset.lexiVideoRate = String(rate)
-      button.textContent = `${rate}×`
-      button.addEventListener('click', () => {
-        state.selectedRate = rate
-        updateVideoSpeedMenu(state)
-      })
-      rates.append(button)
-    }
-
-    head.append(title, hint)
-    menu.append(head, rates)
-    promoteVideoSpeedMenu(menu)
-    videoSpeedMenuState = state
-    video.addEventListener('playing', onVideoSpeedChange)
-    video.addEventListener('ratechange', onVideoSpeedChange)
-    updateVideoSpeedMenu(state)
-    positionVideoSpeedMenu(menu, video)
   }
 
   async function analyzeMediaToolbar() {
@@ -4129,83 +3813,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
   }
 
-  function getVideoSpeedGestureVideo(event: MouseEvent | PointerEvent) {
-    const target = event.target instanceof Element ? event.target : undefined
-    if (target?.closest('[data-lexi-video-speed-menu]'))
-      return undefined
-
-    const matchesGesture = isMacPlatform()
-      ? event.button === 2 && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey
-      : event.button === 0 && event.ctrlKey
-    return matchesGesture ? getVideoFromPointerEvent(event) : undefined
-  }
-
-  function consumeVideoSpeedGesture(event: MouseEvent | PointerEvent) {
-    if (!getVideoSpeedGestureVideo(event))
-      return false
-
-    event.preventDefault()
-    event.stopPropagation()
-    event.stopImmediatePropagation()
-    return true
-  }
-
-  function toggleVideoSpeedGesture(video: HTMLVideoElement) {
-    if (videoSpeedMenuState?.video === video)
-      closeVideoSpeedMenu()
-    else
-      showVideoSpeedMenu(video)
-
-    lastVideoSpeedGesture = { video, at: performance.now() }
-  }
-
-  function finishVideoSpeedGesture(event: MouseEvent | PointerEvent) {
-    const video = getVideoSpeedGestureVideo(event)
-    if (!video)
-      return false
-
-    const matchesActiveGesture = activeVideoSpeedGesture?.video === video
-      && (!(event instanceof PointerEvent) || activeVideoSpeedGesture.pointerId === event.pointerId)
-    if (matchesActiveGesture) {
-      activeVideoSpeedGesture = undefined
-      lastVideoSpeedGesture = { video, at: performance.now() }
-    }
-    else if (lastVideoSpeedGesture?.video !== video || performance.now() - lastVideoSpeedGesture.at > 500) {
-      toggleVideoSpeedGesture(video)
-    }
-
-    return consumeVideoSpeedGesture(event)
-  }
-
-  const onVideoSpeedContextMenu = (event: MouseEvent) => {
-    const video = getVideoSpeedGestureVideo(event)
-    if (!video)
-      return
-
-    if (activeVideoSpeedGesture?.video !== video
-      && (lastVideoSpeedGesture?.video !== video || performance.now() - lastVideoSpeedGesture.at > 500)) {
-      toggleVideoSpeedGesture(video)
-    }
-    consumeVideoSpeedGesture(event)
-  }
-
-  const onVideoSpeedPointerCancel = (event: PointerEvent) => {
-    if (activeVideoSpeedGesture?.pointerId !== event.pointerId)
-      return
-
-    lastVideoSpeedGesture = { video: activeVideoSpeedGesture.video, at: performance.now() }
-    activeVideoSpeedGesture = undefined
-  }
-
   const onPointerDown = (event: MouseEvent | PointerEvent) => {
-    const video = getVideoSpeedGestureVideo(event)
-    if (video) {
-      toggleVideoSpeedGesture(video)
-      activeVideoSpeedGesture = { video, pointerId: event instanceof PointerEvent ? event.pointerId : undefined }
-
-      consumeVideoSpeedGesture(event)
-      return
-    }
     if (mediaPlaybackOnly)
       return
 
@@ -4246,8 +3854,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   const onPointerUp = (event: MouseEvent | PointerEvent) => {
-    if (finishVideoSpeedGesture(event))
-      return
     if (mediaPlaybackOnly)
       return
 
@@ -4320,24 +3926,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
       closeLexiDialog(currentDialog)
     if (mediaToolbarState)
       closeMediaToolbar()
-    if (videoSpeedMenuState)
-      closeVideoSpeedMenu()
-  }
-
-  function onVideoSpeedChange(event: Event) {
-    const state = videoSpeedMenuState
-    const video = event.currentTarget
-    if (state && video === state.video && video instanceof HTMLVideoElement && video.playbackRate !== state.selectedRate)
-      video.playbackRate = state.selectedRate
-  }
-
-  const onFullscreenChange = () => {
-    const state = videoSpeedMenuState
-    if (!state)
-      return
-
-    promoteVideoSpeedMenu(state.menu)
-    positionVideoSpeedMenu(state.menu, state.video)
   }
 
   const onPointerOver = (event: MouseEvent | PointerEvent) => {
@@ -4378,8 +3966,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
   function onPageScroll() {
     if (mediaToolbarState)
       positionMediaUi(mediaToolbarState)
-    if (videoSpeedMenuState)
-      positionVideoSpeedMenu(videoSpeedMenuState.menu, videoSpeedMenuState.video)
 
     if (!pageTranslationEnabled)
       return
@@ -4390,9 +3976,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   function onMediaClickCapture(event: MouseEvent) {
-    if (consumeVideoSpeedGesture(event))
-      return
-
     if (!shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut))
       return
 
@@ -4472,14 +4055,16 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const stop = () => {
     disposed = true
-    activeVideoSpeedGesture = undefined
+    stopVideoSpeedControl()
     dynamicObserver?.disconnect()
     pageTranslationObserver?.disconnect()
+    pageTranslationEpoch.invalidate()
+    pageTranslationOperation = undefined
+    pageTranslationRunningId = undefined
     window.clearTimeout(dynamicTimer)
     window.clearTimeout(selectionTimer)
     window.clearTimeout(pageTranslationTimer)
     pageTranslationEnabled = false
-    pageTranslationRunning = false
     pageTranslationScanPending = false
     pageTranslationInFlight.clear()
     activeSelectionBlock?.remove()
@@ -4495,7 +4080,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
     tooltip?.remove()
     document.querySelector('[data-lexi-dialog]')?.remove()
     closeMediaToolbar()
-    closeVideoSpeedMenu()
   }
 
   const handleEnhancerError = (error: unknown) => {
@@ -4550,13 +4134,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const onPointerUpGuarded = once(onPointerUp)
 
   listeners.add(window, pointerEventName('down'), onPointerDown, true)
-  listeners.add(window, 'pointercancel', onVideoSpeedPointerCancel, true)
-  listeners.add(window, 'contextmenu', onVideoSpeedContextMenu, true)
   listeners.add(window, 'scroll', onPageScroll, { passive: true, capture: true })
   listeners.add(window, pointerEventName('up'), onPointerUpGuarded, true)
   listeners.add(document, 'keydown', onEscape)
   listeners.add(window, 'resize', onPageScroll)
-  listeners.add(document, 'fullscreenchange', onFullscreenChange)
 
   if (!mediaPlaybackOnly) {
     listeners.add(window, 'click', onMediaClickCapture, true)

@@ -7,7 +7,8 @@ import { aiCallLogs, forumDigestCache, githubDigestCache, lexiSettings, pageVisi
 import { summarizeByDay } from '~/logic/analytics'
 import { estimateStorageBytes, formatBytes, formatDateTime, formatTime } from '~/logic/format'
 import { normalizeForumCacheHistory } from '~/logic/forumDigestCache'
-import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
+import { approveHttpEndpoint, assertEndpointAllowed, isHttpEndpoint, normalizeEndpointApproval, revokeHttpEndpoint } from '~/logic/endpointPolicy'
+import type { AiConnectionConfig, AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
@@ -108,6 +109,10 @@ const storageStats = computed(() => {
 const testingScenes = ref<Partial<Record<FeatureScene, boolean>>>({})
 const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
 const sceneTestDetails = ref<Partial<Record<FeatureScene, AiTestResult>>>({})
+const httpApprovalDialog = ref<HTMLDialogElement>()
+let pendingHttpConnection: AiConnectionConfig | undefined
+let pendingHttpInput: HTMLInputElement | undefined
+const pendingHttpEndpoint = ref('')
 
 function ensureSpecialProfiles() {
   const current = new Map(lexiSettings.value.siteRules.specialProfiles.map(profile => [profile.id, profile]))
@@ -164,6 +169,91 @@ function toggleSceneProvider(scene: FeatureScene, providerId: string, enabled: b
     current.delete(providerId)
 
   lexiSettings.value.ai[scene].providerIds = [...current]
+}
+
+function confirmHttpEndpoint(connection: AiConnectionConfig, input: HTMLInputElement) {
+  const endpoint = normalizeEndpointApproval(input.value)
+  input.setCustomValidity('')
+  if (!endpoint) {
+    connection.endpoint = ''
+    input.value = ''
+    return
+  }
+
+  if (!isHttpEndpoint(endpoint)) {
+    try {
+      assertEndpointAllowed(endpoint, lexiSettings.value.ai.approvedHttpEndpoints)
+      connection.endpoint = endpoint
+      input.value = endpoint
+    }
+    catch (error) {
+      input.value = connection.endpoint
+      input.setCustomValidity(error instanceof Error ? error.message : 'AI Endpoint 地址无效')
+      input.reportValidity()
+    }
+    return
+  }
+
+  const approved = lexiSettings.value.ai.approvedHttpEndpoints
+  if (approved.includes(endpoint)) {
+    connection.endpoint = endpoint
+    input.value = endpoint
+    return
+  }
+
+  pendingHttpConnection = connection
+  pendingHttpInput = input
+  pendingHttpEndpoint.value = endpoint
+  httpApprovalDialog.value?.showModal()
+}
+
+function resolveHttpEndpointApproval(approved: boolean) {
+  const connection = pendingHttpConnection
+  const input = pendingHttpInput
+  const endpoint = pendingHttpEndpoint.value
+  if (approved && connection) {
+    lexiSettings.value.ai.approvedHttpEndpoints = approveHttpEndpoint(
+      lexiSettings.value.ai.approvedHttpEndpoints,
+      endpoint,
+    )
+    connection.endpoint = endpoint
+    if (input)
+      input.value = endpoint
+  }
+  else if (input) {
+    input.value = connection?.endpoint ?? ''
+  }
+
+  pendingHttpConnection = undefined
+  pendingHttpInput = undefined
+  pendingHttpEndpoint.value = ''
+  httpApprovalDialog.value?.close()
+}
+
+function revokeApprovedHttpEndpoint(endpoint: string) {
+  lexiSettings.value.ai.approvedHttpEndpoints = revokeHttpEndpoint(
+    lexiSettings.value.ai.approvedHttpEndpoints,
+    endpoint,
+  )
+}
+
+function onOptionsTabKeydown(event: KeyboardEvent, index: number) {
+  let nextIndex = index
+  if (event.key === 'ArrowRight')
+    nextIndex = (index + 1) % tabs.length
+  else if (event.key === 'ArrowLeft')
+    nextIndex = (index - 1 + tabs.length) % tabs.length
+  else if (event.key === 'Home')
+    nextIndex = 0
+  else if (event.key === 'End')
+    nextIndex = tabs.length - 1
+  else
+    return
+
+  event.preventDefault()
+  const tab = tabs[nextIndex]
+  activeTab.value = tab.id
+  requestAnimationFrame(() => document.getElementById(`options-tab-${tab.id}`)?.focus())
 }
 
 function clearGitHubDigestCache() {
@@ -305,6 +395,31 @@ function removeSceneRule(index: number) {
 
 <template>
   <main class="min-h-screen bg-neutral-50 text-neutral-950">
+    <dialog
+      ref="httpApprovalDialog"
+      class="m-auto w-[min(30rem,calc(100vw-2rem))] rounded-2 border border-neutral-200 bg-white p-0 text-neutral-950 shadow-xl backdrop:bg-neutral-950/60"
+      aria-labelledby="http-endpoint-title"
+      @cancel.prevent="resolveHttpEndpointApproval(false)"
+    >
+      <div class="p-5">
+        <h2 id="http-endpoint-title" class="text-16px font-700">
+          确认使用 HTTP Endpoint
+        </h2>
+        <p class="mt-3 text-13px leading-6 text-neutral-700">
+          HTTP 不会加密 API Key、选中文本或页面上下文，传输途中可能被读取。许可只对下面的完整地址生效，地址变化后会重新确认。
+        </p>
+        <code class="mt-3 block break-all rounded-2 bg-neutral-100 px-3 py-2 text-12px text-neutral-800">{{ pendingHttpEndpoint }}</code>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" class="h-10 rounded-2 border border-neutral-300 bg-white px-4 text-13px cursor-pointer hover:bg-neutral-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-950" @click="resolveHttpEndpointApproval(false)">
+            取消
+          </button>
+          <button type="button" class="h-10 rounded-2 border border-amber-700 bg-amber-700 px-4 text-13px text-white cursor-pointer hover:bg-amber-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700" @click="resolveHttpEndpointApproval(true)">
+            理解风险并允许
+          </button>
+        </div>
+      </div>
+    </dialog>
+
     <div class="mx-auto max-w-6xl px-6 py-8">
       <header class="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-neutral-200 pb-5">
         <div>
@@ -325,21 +440,27 @@ function removeSceneRule(index: number) {
         </div>
       </header>
 
-      <nav class="mb-5 overflow-x-auto rounded-2 border border-neutral-200 bg-white p-1 shadow-sm">
+      <nav class="mb-5 overflow-x-auto rounded-2 border border-neutral-200 bg-white p-1 shadow-sm" role="tablist" aria-label="设置分类">
         <div class="flex min-w-max gap-1">
           <button
             v-for="tab in tabs"
+            :id="`options-tab-${tab.id}`"
             :key="tab.id"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :aria-controls="`options-panel-${tab.id}`"
+            :tabindex="activeTab === tab.id ? 0 : -1"
             class="rounded-2 px-4 py-2 text-14px font-500 cursor-pointer transition-colors"
             :class="activeTab === tab.id ? 'bg-neutral-950 text-white' : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950'"
             @click="activeTab = tab.id"
+            @keydown="onOptionsTabKeydown($event, tabs.indexOf(tab))"
           >
             {{ tab.label }}
           </button>
         </div>
       </nav>
 
-      <section v-if="activeTab === 'settings'" class="grid gap-5 lg:grid-cols-[1fr_1fr]">
+      <section v-if="activeTab === 'settings'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="grid gap-5 lg:grid-cols-[1fr_1fr]">
         <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="min-h-0">
             <h2 class="text-16px font-600">
@@ -350,7 +471,7 @@ function removeSceneRule(index: number) {
                 <span class="block text-14px font-500">总开关</span>
                 <span class="text-12px text-neutral-500">关闭后不替换、不划词翻译。</span>
               </span>
-              <ToggleSwitch v-model="lexiSettings.siteRules.enabled" />
+              <ToggleSwitch v-model="lexiSettings.siteRules.enabled" label="Lexi 总开关" />
             </label>
 
             <div class="mt-5">
@@ -415,7 +536,7 @@ function removeSceneRule(index: number) {
             </h2>
             <div class="mt-4 flex items-center justify-between">
               <span class="text-14px font-500">自动替换词汇</span>
-              <ToggleSwitch v-model="lexiSettings.replacement.enabled" />
+              <ToggleSwitch v-model="lexiSettings.replacement.enabled" label="自动替换词汇" />
             </div>
             <label class="mt-4 block">
               <span class="text-13px font-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
@@ -431,14 +552,14 @@ function removeSceneRule(index: number) {
             </label>
             <div class="mt-4 flex items-center justify-between">
               <span class="text-14px font-500">划词自动翻译</span>
-              <ToggleSwitch v-model="lexiSettings.selection.autoTranslate" />
+              <ToggleSwitch v-model="lexiSettings.selection.autoTranslate" label="划词自动翻译" />
             </div>
             <label class="mt-4 flex items-center justify-between gap-4">
               <span>
                 <span class="block text-14px font-500">按住修饰键触发划词翻译</span>
                 <span class="text-12px text-neutral-500">macOS 使用 Command，Windows/Linux 使用 Ctrl。媒体点击可单独配置，默认 meta+shift。</span>
               </span>
-              <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" />
+              <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" label="按住修饰键触发划词翻译" />
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">划词翻译方向</span>
@@ -492,7 +613,7 @@ function removeSceneRule(index: number) {
                 <span class="block text-14px font-500">右下角状态浮标</span>
                 <span class="text-12px text-neutral-500">关闭后不显示“Lexi 已启用”。</span>
               </span>
-              <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" />
+              <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" label="右下角状态浮标" />
             </label>
             <label class="mt-4 block">
               <span class="text-13px font-500">快捷对话键</span>
@@ -519,11 +640,11 @@ function removeSceneRule(index: number) {
               </p>
               <div class="mt-3 flex items-center justify-between gap-4">
                 <span class="text-14px font-500">显示速读卡片</span>
-                <ToggleSwitch v-model="lexiSettings.githubDigest.enabled" />
+                <ToggleSwitch v-model="lexiSettings.githubDigest.enabled" label="显示 GitHub 速读卡片" />
               </div>
               <div class="mt-3 flex items-center justify-between gap-4">
                 <span class="text-14px font-500">停留后自动生成详细总览</span>
-                <ToggleSwitch v-model="lexiSettings.githubDigest.autoGenerate" />
+                <ToggleSwitch v-model="lexiSettings.githubDigest.autoGenerate" label="自动生成 GitHub 速读" />
               </div>
               <label class="mt-3 block">
                 <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.githubDigest.autoDelaySeconds }} 秒</span>
@@ -538,7 +659,7 @@ function removeSceneRule(index: number) {
                   <span class="block text-14px font-500">私有仓库也允许自动生成</span>
                   <span class="text-12px text-neutral-500">默认关闭；仍可手动点击生成。</span>
                 </span>
-                <ToggleSwitch v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" />
+                <ToggleSwitch v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" label="私有仓库允许自动生成" />
               </label>
 
               <div class="mt-5 border-t border-neutral-200 pt-4">
@@ -550,11 +671,11 @@ function removeSceneRule(index: number) {
                 </p>
                 <div class="mt-3 flex items-center justify-between gap-4">
                   <span class="text-14px font-500">显示论坛速读卡片</span>
-                  <ToggleSwitch v-model="lexiSettings.forumDigest.enabled" />
+                  <ToggleSwitch v-model="lexiSettings.forumDigest.enabled" label="显示论坛速读卡片" />
                 </div>
                 <div class="mt-3 flex items-center justify-between gap-4">
                   <span class="text-14px font-500">自动生成整帖总结</span>
-                  <ToggleSwitch v-model="lexiSettings.forumDigest.autoGenerate" />
+                  <ToggleSwitch v-model="lexiSettings.forumDigest.autoGenerate" label="自动生成论坛速读" />
                 </div>
                 <label class="mt-3 block">
                   <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.forumDigest.autoDelaySeconds }} 秒</span>
@@ -578,7 +699,7 @@ function removeSceneRule(index: number) {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'special'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+      <section v-else-if="activeTab === 'special'" id="options-panel-special" role="tabpanel" aria-labelledby="options-tab-special" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 class="text-16px font-600">
@@ -656,7 +777,7 @@ function removeSceneRule(index: number) {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'vocabulary'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+      <section v-else-if="activeTab === 'vocabulary'" id="options-panel-vocabulary" role="tabpanel" aria-labelledby="options-tab-vocabulary" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
         <div class="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h2 class="text-16px font-600">
@@ -764,7 +885,7 @@ function removeSceneRule(index: number) {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'ai'" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+      <section v-else-if="activeTab === 'ai'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 class="text-16px font-600">
@@ -819,7 +940,7 @@ function removeSceneRule(index: number) {
               <div class="mt-3 grid gap-3 lg:grid-cols-3">
                 <label class="block">
                   <span class="text-12px font-500 text-neutral-600">Endpoint</span>
-                  <input v-model="provider.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1">
+                  <input :value="provider.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(provider, $event.target as HTMLInputElement)">
                 </label>
                 <label class="block">
                   <span class="text-12px font-500 text-neutral-600">Model</span>
@@ -840,7 +961,7 @@ function removeSceneRule(index: number) {
             <div class="mt-3 grid gap-3 lg:grid-cols-3">
               <label class="block">
                 <span class="text-12px font-500 text-neutral-600">Endpoint</span>
-                <input v-model="lexiSettings.ai.global.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1">
+                <input :value="lexiSettings.ai.global.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(lexiSettings.ai.global, $event.target as HTMLInputElement)">
               </label>
               <label class="block">
                 <span class="text-12px font-500 text-neutral-600">Model</span>
@@ -852,13 +973,30 @@ function removeSceneRule(index: number) {
               </label>
             </div>
           </CollapsibleSection>
+
+          <div v-if="lexiSettings.ai.approvedHttpEndpoints.length" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3">
+            <div class="text-12px font-600 text-amber-900">
+              已确认的 HTTP Endpoint
+            </div>
+            <p class="mt-1 text-11px leading-4 text-amber-800">
+              HTTP 不加密。许可只对完整地址生效，地址变化后会重新确认。
+            </p>
+            <div class="mt-2 space-y-2">
+              <div v-for="endpoint in lexiSettings.ai.approvedHttpEndpoints" :key="endpoint" class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2">
+                <code class="min-w-0 break-all text-11px text-neutral-700">{{ endpoint }}</code>
+                <button type="button" class="shrink-0 border-0 bg-transparent text-11px text-red-600 cursor-pointer" :aria-label="`撤销 HTTP Endpoint ${endpoint}`" @click="revokeApprovedHttpEndpoint(endpoint)">
+                  撤销
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
 
         <div class="mt-4 grid gap-4 lg:grid-cols-3">
           <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
             <div class="flex items-center justify-between">
               <span class="text-14px font-600">{{ featureLabels[scene] }}</span>
-              <ToggleSwitch v-model="lexiSettings.ai[scene].enabled" />
+              <ToggleSwitch v-model="lexiSettings.ai[scene].enabled" :label="`${featureLabels[scene]} AI 场景`" />
             </div>
             <div class="mt-4 rounded-2 bg-neutral-50 p-3">
               <div class="text-12px font-500 text-neutral-600">
@@ -876,7 +1014,7 @@ function removeSceneRule(index: number) {
             </div>
             <label class="mt-4 block">
               <span class="text-12px font-500 text-neutral-600">Endpoint 覆盖</span>
-              <input v-model="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承 Provider / 全局">
+              <input :value="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承 Provider / 全局" @change="confirmHttpEndpoint(lexiSettings.ai[scene], $event.target as HTMLInputElement)">
             </label>
             <label class="mt-3 block">
               <span class="text-12px font-500 text-neutral-600">Model 覆盖</span>
@@ -920,7 +1058,7 @@ function removeSceneRule(index: number) {
         </div>
       </section>
 
-      <section v-else-if="activeTab === 'diagnostics'" class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <section v-else-if="activeTab === 'diagnostics'" id="options-panel-diagnostics" role="tabpanel" aria-labelledby="options-tab-diagnostics" class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex shrink-0 items-center justify-between gap-3">
             <h2 class="text-16px font-600">
@@ -1114,7 +1252,7 @@ function removeSceneRule(index: number) {
         </div>
       </section>
 
-      <section v-else class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+      <section v-else id="options-panel-about" role="tabpanel" aria-labelledby="options-tab-about" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
         <h2 class="text-16px font-600">
           关于 Lexi
         </h2>

@@ -20,12 +20,14 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:e2e:run
 pnpm pack:zip
 ```
 
 其中：
 
 - `pnpm build` 会生成生产环境扩展文件到 `extension/`
+- `pnpm test:e2e:run` 会针对已构建扩展运行 Playwright 端到端测试
 - `pnpm pack:zip` 会把 `extension/` 打包为 `extension.zip`
 
 ## 升级版本
@@ -74,15 +76,17 @@ CI 发布流程会自动执行：
 5. 类型检查：`pnpm typecheck`
 6. 单元测试：`pnpm test`
 7. 构建扩展：`pnpm build`
-8. 打包 zip：`pnpm pack:zip`
-9. 将 `extension.zip` 重命名为：
+8. 安装 Playwright Chromium：`pnpm exec playwright install --with-deps chromium`
+9. 端到端测试：`pnpm test:e2e:run`
+10. 打包 zip：`pnpm pack:zip`
+11. 将 `extension.zip` 重命名为：
 
    ```text
    touch-xxeng-heart-extension-v<version>.zip
    ```
 
-10. 上传 workflow artifact
-11. 创建 / 更新 GitHub Release，并把 zip 作为 release asset 上传
+12. 上传 workflow artifact
+13. 创建 / 更新 GitHub Release，并把 zip 作为 release asset 上传
 
 ## 推荐发布步骤
 
@@ -95,6 +99,7 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:e2e:run
 pnpm pack:zip
 
 VERSION=$(node -p "require('./package.json').version")

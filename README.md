@@ -9,9 +9,13 @@ Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变�
 - 网页词汇替换：按启用范围、替换密度、基础难度和单页上限处理正文文本。
 - 悬浮释义：被替换词汇带虚线，hover 可查看原文、含义和英文例句。
 - 划词翻译：选中网页文本后显示翻译说明，并记录手动划选词汇。
+- 页面翻译：按当前链接、站点或 Regex 分段翻译，优先处理可视区域并在本地恢复缓存。
+- 页面问答：索引正文结构，按问题检索相关段落并支持带来源的多轮追问。
 - 词汇进阶：记录出现次数、手动记录次数、复盘时间，并随学习量提升有效难度。
 - 每日推荐：侧边栏提供 Lexical 学习空间、专业术语和待复盘词汇。
-- 场景化 AI：替换、划词、每日推荐分别支持独立 endpoint、model、api key；未配置时走本地术语库。
+- 场景化速读：为 GitHub 仓库和 Discourse 主题生成可缓存的快速摘要。
+- 媒体工具：支持媒体下载、AI Omni 图片 Prompt 提取和跨 frame 视频倍速。
+- 场景化 AI：替换、划词、每日推荐、AI Omni 分别支持独立 Provider；HTTP Endpoint 需逐地址确认。
 - 站点配置：支持全部网页、白名单、黑名单、特殊站点策略和总开关。
 
 ## 图标
@@ -66,24 +70,28 @@ pnpm version:patch # 升级 patch 版本，发版前使用
 pnpm test         # 单元测试
 pnpm typecheck    # TypeScript 检查
 pnpm lint         # ESLint 检查
+pnpm test:e2e     # 构建并运行扩展端到端测试
 pnpm pack         # 打包扩展产物
 ```
 
 ## 项目结构
 
 ```text
-src/contentScripts/pageEnhancer.ts  页面文本遍历、词汇替换、划词翻译和本地记录
+src/contentScripts/pageEnhancer.ts  顶层页面替换、翻译、对话和媒体增强编排
+src/contentScripts/frame.ts         子 frame 轻量倍速入口
+src/contentScripts/ui/              对话 Markdown、倍速、定位和折叠等独立 UI 模块
 src/logic/                         配置、术语库、AI 请求、本地存储和学习进阶算法
 src/options/Options.vue            Lexi 配置页
 src/popup/Popup.vue                快速开关和状态概览
 src/sidepanel/Sidepanel.vue        每日推荐与待复盘词汇
 src/manifest.ts                    MV3 manifest 生成
+apps/site/                         唯一官网与隐私政策静态站
 extension/assets/                  扩展图标资产
 ```
 
 ## AI 后端协议
 
-Lexi 会向配置的 endpoint 发送 JSON POST 请求，并在 Header 中以 `Authorization: Bearer <apiKey>` 传入密钥。
+Lexi 会向配置的 endpoint 发送 JSON POST 请求，并在 Header 中以 `Authorization: Bearer <apiKey>` 传入密钥。HTTPS 地址可直接使用；HTTP 地址会在设置页逐个弹框确认，许可仅对规范化后的完整地址生效，可随时撤销。
 
 替换场景期望返回：
 

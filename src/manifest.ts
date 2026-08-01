@@ -50,24 +50,36 @@ export async function getManifest() {
       'downloads',
       ...isFirefox ? [] : ['sidePanel'],
     ],
-    host_permissions: ['*://*/*'],
+    host_permissions: ['http://*/*', 'https://*/*'],
     content_scripts: [
       {
         matches: [
-          '<all_urls>',
+          'http://*/*',
+          'https://*/*',
         ],
-        all_frames: true,
         match_about_blank: true,
         run_at: 'document_start',
         js: [
           'dist/contentScripts/index.global.js',
         ],
       },
+      {
+        matches: [
+          'http://*/*',
+          'https://*/*',
+        ],
+        all_frames: true,
+        match_about_blank: true,
+        run_at: 'document_start',
+        js: [
+          'dist/contentScripts/frame.global.js',
+        ],
+      },
     ],
     web_accessible_resources: [
       {
         resources: ['dist/contentScripts/style.css'],
-        matches: ['<all_urls>'],
+        matches: ['http://*/*', 'https://*/*'],
       },
     ],
     content_security_policy: {

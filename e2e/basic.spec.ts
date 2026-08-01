@@ -1,9 +1,16 @@
 import { expect, test } from './fixtures'
 
 declare const chrome: {
+  runtime: {
+    sendMessage: (message: unknown) => Promise<unknown>
+  }
+  tabs: {
+    query: (query: Record<string, unknown>) => Promise<Array<{ id?: number }>>
+    sendMessage: (tabId: number, message: unknown) => Promise<unknown>
+  }
   storage: {
     local: {
-      get: (key: string) => Promise<Record<string, unknown>>
+      get: (key: string | null) => Promise<Record<string, unknown>>
       set: (items: Record<string, unknown>) => Promise<void>
     }
   }
@@ -13,7 +20,7 @@ test('popup opens Lexi controls', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/popup/index.html`)
 
   await expect(page.getByText('Lexi', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '配置' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '打开设置' })).toBeVisible()
 })
 
 test('options exposes site and AI configuration', async ({ page, extensionId }) => {
@@ -21,20 +28,123 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
 
   await expect(page.locator('header')).toContainText('Lexi')
   await expect(page.getByRole('heading', { name: '网页启用范围' })).toBeVisible()
-  await page.getByRole('button', { name: 'AI 场景' }).click()
+  await page.getByRole('tab', { name: 'AI 场景' }).click()
   await expect(page.getByRole('heading', { name: 'AI 场景配置' })).toBeVisible()
+})
+
+test('HTTP endpoints require per-address confirmation', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('tab', { name: 'AI 场景' }).click()
+
+  const provider = page.locator('article').first()
+  const endpoint = provider.getByLabel('Endpoint')
+  const approval = page.getByRole('dialog', { name: '确认使用 HTTP Endpoint' })
+
+  await endpoint.fill('http://API.example.com:80/v1/')
+  await endpoint.blur()
+  await expect(approval).toBeVisible()
+  await approval.getByRole('button', { name: '取消' }).click()
+  await expect(endpoint).toHaveValue('')
+
+  await endpoint.fill('http://API.example.com:80/v1/')
+  await endpoint.blur()
+  await approval.getByRole('button', { name: '理解风险并允许' }).click()
+  await expect(endpoint).toHaveValue('http://api.example.com/v1')
+  await expect(page.getByText('http://api.example.com/v1', { exact: true })).toBeVisible()
+
+  await endpoint.fill('http://api.example.com/v2')
+  await endpoint.blur()
+  await expect(approval).toBeVisible()
+})
+
+test('analytics keeps concurrent background writes', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/popup/index.html`)
+
+  await page.evaluate(async () => {
+    await Promise.all(Array.from({ length: 20 }, (_, index) => chrome.runtime.sendMessage({
+      channel: 'lexi',
+      type: 'lexi-record-analytics',
+      data: {
+        kind: 'page',
+        item: {
+          id: `concurrent-${index}`,
+          url: `https://example.com/${index}`,
+          title: `Page ${index}`,
+          host: 'example.com',
+          enabled: true,
+          replacements: 0,
+          records: 0,
+          createdAt: Date.now() + index,
+        },
+      },
+    })))
+  })
+
+  const ids = await page.evaluate(async () => {
+    const key = 'touch-xxeng-heart-page-visit-logs'
+    const stored = await chrome.storage.local.get(key)
+    const logs = JSON.parse(String(stored[key] ?? '[]')) as Array<{ id: string }>
+    return logs.map(log => log.id)
+  })
+  expect(ids).toHaveLength(20)
+  expect(new Set(ids).size).toBe(20)
+})
+
+test('stopping a pending page translation invalidates its start', async ({ page, context, extensionId }) => {
+  await context.route('https://lexi.test/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><main><p>这是一个足够长的页面翻译测试段落，用于验证快速停止后旧的启动流程不会重新启用自动翻译功能。</p></main></body></html>',
+  }))
+  const contentPage = await context.newPage()
+  await contentPage.goto('https://lexi.test/pending-translation')
+  await expect(contentPage.locator('#touch-xxeng-heart')).toBeAttached()
+
+  await page.goto(`chrome-extension://${extensionId}/dist/popup/index.html`)
+  const result = await page.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ url: 'https://lexi.test/*' })
+    if (!tab?.id)
+      throw new Error('Translation test tab was not found')
+
+    const start = chrome.tabs.sendMessage(tab.id, {
+      channel: 'lexi',
+      type: 'lexi-page-translate-start',
+      data: {},
+    })
+    const stop = chrome.tabs.sendMessage(tab.id, {
+      channel: 'lexi',
+      type: 'lexi-page-translate-stop',
+      data: {},
+    })
+    const [startResult, stopResult] = await Promise.all([start, stop])
+    const stored = await chrome.storage.local.get(null)
+    return { startResult, stopResult, stored }
+  }) as {
+    startResult: { ok?: boolean }
+    stopResult: { ok?: boolean }
+    stored: Record<string, unknown>
+  }
+
+  expect(result.startResult.ok).toBe(false)
+  expect(result.stopResult.ok).toBe(true)
+  const activations = JSON.parse(String(result.stored['touch-xxeng-heart-page-translation-activations'] ?? '{}'))
+  expect(Object.keys(activations)).toHaveLength(0)
+  const caches = Object.entries(result.stored)
+    .filter(([key]) => key.startsWith('touch-xxeng-heart-page-translations:'))
+    .map(([, value]) => JSON.parse(String(value)))
+  expect(caches.every(cache => cache.enabled === false)).toBe(true)
+  await contentPage.close()
 })
 
 test('side panel shows daily learning workspace', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
 
   await expect(page.getByText('Lexical')).toBeVisible()
-  await page.getByRole('button', { name: /历史复盘/ }).click()
+  await page.getByRole('tab', { name: /历史复盘/ }).click()
   await expect(page.getByText('今日推荐')).toBeVisible()
   await expect(page.getByText('待复盘')).toBeVisible()
 })
 
-test('reviewing a due vocabulary record persists remembered feedback', async ({ page, context, extensionId }) => {
+test('reviewing a due vocabulary record persists remembered feedback', async ({ page, extensionId }) => {
   const minute = 60 * 1000
   const day = 24 * 60 * minute
   const vocabularyStorageKey = 'touch-xxeng-heart-vocabulary'
@@ -56,16 +166,13 @@ test('reviewing a due vocabulary record persists remembered feedback', async ({ 
     updatedAt: Date.now() - day,
     nextReviewAt: Date.now() - minute,
   }
-  const extensionWorker = context.serviceWorkers().find(worker => worker.url().includes(extensionId))
-  if (!extensionWorker)
-    throw new Error('Extension service worker was not available for storage setup')
-
-  await extensionWorker.evaluate(async ({ key, record }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
+  await expect(page.getByText('Lexical')).toBeVisible()
+  await page.evaluate(async ({ key, record }) => {
     await chrome.storage.local.set({ [key]: JSON.stringify([record]) })
   }, { key: vocabularyStorageKey, record: dueRecord })
 
-  await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
-  await page.getByRole('button', { name: /历史复盘/ }).click()
+  await page.getByRole('tab', { name: /历史复盘/ }).click()
 
   const forgot = page.getByRole('button', { name: 'reviewe2e：不认识' })
   const hard = page.getByRole('button', { name: 'reviewe2e：有点模糊' })
@@ -82,7 +189,7 @@ test('reviewing a due vocabulary record persists remembered feedback', async ({ 
   await expect(page.getByText(/今日已完成 1 \/ \d+ 个词/)).toBeVisible()
   await expect(remembered).toBeHidden()
 
-  const readPersistedRecord = () => extensionWorker.evaluate(async ({ id, key }) => {
+  const readPersistedRecord = () => page.evaluate(async ({ id, key }) => {
     const stored = await chrome.storage.local.get(key)
     const records = JSON.parse(String(stored[key] ?? '[]'))
     return records.find((record: { id: string }) => record.id === id)

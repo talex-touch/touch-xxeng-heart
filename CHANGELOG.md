@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.3 - 2026-08-02
+
+Changes since v0.2.2.
+
+### Features
+- redesign Lexi product surfaces (250454f)
+
+### Refactors
+- harden extension runtime and endpoint security (144e95c)
+
 ## v0.2.2 - 2026-07-29
 
 Changes since v0.2.1.
@@ -75,6 +85,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

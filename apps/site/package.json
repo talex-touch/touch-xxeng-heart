@@ -1,9 +1,18 @@
 {
   "name": "@lexi/site",
+  "type": "module",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "pnpm dlx wrangler pages dev public",
-    "deploy": "pnpm dlx wrangler pages deploy public --project-name=lexi-tagzxia"
+    "dev": "nuxt dev",
+    "build": "nuxt generate",
+    "generate": "nuxt generate",
+    "preview": "pnpm dlx wrangler pages dev .output/public",
+    "deploy": "pnpm dlx wrangler pages deploy .output/public --project-name=lexi-tagzxia"
+  },
+  "devDependencies": {
+    "nuxt": "^4.5.1",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
   }
 }

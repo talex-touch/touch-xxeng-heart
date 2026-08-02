@@ -22,5 +22,13 @@ vite.config.*.timestamp-*.mjs
 
 .serena/
 
+# local image review mirrors
+.image-gen/
+
+# nuxt (apps/site)
+.nuxt
+.output
+.nitro
+
 # packaged tarballs
 *.tgz

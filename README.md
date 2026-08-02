@@ -18,16 +18,24 @@ Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变�
 - 场景化 AI：替换、划词、每日推荐、AI Omni 分别支持独立 Provider；HTTP Endpoint 需逐地址确认。
 - 站点配置：支持全部网页、白名单、黑名单、特殊站点策略和总开关。
 
-## 图标
+## 品牌图标
 
-主图标位于 `extension/assets/icon.svg`，源自标准 `1024 x 1024` 正方形 SVG。扩展清单使用以下导出尺寸：
+Lexi 使用 Crystal Jellyfish 作为正式品牌符号。透明栅格母版、经校准的小尺寸导出、ICO、验收图和生成记录统一保存在 `brand/favicon-kit/`，该套资产没有 SVG 源文件。
 
-- `extension/assets/icon-16.png`
-- `extension/assets/icon-48.png`
-- `extension/assets/icon-128.png`
-- `extension/assets/icon-512.png`
+`brand/favicon-kit/favicon-master-transparent.png` 是生产母版。`pnpm dev` 和 `pnpm build` 会在生成扩展清单前执行品牌同步；也可以单独运行：
 
-应用内 Logo 复用 `src/assets/logo.svg`，避免浏览器扩展图标和界面品牌图形分叉。
+```bash
+pnpm brand:sync   # 同步到扩展、Vue 组件和官网目录
+pnpm brand:check  # 校验派生文件与品牌源是否一致
+```
+
+各产品入口使用的派生资源：
+
+- `extension/assets/icon-{16,48,128,512}.png`
+- `src/assets/logo.png`
+- `apps/site/public/favicon*`、`apple-touch-icon.png` 与 `assets/icon.png`
+
+详细使用与禁用规则见 [`brand/favicon-kit/README.md`](./brand/favicon-kit/README.md)。
 
 ## 技术栈
 
@@ -77,6 +85,7 @@ pnpm pack         # 打包扩展产物
 ## 项目结构
 
 ```text
+brand/favicon-kit/                  品牌母版、平台导出与使用规范
 src/contentScripts/pageEnhancer.ts  顶层页面替换、翻译、对话和媒体增强编排
 src/contentScripts/frame.ts         子 frame 轻量倍速入口
 src/contentScripts/ui/              对话 Markdown、倍速、定位和折叠等独立 UI 模块

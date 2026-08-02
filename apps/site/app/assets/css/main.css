@@ -1,0 +1,530 @@
+/*
+  Lexi / 理析 — design tokens and shared primitives.
+  Light, near-neutral surfaces with a single blue accent; domain colours are the
+  only other hues and always mean "which field does this term belong to".
+*/
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('/fonts/inter.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: url('/fonts/geist-mono.woff2') format('woff2');
+}
+
+/* Subset to 理析速览 only — 2.7 KB. Used for the brand wordmark. */
+@font-face {
+  font-family: 'Ma Shan Zheng';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/ma-shan-zheng.woff2') format('woff2');
+  unicode-range: U+6790, U+7406, U+89C8, U+901F;
+}
+
+:root {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --bg-subtle: #f7f7f8;
+  --bg-muted: #efeff2;
+  --ink: #0d0d0d;
+  --ink-2: #5c5c66;
+  --ink-3: #8e8e9a;
+  --line: #e6e6ea;
+  --line-strong: #d8d8de;
+  --accent: #1976ff;
+  --accent-ink: #0b57c7;
+  --accent-soft: #edf3ff;
+  --inverse: #ffffff;
+
+  --dark: #0d0f14;
+  --dark-2: #161a21;
+  --dark-line: #272c36;
+  --dark-ink-2: #a6adbb;
+  --dark-accent: #6fa8ff;
+
+  /* Domain colours — one axis, never reused for actions. */
+  --d-tech: #1976ff;
+  --d-tech-s: #e8f0fe;
+  --d-fin: #0e8f52;
+  --d-fin-s: #e6f5ec;
+  --d-prod: #7c5cff;
+  --d-prod-s: #f0ecff;
+  --d-med: #d9534b;
+  --d-med-s: #fbebea;
+  --d-law: #0e8c9b;
+  --d-law-s: #e4f4f6;
+  --d-aca: #b87400;
+  --d-aca-s: #fbf1df;
+  --warn: #e8a33d;
+
+  --r-sm: 10px;
+  --r-md: 16px;
+  --r-lg: 24px;
+  --r-pill: 999px;
+
+  --wrap: 1120px;
+  --gutter: clamp(20px, 4vw, 48px);
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-hand: 'Ma Shan Zheng', 'Kaiti SC', STKaiti, KaiTi, serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+dl {
+  margin: 0;
+}
+
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  transform: translateY(-200%);
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--inverse);
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- layout ---------- */
+
+.wrap {
+  width: min(var(--wrap), 100% - var(--gutter) * 2);
+  margin-inline: auto;
+}
+
+.section {
+  padding-block: clamp(72px, 9vw, 140px);
+}
+
+.section--subtle {
+  background: var(--bg-subtle);
+}
+
+.section--dark {
+  background: var(--dark);
+  color: var(--inverse);
+}
+
+/* Section head: title left, supporting copy right. */
+.head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 440px);
+  gap: clamp(24px, 5vw, 80px);
+  align-items: end;
+}
+
+.head__copy {
+  display: grid;
+  gap: 20px;
+}
+
+.head__desc {
+  color: var(--ink-2);
+  font-size: clamp(15px, 1.2vw, 16px);
+  line-height: 1.9;
+}
+
+.section--dark .head__desc {
+  color: var(--dark-ink-2);
+}
+
+/* ---------- type ---------- */
+
+.eyebrow {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.section--dark .eyebrow {
+  color: var(--dark-accent);
+}
+
+.display {
+  font-size: clamp(30px, 5.4vw, 74px);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1.14;
+}
+
+.h2 {
+  font-size: clamp(25px, 3.4vw, 46px);
+  font-weight: 700;
+  letter-spacing: -0.045em;
+  line-height: 1.35;
+}
+
+.h3 {
+  font-size: clamp(19px, 1.6vw, 23px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.4;
+}
+
+.lead {
+  color: var(--ink-2);
+  font-size: clamp(15px, 1.3vw, 18px);
+  line-height: 1.9;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.hand {
+  font-family: var(--font-hand);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+
+.muted {
+  color: var(--ink-2);
+}
+
+.faint {
+  color: var(--ink-3);
+}
+
+/* ---------- controls ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: var(--r-pill);
+  padding: 14px 26px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn--primary {
+  background: var(--ink);
+  color: var(--inverse);
+}
+
+.btn--primary:hover {
+  background: #2b2b2b;
+}
+
+.btn--ghost {
+  background: var(--bg);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.btn--ghost:hover {
+  border-color: var(--ink-3);
+}
+
+.btn--onDark {
+  background: transparent;
+  border-color: var(--dark-line);
+  color: var(--inverse);
+}
+
+.btn--onDark:hover {
+  border-color: var(--dark-ink-2);
+}
+
+.btn--lg {
+  padding: 17px 30px;
+  font-size: 16px;
+}
+
+.btn--sm {
+  padding: 10px 18px;
+  font-size: 14px;
+}
+
+/* ---------- surfaces ---------- */
+
+.panel {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--bg-subtle);
+  padding: 5px 11px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--r-pill);
+  padding: 3px 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* Domain helpers: `.is-tech` sets both the tag colours and any dot inside. */
+.is-tech { --domain: var(--d-tech); --domain-soft: var(--d-tech-s); }
+.is-fin { --domain: var(--d-fin); --domain-soft: var(--d-fin-s); }
+.is-prod { --domain: var(--d-prod); --domain-soft: var(--d-prod-s); }
+.is-med { --domain: var(--d-med); --domain-soft: var(--d-med-s); }
+.is-law { --domain: var(--d-law); --domain-soft: var(--d-law-s); }
+.is-aca { --domain: var(--d-aca); --domain-soft: var(--d-aca-s); }
+
+.tag {
+  background: var(--domain-soft, var(--bg-muted));
+  color: var(--domain, var(--ink-2));
+}
+
+.dot {
+  background: var(--domain, var(--line-strong));
+}
+
+/* Frosted floating card — sits over page content, lets it show through. */
+.glass {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgb(255 255 255 / 0.76);
+  -webkit-backdrop-filter: blur(26px) saturate(180%);
+  backdrop-filter: blur(26px) saturate(180%);
+  box-shadow: 0 16px 40px -8px rgb(13 13 13 / 0.17);
+}
+
+@supports not (backdrop-filter: blur(4px)) {
+  .glass {
+    background: rgb(255 255 255 / 0.97);
+  }
+}
+
+/* ---------- product mock shell ---------- */
+
+.mock {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--bg);
+  overflow: hidden;
+  box-shadow: 0 28px 64px -12px rgb(13 13 13 / 0.12);
+}
+
+.mock__bar {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-subtle);
+  padding: 0 18px;
+  height: 46px;
+}
+
+.mock__lights {
+  display: flex;
+  gap: 7px;
+  flex: none;
+}
+
+.mock__lights i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e1e1e6;
+}
+
+.mock__url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  padding: 6px 14px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.mock__url span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Side panel shared by the hero and detection mocks. */
+.side {
+  border-left: 1px solid var(--line);
+  background: var(--bg-subtle);
+  display: flex;
+  flex-direction: column;
+}
+
+.side__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--line);
+  padding: 17px 20px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.side__head img {
+  border-radius: 6px;
+}
+
+.side__head .count {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.side__body {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 16px 20px;
+}
+
+.side__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.side__label .count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+
+/* ---------- motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .head {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 24px;
+  }
+}

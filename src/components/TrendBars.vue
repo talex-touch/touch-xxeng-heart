@@ -8,7 +8,7 @@ const props = withDefaults(defineProps<{
   /** Track height in px; bars are scaled to fit inside it. */
   height?: number
 }>(), {
-  color: 'bg-neutral-900',
+  color: 'bg-blue-600',
   height: 160,
 })
 

@@ -139,9 +139,35 @@ test('side panel shows daily learning workspace', async ({ page, extensionId }) 
   await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
 
   await expect(page.getByText('Lexical')).toBeVisible()
-  await page.getByRole('tab', { name: /历史复盘/ }).click()
+  await expect(page.getByRole('heading', { name: '本页功能不可用' })).toBeVisible()
+  await expect(page.getByText('Lexi 管理页和浏览器内部页面不会加载网页增强脚本。')).toBeVisible()
+  await expect(page.getByText('当前页面还未加载新版 Lexi 内容脚本')).toBeHidden()
+  await page.getByRole('tab', { name: /记录/ }).click()
   await expect(page.getByText('今日推荐')).toBeVisible()
   await expect(page.getByText('待复盘')).toBeVisible()
+})
+
+test('side panel follows active page support without reloading', async ({ page, context, extensionId }) => {
+  await context.route('https://sidepanel.test/**', route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><html><body><main><p>用于验证侧边栏页面上下文切换。</p></main></body></html>',
+  }))
+  await page.goto(`chrome-extension://${extensionId}/dist/sidepanel/index.html`)
+  await expect(page.getByRole('heading', { name: '本页功能不可用' })).toBeVisible()
+
+  const supportedPage = await context.newPage()
+  await supportedPage.goto('https://sidepanel.test/context')
+  await expect(supportedPage.locator('#touch-xxeng-heart')).toBeAttached()
+  await expect(page.getByRole('heading', { name: '自动翻译本页' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '本页功能不可用' })).toBeHidden()
+
+  const internalPage = await context.newPage()
+  await internalPage.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await expect(page.getByRole('heading', { name: '本页功能不可用' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '开始翻译' })).toBeHidden()
+
+  await internalPage.close()
+  await supportedPage.close()
 })
 
 test('reviewing a due vocabulary record persists remembered feedback', async ({ page, extensionId }) => {
@@ -172,7 +198,7 @@ test('reviewing a due vocabulary record persists remembered feedback', async ({ 
     await chrome.storage.local.set({ [key]: JSON.stringify([record]) })
   }, { key: vocabularyStorageKey, record: dueRecord })
 
-  await page.getByRole('tab', { name: /历史复盘/ }).click()
+  await page.getByRole('tab', { name: /记录/ }).click()
 
   const forgot = page.getByRole('button', { name: 'reviewe2e：不认识' })
   const hard = page.getByRole('button', { name: 'reviewe2e：有点模糊' })

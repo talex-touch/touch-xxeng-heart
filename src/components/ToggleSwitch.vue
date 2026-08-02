@@ -2,6 +2,7 @@
 const props = withDefaults(defineProps<{
   modelValue: boolean
   label?: string
+  describedBy?: string
   disabled?: boolean
 }>(), {
   disabled: false,
@@ -26,14 +27,61 @@ function toggle() {
     role="switch"
     :aria-checked="modelValue"
     :aria-label="label"
+    :aria-describedby="describedBy"
     :disabled="disabled"
-    class="relative h-6 w-11 shrink-0 rounded-full transition disabled:cursor-not-allowed disabled:opacity-50"
-    :class="modelValue ? 'bg-neutral-950' : 'bg-neutral-300'"
+    class="lexi-toggle"
+    :class="{ 'is-on': modelValue }"
     @click="toggle"
   >
-    <span
-      class="absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-all"
-      :class="modelValue ? 'left-5.5' : 'left-0.5'"
-    />
+    <span class="lexi-toggle__thumb" />
   </button>
 </template>
+
+<style scoped>
+.lexi-toggle {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  flex: 0 0 auto;
+  padding: 0;
+  background: #d3d8e0;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px #7d8797;
+  cursor: pointer;
+  transition: background-color 180ms ease;
+}
+
+.lexi-toggle.is-on {
+  background: #2f6fed;
+  box-shadow: none;
+}
+
+.lexi-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.lexi-toggle__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(23, 26, 32, 0.2);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lexi-toggle.is-on .lexi-toggle__thumb {
+  transform: translateX(18px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lexi-toggle,
+  .lexi-toggle__thumb {
+    transition: none;
+  }
+}
+</style>

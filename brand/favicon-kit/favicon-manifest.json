@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "identity": "Lexi Crystal Jellyfish",
+  "productionMaster": "favicon-master-transparent.png",
+  "method": "TDS raster generation followed by local chroma-key matting; no SVG source",
+  "files": [
+    { "path": "favicon-master-transparent.png", "bytes": 500280, "sha256": "c50fc9f7bd5ba3007d0543628b5f56897d83adad5abaeb2cb5f23e2879db4ee7", "width": 1122, "height": 1122, "mode": "RGBA" },
+    { "path": "favicon.ico", "bytes": 77304, "sha256": "7a64baaf3343f2feb72a96e79ae69e056817ae47f406c625023aac42c92062c1" },
+    { "path": "favicon-size-proof.png", "bytes": 53551, "sha256": "67e893300727081a592d1e1f578ca02e524a609dec6e48a1f908c0eecc3dd665", "width": 1120, "height": 520, "mode": "RGB" },
+    { "path": "favicon-16.png", "bytes": 812, "sha256": "ea8b0cd813f8d9bd2e5a103e9e3ccfbc6afeadae6dee331e159a067569518d67", "width": 16, "height": 16, "mode": "RGBA" },
+    { "path": "favicon-32.png", "bytes": 2139, "sha256": "cef262b447ae67251e882dff98976b04126387152f201ca7c4c295f87725a6c5", "width": 32, "height": 32, "mode": "RGBA" },
+    { "path": "favicon-48.png", "bytes": 3796, "sha256": "75c29063aa725cf96494c4b6743b3eda52f31aa5a4be5300a89bc7b87ce8ea04", "width": 48, "height": 48, "mode": "RGBA" },
+    { "path": "favicon-64.png", "bytes": 5729, "sha256": "4b34678e66f0c31209e6a5a816eb862180f69eab521fe59bd6f407fa8307717f", "width": 64, "height": 64, "mode": "RGBA" },
+    { "path": "favicon-128.png", "bytes": 15705, "sha256": "816f13b10347182140027b007ee3b01e9c8df845b95f9205b7ee3db8506ff144", "width": 128, "height": 128, "mode": "RGBA" },
+    { "path": "favicon-180.png", "bytes": 26178, "sha256": "66df5b245141e08fd5cbbbb26fc1aca20f906475dd081e5709272f6956c62335", "width": 180, "height": 180, "mode": "RGBA" },
+    { "path": "favicon-256.png", "bytes": 45295, "sha256": "36d8180df2b42a4ff5b8230972617372723575ff42bb3470e6bc1d5bfca957bd", "width": 256, "height": 256, "mode": "RGBA" },
+    { "path": "favicon-512.png", "bytes": 169913, "sha256": "a1f1fff42d570629876770d12026b517dcbebf0b511abb804ceea6f2b0722d22", "width": 512, "height": 512, "mode": "RGBA" }
+  ]
+}

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useMediaQuery } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
 import { defaultSettings, featureLabels, promptDefaults } from '~/logic/defaults'
 import { testAiScene } from '~/logic/aiClient'
@@ -13,13 +14,13 @@ import type { AiConnectionConfig, AiProviderConfig, AiTestResult, FeatureScene, 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
 const scenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'omni']
-const tabs: Array<{ id: OptionsTab, label: string }> = [
-  { id: 'settings', label: '基础设置' },
-  { id: 'special', label: '特殊场景' },
-  { id: 'vocabulary', label: '词库记录' },
-  { id: 'ai', label: 'AI 场景' },
-  { id: 'diagnostics', label: '诊断记录' },
-  { id: 'about', label: '关于' },
+const tabs: Array<{ id: OptionsTab, label: string, icon: string, description: string }> = [
+  { id: 'settings', label: '基础设置', icon: 'i-lucide-sliders-horizontal', description: '控制 Lexi 在哪些网页生效、替换多少词，以及划词与翻译的行为。' },
+  { id: 'special', label: '特殊场景', icon: 'i-lucide-globe-2', description: '为信息流、论坛与学习网站配置更稳妥的独立规则。' },
+  { id: 'vocabulary', label: '词库记录', icon: 'i-lucide-book-open', description: '查看网页替换、划词翻译与 AI 补充形成的本地词库。' },
+  { id: 'ai', label: 'AI 场景', icon: 'i-lucide-sparkles', description: '管理多个 AI Provider，并为不同使用场景配置连接与提示词。' },
+  { id: 'diagnostics', label: '诊断记录', icon: 'i-lucide-activity', description: '检查最近的 AI 调用、网页访问与速读缓存状态。' },
+  { id: 'about', label: '关于', icon: 'i-lucide-info', description: '查看版本、项目与开发者信息。' },
 ]
 const translationDirections: Array<{ value: TranslationDirection, label: string }> = [
   { value: 'auto', label: '自动判断' },
@@ -34,6 +35,8 @@ const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string 
 
 const appVersion = __VERSION__
 const activeTab = ref<OptionsTab>('settings')
+const isCompactLayout = useMediaQuery('(max-width: 860px)')
+const activeTabMeta = computed(() => tabs.find(tab => tab.id === activeTab.value) ?? tabs[0])
 const newSceneRuleDomain = ref('')
 const vocabularySearchQuery = ref('')
 const domainText = computed({
@@ -110,6 +113,7 @@ const testingScenes = ref<Partial<Record<FeatureScene, boolean>>>({})
 const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
 const sceneTestDetails = ref<Partial<Record<FeatureScene, AiTestResult>>>({})
 const httpApprovalDialog = ref<HTMLDialogElement>()
+const resetSettingsDialog = ref<HTMLDialogElement>()
 let pendingHttpConnection: AiConnectionConfig | undefined
 let pendingHttpInput: HTMLInputElement | undefined
 const pendingHttpEndpoint = ref('')
@@ -239,9 +243,11 @@ function revokeApprovedHttpEndpoint(endpoint: string) {
 
 function onOptionsTabKeydown(event: KeyboardEvent, index: number) {
   let nextIndex = index
-  if (event.key === 'ArrowRight')
+  const previousKey = isCompactLayout.value ? 'ArrowLeft' : 'ArrowUp'
+  const nextKey = isCompactLayout.value ? 'ArrowRight' : 'ArrowDown'
+  if (event.key === nextKey)
     nextIndex = (index + 1) % tabs.length
-  else if (event.key === 'ArrowLeft')
+  else if (event.key === previousKey)
     nextIndex = (index - 1 + tabs.length) % tabs.length
   else if (event.key === 'Home')
     nextIndex = 0
@@ -391,10 +397,16 @@ function addSceneRule() {
 function removeSceneRule(index: number) {
   lexiSettings.value.siteRules.sceneRules = lexiSettings.value.siteRules.sceneRules.filter((_, current) => current !== index)
 }
+
+function resetSettings() {
+  lexiSettings.value = structuredClone(defaultSettings)
+  resetSettingsDialog.value?.close()
+}
 </script>
 
 <template>
-  <main class="min-h-screen bg-neutral-50 text-neutral-950">
+  <main class="options-page">
+    <a class="options-skip-link" href="#options-content">跳到主要内容</a>
     <dialog
       ref="httpApprovalDialog"
       class="m-auto w-[min(30rem,calc(100vw-2rem))] rounded-2 border border-neutral-200 bg-white p-0 text-neutral-950 shadow-xl backdrop:bg-neutral-950/60"
@@ -410,864 +422,899 @@ function removeSceneRule(index: number) {
         </p>
         <code class="mt-3 block break-all rounded-2 bg-neutral-100 px-3 py-2 text-12px text-neutral-800">{{ pendingHttpEndpoint }}</code>
         <div class="mt-5 flex justify-end gap-2">
-          <button type="button" class="h-10 rounded-2 border border-neutral-300 bg-white px-4 text-13px cursor-pointer hover:bg-neutral-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-neutral-950" @click="resolveHttpEndpointApproval(false)">
+          <BaseButton @click="resolveHttpEndpointApproval(false)">
             取消
-          </button>
-          <button type="button" class="h-10 rounded-2 border border-amber-700 bg-amber-700 px-4 text-13px text-white cursor-pointer hover:bg-amber-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700" @click="resolveHttpEndpointApproval(true)">
+          </BaseButton>
+          <BaseButton variant="warning" @click="resolveHttpEndpointApproval(true)">
             理解风险并允许
-          </button>
+          </BaseButton>
         </div>
       </div>
     </dialog>
 
-    <div class="mx-auto max-w-6xl px-6 py-8">
-      <header class="mb-6 flex flex-wrap items-end justify-between gap-4 border-b border-neutral-200 pb-5">
-        <div>
-          <div class="text-24px font-700 tracking-0">
-            Lexi <span class="align-middle text-13px font-500 text-neutral-400">v{{ appVersion }}</span>
-          </div>
-          <p class="mt-2 max-w-2xl text-14px leading-6 text-neutral-600">
-            配置网页启用范围、替换密度、渐进难度、GitHub Digest / Lexi 速读，以及不同场景的 AI 后端。
-          </p>
+    <dialog
+      ref="resetSettingsDialog"
+      class="options-dialog"
+      aria-labelledby="reset-settings-title"
+    >
+      <div class="options-dialog__body">
+        <h2 id="reset-settings-title">
+          恢复默认设置
+        </h2>
+        <p>这会重置全部偏好，包括站点规则、速读设置、自定义 CSS、AI Provider、API Key 和提示词。词库、访问记录与缓存不会被删除。</p>
+        <div class="options-dialog__actions">
+          <BaseButton @click="resetSettingsDialog?.close()">
+            取消
+          </BaseButton>
+          <BaseButton variant="danger" @click="resetSettings">
+            恢复默认
+          </BaseButton>
         </div>
-        <div class="text-right">
-          <div class="text-24px font-700">
-            {{ vocabularyRecords.length }}
-          </div>
-          <div class="text-12px text-neutral-500">
-            已记录词汇
-          </div>
-        </div>
-      </header>
+      </div>
+    </dialog>
 
-      <nav class="mb-5 overflow-x-auto rounded-2 border border-neutral-200 bg-white p-1 shadow-sm" role="tablist" aria-label="设置分类">
-        <div class="flex min-w-max gap-1">
+    <aside class="options-sidebar" aria-label="Lexi 设置导航">
+      <div class="options-sidebar__top">
+        <div class="options-brand">
+          <Logo class="options-brand__logo" />
+          <div>
+            <strong>Lexi</strong>
+            <span>v{{ appVersion }}</span>
+          </div>
+        </div>
+
+        <nav class="options-nav" role="tablist" aria-label="设置分类" :aria-orientation="isCompactLayout ? 'horizontal' : 'vertical'">
           <button
             v-for="tab in tabs"
             :id="`options-tab-${tab.id}`"
             :key="tab.id"
+            type="button"
             role="tab"
             :aria-selected="activeTab === tab.id"
             :aria-controls="`options-panel-${tab.id}`"
             :tabindex="activeTab === tab.id ? 0 : -1"
-            class="rounded-2 px-4 py-2 text-14px font-500 cursor-pointer transition-colors"
-            :class="activeTab === tab.id ? 'bg-neutral-950 text-white' : 'text-neutral-600 hover:bg-neutral-100 hover:text-neutral-950'"
+            class="options-nav__item"
+            :class="{ 'is-active': activeTab === tab.id }"
             @click="activeTab = tab.id"
             @keydown="onOptionsTabKeydown($event, tabs.indexOf(tab))"
           >
-            {{ tab.label }}
+            <span class="options-nav__icon" :class="tab.icon" aria-hidden="true" />
+            <span>{{ tab.label }}</span>
           </button>
+        </nav>
+      </div>
+
+      <div class="options-sidebar__summary">
+        <span>已记录词汇</span>
+        <strong>{{ vocabularyRecords.length }}</strong>
+        <small>今日新增 {{ todayStudySummary.total }} · 技术词 {{ todayStudySummary.technical }}</small>
+      </div>
+    </aside>
+
+    <section class="options-workspace">
+      <header class="options-header">
+        <span class="sr-only">Lexi</span>
+        <div>
+          <h1>{{ activeTabMeta.label }}</h1>
+          <p>{{ activeTabMeta.description }}</p>
         </div>
-      </nav>
+        <div v-if="activeTab === 'settings'" class="options-header__actions">
+          <span class="options-save-state"><span aria-hidden="true" />更改自动保存</span>
+          <BaseButton @click="resetSettingsDialog?.showModal()">
+            <template #icon>
+              <span class="i-lucide-rotate-ccw" aria-hidden="true" />
+            </template>
+            恢复默认
+          </BaseButton>
+        </div>
+      </header>
 
-      <section v-if="activeTab === 'settings'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="grid gap-5 lg:grid-cols-[1fr_1fr]">
-        <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <div class="min-h-0">
-            <h2 class="text-16px font-600">
-              网页启用范围
-            </h2>
-            <label class="mt-4 flex items-center justify-between gap-3">
-              <span>
-                <span class="block text-14px font-500">总开关</span>
-                <span class="text-12px text-neutral-500">关闭后不替换、不划词翻译。</span>
-              </span>
-              <ToggleSwitch v-model="lexiSettings.siteRules.enabled" label="Lexi 总开关" />
-            </label>
-
-            <div class="mt-5">
-              <label class="text-13px font-500">匹配模式</label>
-              <select v-model="lexiSettings.siteRules.mode" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
-                <option value="all">
-                  全部网页
-                </option>
-                <option value="allowlist">
-                  仅白名单
-                </option>
-                <option value="blocklist">
-                  排除黑名单
-                </option>
-              </select>
-            </div>
-
-            <div class="mt-5">
-              <label class="text-13px font-500">域名列表</label>
-              <textarea
-                v-model="domainText"
-                class="mt-2 min-h-28 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-14px leading-5 outline-none focus:border-neutral-950"
-                placeholder="example.com&#10;docs.example.com"
+      <div id="options-content" class="options-content" tabindex="-1">
+        <section v-if="activeTab === 'settings'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="options-panel settings-layout grid gap-5 lg:grid-cols-[1fr_1fr]">
+          <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+            <div class="min-h-0">
+              <h2 class="text-16px font-600">
+                网页启用范围
+              </h2>
+              <SettingToggle
+                v-model="lexiSettings.siteRules.enabled"
+                class="mt-4"
+                label="总开关"
+                hint="关闭后不替换、不划词翻译。"
               />
-            </div>
 
-            <div class="mt-5 border-t border-neutral-100 pt-5">
-              <label class="text-13px font-500">域名场景规则</label>
-              <div class="mt-2 flex gap-2">
-                <input v-model="newSceneRuleDomain" class="h-10 min-w-0 flex-1 rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="docs.example.com">
-                <button class="rounded-2 border border-neutral-200 bg-white px-3 text-12px cursor-pointer hover:bg-neutral-50" @click="addSceneRule">
-                  添加
-                </button>
-              </div>
-              <div class="mt-3 space-y-2">
-                <div v-for="(rule, index) in lexiSettings.siteRules.sceneRules" :key="rule.domain" class="rounded-2 border border-neutral-200 px-3 py-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <input v-model="rule.domain" class="min-w-0 flex-1 border-0 bg-transparent text-13px font-600 outline-none">
-                    <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeSceneRule(index)">
-                      删除
-                    </button>
+              <FormField class="mt-5" label="匹配模式" hint="决定域名列表作为白名单还是黑名单使用。">
+                <BaseSelect v-model="lexiSettings.siteRules.mode">
+                  <option value="all">
+                    全部网页
+                  </option>
+                  <option value="allowlist">
+                    仅白名单
+                  </option>
+                  <option value="blocklist">
+                    排除黑名单
+                  </option>
+                </BaseSelect>
+              </FormField>
+
+              <FormField class="mt-5" label="域名列表" hint="每行一个域名，支持填写子域名。">
+                <BaseTextarea
+                  v-model="domainText"
+                  class="min-h-28"
+                  placeholder="example.com&#10;docs.example.com"
+                />
+              </FormField>
+
+              <div class="mt-5 border-t border-neutral-100 pt-5">
+                <FormField label="域名场景规则" hint="按域名单独控制可用的 AI 场景。">
+                  <div class="flex gap-2">
+                    <BaseInput v-model="newSceneRuleDomain" class="min-w-0 flex-1" placeholder="docs.example.com" @keydown.enter="addSceneRule" />
+                    <BaseButton variant="primary" @click="addSceneRule">
+                      <template #icon>
+                        <span class="i-lucide-plus" aria-hidden="true" />
+                      </template>
+                      添加
+                    </BaseButton>
                   </div>
-                  <div class="mt-2 grid grid-cols-2 gap-2 text-12px text-neutral-600 sm:grid-cols-4">
-                    <label v-for="scene in scenes" :key="`${rule.domain}-${scene}`" class="flex items-center gap-1">
-                      <input v-model="rule[scene]" type="checkbox">
-                      <span>{{ featureLabels[scene] }}</span>
-                    </label>
+                </FormField>
+                <div class="mt-3 space-y-2">
+                  <div v-for="(rule, index) in lexiSettings.siteRules.sceneRules" :key="rule.domain" class="rounded-2 border border-neutral-200 px-3 py-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <BaseInput v-model="rule.domain" size="sm" class="min-w-0 flex-1 font-600" aria-label="规则域名" />
+                      <BaseButton variant="ghost" size="sm" @click="removeSceneRule(index)">
+                        删除
+                      </BaseButton>
+                    </div>
+                    <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      <BaseCheckbox
+                        v-for="scene in scenes"
+                        :key="`${rule.domain}-${scene}`"
+                        v-model="rule[scene]"
+                        :label="featureLabels[scene]"
+                        compact
+                      />
+                    </div>
                   </div>
+                  <p v-if="!lexiSettings.siteRules.sceneRules.length" class="rounded-2 bg-neutral-50 px-3 py-2 text-12px text-neutral-500">
+                    暂无精细规则，默认按总开关和匹配模式启用全部场景。
+                  </p>
                 </div>
-                <p v-if="!lexiSettings.siteRules.sceneRules.length" class="rounded-2 bg-neutral-50 px-3 py-2 text-12px text-neutral-500">
-                  暂无精细规则，默认按总开关和匹配模式启用全部场景。
-                </p>
               </div>
             </div>
           </div>
-        </div>
 
-        <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <div class="min-h-0">
-            <h2 class="text-16px font-600">
-              替换与学习节奏
-            </h2>
-            <div class="mt-4 flex items-center justify-between">
-              <span class="text-14px font-500">自动替换词汇</span>
-              <ToggleSwitch v-model="lexiSettings.replacement.enabled" label="自动替换词汇" />
-            </div>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">替换密度 {{ Math.round(lexiSettings.replacement.density * 100) }}%</span>
-              <input v-model.number="lexiSettings.replacement.density" type="range" min="0.04" max="0.45" step="0.01" class="mt-2 w-full accent-neutral-950">
-            </label>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">基础难度 {{ lexiSettings.replacement.difficulty }}</span>
-              <input v-model.number="lexiSettings.replacement.difficulty" type="range" min="1" max="5" step="1" class="mt-2 w-full accent-neutral-950">
-            </label>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">单页最多替换</span>
-              <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="80" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-            </label>
-            <div class="mt-4 flex items-center justify-between">
-              <span class="text-14px font-500">划词自动翻译</span>
-              <ToggleSwitch v-model="lexiSettings.selection.autoTranslate" label="划词自动翻译" />
-            </div>
-            <label class="mt-4 flex items-center justify-between gap-4">
-              <span>
-                <span class="block text-14px font-500">按住修饰键触发划词翻译</span>
-                <span class="text-12px text-neutral-500">macOS 使用 Command，Windows/Linux 使用 Ctrl。媒体点击可单独配置，默认 meta+shift。</span>
-              </span>
-              <ToggleSwitch v-model="lexiSettings.selection.requireModifierKey" label="按住修饰键触发划词翻译" />
-            </label>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">划词翻译方向</span>
-              <select v-model="lexiSettings.selection.translationDirection" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
-                <option v-for="item in translationDirections" :key="item.value" :value="item.value">
-                  {{ item.label }}
-                </option>
-              </select>
-            </label>
-
-            <div class="mt-5 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
-              <h3 class="text-14px font-600">
-                页面自动翻译
-              </h3>
-              <p class="mt-1 text-12px leading-5 text-neutral-500">
-                启用后可按当前链接、站点或自定义 Regex 自动恢复；滚动停止后的可视区域优先翻译，其余内容预加载并缓存。
-              </p>
-              <label class="mt-3 block">
-                <span class="text-13px font-500">启用范围</span>
-                <select v-model="lexiSettings.selection.pageTranslation.scope" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950">
-                  <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
+          <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+            <div class="min-h-0">
+              <h2 class="text-16px font-600">
+                替换与学习节奏
+              </h2>
+              <SettingToggle v-model="lexiSettings.replacement.enabled" class="mt-4" label="自动替换词汇" />
+              <RangeControl
+                v-model="lexiSettings.replacement.density"
+                class="mt-5"
+                label="替换密度"
+                hint="越高替换越密集，建议从 20% 起步。"
+                :display-value="`${Math.round(lexiSettings.replacement.density * 100)}%`"
+                :min="0.04"
+                :max="0.45"
+                :step="0.01"
+              />
+              <RangeControl
+                v-model="lexiSettings.replacement.difficulty"
+                class="mt-5"
+                label="基础难度"
+                hint="1 最简单，5 会覆盖更多专业词汇。"
+                :display-value="`${lexiSettings.replacement.difficulty} / 5`"
+                :min="1"
+                :max="5"
+              />
+              <FormField class="mt-5" label="单页最多替换" hint="达到上限后停止替换，避免影响阅读。">
+                <BaseInput v-model="lexiSettings.replacement.maxPerPage" type="number" :min="1" :max="80" />
+              </FormField>
+              <SettingToggle v-model="lexiSettings.selection.autoTranslate" class="mt-4" label="划词自动翻译" />
+              <SettingToggle
+                v-model="lexiSettings.selection.requireModifierKey"
+                class="mt-4"
+                label="按住修饰键触发划词翻译"
+                hint="macOS 使用 Command，Windows/Linux 使用 Ctrl。媒体点击可单独配置，默认 meta+shift。"
+              />
+              <FormField class="mt-5" label="划词翻译方向" hint="自动判断会根据选中内容切换中英方向。">
+                <BaseSelect v-model="lexiSettings.selection.translationDirection">
+                  <option v-for="item in translationDirections" :key="item.value" :value="item.value">
                     {{ item.label }}
                   </option>
-                </select>
-              </label>
-              <label v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-3 block">
-                <span class="text-13px font-500">URL Regex</span>
-                <input v-model.trim="lexiSettings.selection.pageTranslation.regex" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 font-mono text-13px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
-              </label>
-              <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                <label class="block">
-                  <span class="text-13px font-500">合并请求段数</span>
-                  <input v-model.number="lexiSettings.selection.pageTranslation.batchSize" type="number" min="1" max="8" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-                </label>
-                <label class="block">
-                  <span class="text-13px font-500">预加载段数</span>
-                  <input v-model.number="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" min="0" max="40" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-                </label>
-                <label class="block">
-                  <span class="text-13px font-500">单页缓存上限</span>
-                  <input v-model.number="lexiSettings.selection.pageTranslation.maxBlocksPerPage" type="number" min="10" max="300" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-                </label>
-                <label class="block">
-                  <span class="text-13px font-500">缓存天数</span>
-                  <input v-model.number="lexiSettings.selection.pageTranslation.cacheDays" type="number" min="1" max="90" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-                </label>
-              </div>
-            </div>
-            <label class="mt-4 flex items-center justify-between">
-              <span>
-                <span class="block text-14px font-500">右下角状态浮标</span>
-                <span class="text-12px text-neutral-500">关闭后不显示“Lexi 已启用”。</span>
-              </span>
-              <ToggleSwitch v-model="lexiSettings.ui.showFloatingStatus" label="右下角状态浮标" />
-            </label>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">快捷对话键</span>
-              <input v-model.trim="lexiSettings.ui.dialogShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="mod+shift+m">
-              <span class="mt-1 block text-12px text-neutral-500">默认 Ctrl/Command+Shift+M；支持 mod+shift+m、ctrl+shift+m、meta+shift+m、alt+l。无选区时会基于整页内容提问。</span>
-            </label>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">媒体点击修饰键</span>
-              <input v-model.trim="lexiSettings.ui.mediaModifierShortcut" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950" placeholder="meta+shift">
-              <span class="mt-1 block text-12px text-neutral-500">按住该组合点击图片 / 视频 / 音频打开媒体操作栏；默认 meta+shift。</span>
-              <span class="mt-1 block text-12px text-neutral-500">视频倍速：macOS 按住 Command 后用触控板双指点按（或鼠标右键）；Windows/Linux 使用 Ctrl+左键。</span>
-            </label>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">每日推荐数量</span>
-              <input v-model.number="lexiSettings.study.dailyGoal" type="number" min="1" max="30" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-            </label>
+                </BaseSelect>
+              </FormField>
 
-            <div class="mt-5 border-t border-neutral-100 pt-5">
-              <h3 class="text-14px font-600">
-                GitHub Digest / Lexi 速读
-              </h3>
-              <p class="mt-1 text-12px leading-5 text-neutral-500">
-                在 GitHub 仓库页先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。使用“每日推荐”AI 场景配置。
-              </p>
-              <div class="mt-3 flex items-center justify-between gap-4">
-                <span class="text-14px font-500">显示速读卡片</span>
-                <ToggleSwitch v-model="lexiSettings.githubDigest.enabled" label="显示 GitHub 速读卡片" />
-              </div>
-              <div class="mt-3 flex items-center justify-between gap-4">
-                <span class="text-14px font-500">停留后自动生成详细总览</span>
-                <ToggleSwitch v-model="lexiSettings.githubDigest.autoGenerate" label="自动生成 GitHub 速读" />
-              </div>
-              <label class="mt-3 block">
-                <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.githubDigest.autoDelaySeconds }} 秒</span>
-                <input v-model.number="lexiSettings.githubDigest.autoDelaySeconds" type="range" min="8" max="45" step="1" class="mt-2 w-full accent-neutral-950">
-              </label>
-              <label class="mt-3 block">
-                <span class="text-13px font-500">缓存天数</span>
-                <input v-model.number="lexiSettings.githubDigest.cacheDays" type="number" min="1" max="60" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-              </label>
-              <label class="mt-3 flex items-center justify-between gap-4">
-                <span>
-                  <span class="block text-14px font-500">私有仓库也允许自动生成</span>
-                  <span class="text-12px text-neutral-500">默认关闭；仍可手动点击生成。</span>
-                </span>
-                <ToggleSwitch v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate" label="私有仓库允许自动生成" />
-              </label>
-
-              <div class="mt-5 border-t border-neutral-200 pt-4">
-                <h4 class="text-13px font-600">
-                  Discourse / 论坛 Lexi 速读
-                </h4>
+              <div class="mt-5 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
+                <h3 class="text-14px font-600">
+                  页面自动翻译
+                </h3>
                 <p class="mt-1 text-12px leading-5 text-neutral-500">
-                  对 linux.do、idcflare.com 以及自动识别到的 Discourse 帖子，只读取主贴和前几楼做快速总结，降低 token 消耗。使用“每日推荐”AI 场景配置。
+                  启用后可按当前链接、站点或自定义 Regex 自动恢复；滚动停止后的可视区域优先翻译，其余内容预加载并缓存。
                 </p>
-                <div class="mt-3 flex items-center justify-between gap-4">
-                  <span class="text-14px font-500">显示论坛速读卡片</span>
-                  <ToggleSwitch v-model="lexiSettings.forumDigest.enabled" label="显示论坛速读卡片" />
+                <FormField class="mt-3" label="启用范围">
+                  <BaseSelect v-model="lexiSettings.selection.pageTranslation.scope">
+                    <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
+                      {{ item.label }}
+                    </option>
+                  </BaseSelect>
+                </FormField>
+                <FormField v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-3" label="URL Regex">
+                  <BaseInput v-model="lexiSettings.selection.pageTranslation.regex" class="font-mono" placeholder="^https://docs\\.example\\.com/" />
+                </FormField>
+                <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                  <FormField label="合并请求段数" compact>
+                    <BaseInput v-model="lexiSettings.selection.pageTranslation.batchSize" type="number" :min="1" :max="8" />
+                  </FormField>
+                  <FormField label="预加载段数" compact>
+                    <BaseInput v-model="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" :min="0" :max="40" />
+                  </FormField>
+                  <FormField label="单页缓存上限" compact>
+                    <BaseInput v-model="lexiSettings.selection.pageTranslation.maxBlocksPerPage" type="number" :min="10" :max="300" />
+                  </FormField>
+                  <FormField label="缓存天数" compact>
+                    <BaseInput v-model="lexiSettings.selection.pageTranslation.cacheDays" type="number" :min="1" :max="90" />
+                  </FormField>
                 </div>
-                <div class="mt-3 flex items-center justify-between gap-4">
-                  <span class="text-14px font-500">自动生成整帖总结</span>
-                  <ToggleSwitch v-model="lexiSettings.forumDigest.autoGenerate" label="自动生成论坛速读" />
-                </div>
-                <label class="mt-3 block">
-                  <span class="text-13px font-500">自动生成延迟 {{ lexiSettings.forumDigest.autoDelaySeconds }} 秒</span>
-                  <input v-model.number="lexiSettings.forumDigest.autoDelaySeconds" type="range" min="1" max="20" step="1" class="mt-2 w-full accent-neutral-950">
-                </label>
-                <label class="mt-3 block">
-                  <span class="text-13px font-500">缓存天数</span>
-                  <input v-model.number="lexiSettings.forumDigest.cacheDays" type="number" min="1" max="60" class="mt-2 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px outline-none focus:border-neutral-950">
-                </label>
               </div>
-            </div>
-            <label class="mt-4 block">
-              <span class="text-13px font-500">自定义样式 CSS</span>
-              <textarea
-                v-model="lexiSettings.ui.customCss"
-                class="mt-2 min-h-36 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 font-mono text-12px leading-5 outline-none focus:border-neutral-950"
-                placeholder=".lexi-selection-translation { background: #fff; }&#10;.lexi-token { color: #2563eb; }"
+              <SettingToggle
+                v-model="lexiSettings.ui.showFloatingStatus"
+                class="mt-4"
+                label="右下角状态浮标"
+                hint="关闭后不显示“Lexi 已启用”。"
               />
-            </label>
-          </div>
-        </div>
-      </section>
+              <FormField class="mt-5" label="快捷对话键" hint="默认 Ctrl/Command+Shift+M；无选区时会基于整页内容提问。">
+                <BaseInput v-model="lexiSettings.ui.dialogShortcut" placeholder="mod+shift+m" />
+              </FormField>
+              <FormField class="mt-5" label="媒体点击修饰键" hint="按住组合键点击媒体打开操作栏；视频倍速在 macOS 使用 Command+双指点按。">
+                <BaseInput v-model="lexiSettings.ui.mediaModifierShortcut" placeholder="meta+shift" />
+              </FormField>
+              <FormField class="mt-5" label="每日推荐数量">
+                <BaseInput v-model="lexiSettings.study.dailyGoal" type="number" :min="1" :max="30" />
+              </FormField>
 
-      <section v-else-if="activeTab === 'special'" id="options-panel-special" role="tabpanel" aria-labelledby="options-tab-special" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 class="text-16px font-600">
-              特殊场景处理
-            </h2>
-            <p class="mt-1 max-w-2xl text-12px leading-5 text-neutral-500">
-              信息流站点可开启动态扫描并降低替换密度；学习、考试类站点默认关闭，避免影响答题或课堂页面。
-            </p>
-          </div>
-          <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="addSpecialProfile">
-            添加场景
-          </button>
-        </div>
+              <div class="mt-5 border-t border-neutral-100 pt-5">
+                <h3 class="text-14px font-600">
+                  GitHub Digest / Lexi 速读
+                </h3>
+                <p class="mt-1 text-12px leading-5 text-neutral-500">
+                  在 GitHub 仓库页先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。使用“每日推荐”AI 场景配置。
+                </p>
+                <SettingToggle v-model="lexiSettings.githubDigest.enabled" class="mt-4" label="显示速读卡片" />
+                <SettingToggle v-model="lexiSettings.githubDigest.autoGenerate" class="mt-3" label="停留后自动生成详细总览" />
+                <RangeControl
+                  v-model="lexiSettings.githubDigest.autoDelaySeconds"
+                  class="mt-4"
+                  label="自动生成延迟"
+                  :display-value="`${lexiSettings.githubDigest.autoDelaySeconds} 秒`"
+                  :min="8"
+                  :max="45"
+                />
+                <FormField class="mt-4" label="缓存天数">
+                  <BaseInput v-model="lexiSettings.githubDigest.cacheDays" type="number" :min="1" :max="60" />
+                </FormField>
+                <SettingToggle
+                  v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate"
+                  class="mt-4"
+                  label="私有仓库也允许自动生成"
+                  hint="默认关闭；仍可手动点击生成。"
+                />
 
-        <div class="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,28rem),1fr))] gap-4">
-          <article v-for="profile in lexiSettings.siteRules.specialProfiles" :key="profile.id" class="min-w-0 rounded-2 border border-neutral-200 p-4">
-            <div class="flex items-start justify-between gap-3">
-              <label class="min-w-0 flex-1">
-                <span class="text-12px font-500 text-neutral-500">名称</span>
-                <input v-model="profile.label" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-14px font-600 outline-none focus:border-neutral-950">
-              </label>
-              <button v-if="profile.kind === 'custom'" class="mt-6 border-0 bg-transparent text-12px text-red-600 cursor-pointer" @click="removeSpecialProfile(profile.id)">
-                删除
-              </button>
-            </div>
-
-            <label class="mt-3 block">
-              <span class="text-12px font-500 text-neutral-500">域名</span>
-              <textarea
-                :value="formatSpecialDomains(profile)"
-                class="mt-1 min-h-20 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-13px leading-5 outline-none focus:border-neutral-950"
-                placeholder="x.com&#10;twitter.com"
-                @input="updateSpecialDomains(profile, ($event.target as HTMLTextAreaElement).value)"
-              />
-            </label>
-
-            <div class="mt-3 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2 text-12px">
-              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span class="min-w-0 break-words">启用此场景</span>
-                <input v-model="profile.enabled" type="checkbox">
-              </label>
-              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span class="min-w-0 break-words">考试安全</span>
-                <input v-model="profile.examSafe" type="checkbox">
-              </label>
-              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span class="min-w-0 break-words">网页替换</span>
-                <input v-model="profile.replacement" type="checkbox">
-              </label>
-              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span class="min-w-0 break-words">划词翻译</span>
-                <input v-model="profile.selection" type="checkbox">
-              </label>
-              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span class="min-w-0 break-words">动态扫描</span>
-                <input v-model="profile.dynamicScan" type="checkbox">
-              </label>
-              <label class="flex min-w-0 items-center justify-between gap-2 rounded-2 bg-neutral-50 px-3 py-2">
-                <span class="min-w-0 break-words">保守替换</span>
-                <input v-model="profile.conservative" type="checkbox">
-              </label>
-            </div>
-
-            <div class="mt-3 grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-3">
-              <label class="min-w-0 block">
-                <span class="text-12px text-neutral-500">单页上限</span>
-                <input v-model.number="profile.maxPerPage" type="number" min="0" max="20" class="mt-1 h-9 w-full rounded-2 border border-neutral-300 px-2 text-13px outline-none focus:border-neutral-950">
-              </label>
-              <label class="min-w-0 block">
-                <span class="text-12px text-neutral-500">密度 {{ Math.round((profile.density ?? 0) * 100) }}%</span>
-                <input v-model.number="profile.density" type="range" min="0" max="0.2" step="0.01" class="mt-2 w-full accent-neutral-950">
-              </label>
-            </div>
-          </article>
-        </div>
-      </section>
-
-      <section v-else-if="activeTab === 'vocabulary'" id="options-panel-vocabulary" role="tabpanel" aria-labelledby="options-tab-vocabulary" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h2 class="text-16px font-600">
-              词库记录
-            </h2>
-            <p class="mt-1 text-12px text-neutral-500">
-              AI 补充、网页替换和划词翻译都会进入本地记录；产品名会标记为 product，只用于 hover 说明，不改写页面文字。
-            </p>
-          </div>
-          <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · 产品 {{ productVocabularyCount }} · {{ formatBytes(storageStats.vocabulary) }}</span>
-        </div>
-        <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
-          <input
-            v-model.trim="vocabularySearchQuery"
-            class="h-10 w-full rounded-1 border border-neutral-300 bg-white px-3 text-14px outline-none focus:border-neutral-950"
-            placeholder="搜索原文、翻译、解释、上下文、标签、页面标题或 URL"
-          >
-          <button class="rounded-1 border border-neutral-200 bg-white px-3 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="!vocabularySearchQuery" @click="vocabularySearchQuery = ''">
-            清空
-          </button>
-        </div>
-        <div class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <h3 class="text-14px font-600">
-              今日学习概览
-            </h3>
-            <span class="text-12px text-neutral-500">新增 {{ todayStudySummary.total }} · 技术词 {{ todayStudySummary.technical }}</span>
-          </div>
-          <div class="mt-3 grid gap-2 text-12px lg:grid-cols-3">
-            <div class="rounded-2 bg-white px-3 py-2">
-              划词 {{ todayStudySummary.manual }}
-            </div>
-            <div class="rounded-2 bg-white px-3 py-2">
-              替换 {{ todayStudySummary.auto }}
-            </div>
-            <div class="rounded-2 bg-white px-3 py-2">
-              词库 {{ formatBytes(storageStats.vocabulary) }}
+                <div class="mt-5 border-t border-neutral-200 pt-4">
+                  <h4 class="text-13px font-600">
+                    Discourse / 论坛 Lexi 速读
+                  </h4>
+                  <p class="mt-1 text-12px leading-5 text-neutral-500">
+                    对 linux.do、idcflare.com 以及自动识别到的 Discourse 帖子，只读取主贴和前几楼做快速总结，降低 token 消耗。使用“每日推荐”AI 场景配置。
+                  </p>
+                  <SettingToggle v-model="lexiSettings.forumDigest.enabled" class="mt-4" label="显示论坛速读卡片" />
+                  <SettingToggle v-model="lexiSettings.forumDigest.autoGenerate" class="mt-3" label="自动生成整帖总结" />
+                  <RangeControl
+                    v-model="lexiSettings.forumDigest.autoDelaySeconds"
+                    class="mt-4"
+                    label="自动生成延迟"
+                    :display-value="`${lexiSettings.forumDigest.autoDelaySeconds} 秒`"
+                    :min="1"
+                    :max="20"
+                  />
+                  <FormField class="mt-4" label="缓存天数">
+                    <BaseInput v-model="lexiSettings.forumDigest.cacheDays" type="number" :min="1" :max="60" />
+                  </FormField>
+                </div>
+              </div>
+              <FormField class="mt-5" label="自定义样式 CSS" hint="仅应用于 Lexi 注入的页面组件。">
+                <BaseTextarea
+                  v-model="lexiSettings.ui.customCss"
+                  class="min-h-36 font-mono text-12px"
+                  placeholder=".lexi-selection-translation { background: #fff; }&#10;.lexi-token { color: #2563eb; }"
+                />
+              </FormField>
             </div>
           </div>
-          <p class="mt-3 text-12px leading-5 text-neutral-600">
-            {{ todayStudySummary.suggestion }}
-          </p>
-          <p v-if="todayStudySummary.terms.length" class="mt-2 text-12px leading-5 text-neutral-500">
-            {{ todayStudySummary.terms.join('；') }}
-          </p>
-        </div>
-        <div class="mt-4 max-h-[40rem] overflow-y-auto">
-          <table class="w-full border-collapse text-left text-12px">
-            <thead class="sticky top-0 bg-white text-neutral-500">
-              <tr class="border-b border-neutral-200">
-                <th class="py-2 pr-3 font-500">
-                  原文
-                </th>
-                <th class="py-2 pr-3 font-500">
-                  替换/翻译
-                </th>
-                <th class="py-2 pr-3 font-500">
-                  标签
-                </th>
-                <th class="py-2 pr-3 font-500">
-                  来源
-                </th>
-                <th class="py-2 pr-3 font-500">
-                  次数
-                </th>
-                <th class="py-2 pr-3 font-500">
-                  页面
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="record in recentVocabularyRecords" :key="record.id" class="border-b border-neutral-100 align-top">
-                <td class="max-w-56 break-words py-2 pr-3 font-600">
-                  {{ record.original }}
-                </td>
-                <td class="max-w-64 break-words py-2 pr-3">
-                  {{ record.replacement }}
-                </td>
-                <td class="max-w-48 break-words py-2 pr-3 text-neutral-500">
-                  <span v-if="record.tags.length" class="inline-flex flex-wrap gap-1">
-                    <span v-for="tag in record.tags" :key="tag" class="rounded-full bg-neutral-100 px-2 py-0.5" :class="tag === 'product' ? 'bg-purple-50 text-purple-700' : ''">
-                      {{ tag }}
-                    </span>
-                  </span>
-                  <span v-else>-</span>
-                </td>
-                <td class="py-2 pr-3 text-neutral-500">
-                  {{ record.source }}
-                </td>
-                <td class="py-2 pr-3 text-neutral-500">
-                  {{ record.seenCount }} / {{ record.selectedCount }}
-                </td>
-                <td class="max-w-72 break-words py-2 pr-3 text-neutral-500">
-                  <a v-if="record.pageUrl" :href="record.pageUrl" target="_blank" rel="noreferrer" class="text-neutral-600 underline underline-offset-2 hover:text-neutral-950">
-                    {{ record.pageTitle || record.pageUrl }}
-                  </a>
-                  <span v-else>-</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="!recentVocabularyRecords.length" class="rounded-2 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-            {{ vocabularySearchQuery ? '没有匹配的词库记录。' : '暂无词库记录。' }}
-          </p>
-        </div>
-      </section>
+        </section>
 
-      <section v-else-if="activeTab === 'ai'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 class="text-16px font-600">
-              AI 场景配置
-            </h2>
-            <p class="mt-1 text-12px leading-5 text-neutral-500">
-              场景留空时继承全局连接；需要不同模型或后端时再单独覆盖。
-            </p>
-          </div>
-        </div>
-
-        <div class="mt-4 rounded-2 border border-neutral-200 p-4">
+        <section v-else-if="activeTab === 'special'" id="options-panel-special" role="tabpanel" aria-labelledby="options-tab-special" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h3 class="text-14px font-600">
-                Provider 列表
-              </h3>
-              <p class="mt-1 text-12px leading-5 text-neutral-500">
-                可配置多个 OpenAI 兼容后端。调用时按优先级和延迟进行竞速，先返回的结果会被采用。
+              <h2 class="text-16px font-600">
+                特殊场景处理
+              </h2>
+              <p class="mt-1 max-w-2xl text-12px leading-5 text-neutral-500">
+                信息流站点可开启动态扫描并降低替换密度；学习、考试类站点默认关闭，避免影响答题或课堂页面。
               </p>
             </div>
-            <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="addProvider">
-              添加 Provider
-            </button>
+            <BaseButton variant="primary" @click="addSpecialProfile">
+              <template #icon>
+                <span class="i-lucide-plus" aria-hidden="true" />
+              </template>
+              添加场景
+            </BaseButton>
           </div>
 
-          <div class="mt-4 grid gap-3">
-            <article v-for="provider in lexiSettings.ai.providers" :key="provider.id" class="rounded-2 border border-neutral-200 p-3">
-              <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_8rem_8rem_auto]">
-                <label class="block">
-                  <span class="text-12px font-500 text-neutral-600">名称</span>
-                  <input v-model="provider.label" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="OpenAI / Groq / 自建网关">
-                </label>
-                <label class="block">
-                  <span class="text-12px font-500 text-neutral-600">优先级</span>
-                  <input v-model.number="provider.priority" type="number" min="1" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950">
-                </label>
-                <label class="block">
-                  <span class="text-12px font-500 text-neutral-600">延迟 ms</span>
-                  <input v-model.number="provider.delayMs" type="number" min="0" step="50" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950">
-                </label>
-                <div class="flex items-end gap-3">
-                  <label class="flex h-10 items-center gap-2 text-12px text-neutral-600">
-                    <input v-model="provider.enabled" type="checkbox">
-                    启用
-                  </label>
-                  <button class="h-10 border-0 bg-transparent text-12px text-red-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" :disabled="lexiSettings.ai.providers.length <= 1" @click="removeProvider(provider.id)">
-                    删除
-                  </button>
-                </div>
+          <div class="mt-4 grid grid-cols-[repeat(auto-fit,minmax(min(100%,28rem),1fr))] gap-4">
+            <article v-for="profile in lexiSettings.siteRules.specialProfiles" :key="profile.id" class="min-w-0 rounded-2 border border-neutral-200 p-4">
+              <div class="flex items-start justify-between gap-3">
+                <FormField class="min-w-0 flex-1" label="名称" compact>
+                  <BaseInput v-model="profile.label" size="sm" class="font-600" />
+                </FormField>
+                <BaseButton v-if="profile.kind === 'custom'" class="mt-5" variant="danger" size="sm" @click="removeSpecialProfile(profile.id)">
+                  删除
+                </BaseButton>
               </div>
-              <div class="mt-3 grid gap-3 lg:grid-cols-3">
-                <label class="block">
-                  <span class="text-12px font-500 text-neutral-600">Endpoint</span>
-                  <input :value="provider.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(provider, $event.target as HTMLInputElement)">
-                </label>
-                <label class="block">
-                  <span class="text-12px font-500 text-neutral-600">Model</span>
-                  <input v-model="provider.model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
-                </label>
-                <label class="block">
-                  <span class="text-12px font-500 text-neutral-600">API Key</span>
-                  <input v-model="provider.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
-                </label>
+
+              <FormField class="mt-4" label="域名" hint="每行一个域名。" compact>
+                <BaseTextarea
+                  :model-value="formatSpecialDomains(profile)"
+                  class="min-h-20"
+                  placeholder="x.com&#10;twitter.com"
+                  @update:model-value="updateSpecialDomains(profile, $event)"
+                />
+              </FormField>
+
+              <div class="mt-4 grid grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-2">
+                <BaseCheckbox v-model="profile.enabled" class="scene-option" label="启用此场景" />
+                <BaseCheckbox v-model="profile.examSafe" class="scene-option" label="考试安全" />
+                <BaseCheckbox v-model="profile.replacement" class="scene-option" label="网页替换" />
+                <BaseCheckbox v-model="profile.selection" class="scene-option" label="划词翻译" />
+                <BaseCheckbox v-model="profile.dynamicScan" class="scene-option" label="动态扫描" />
+                <BaseCheckbox v-model="profile.conservative" class="scene-option" label="保守替换" />
+              </div>
+
+              <div class="mt-4 grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-4">
+                <FormField label="单页上限" compact>
+                  <BaseInput v-model="profile.maxPerPage" type="number" size="sm" :min="0" :max="20" />
+                </FormField>
+                <RangeControl
+                  :model-value="profile.density ?? 0"
+                  label="替换密度"
+                  :display-value="`${Math.round((profile.density ?? 0) * 100)}%`"
+                  :min="0"
+                  :max="0.2"
+                  :step="0.01"
+                  @update:model-value="profile.density = $event"
+                />
               </div>
             </article>
           </div>
+        </section>
 
-          <CollapsibleSection title="兼容旧版全局连接 / 场景覆盖" class="mt-4">
-            <p class="text-12px leading-5 text-neutral-500">
-              这些字段可作为 Provider 和场景的补全值。一般建议直接把 Endpoint / Model / API Key 写在 Provider 中。
-            </p>
-            <div class="mt-3 grid gap-3 lg:grid-cols-3">
-              <label class="block">
-                <span class="text-12px font-500 text-neutral-600">Endpoint</span>
-                <input :value="lexiSettings.ai.global.endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(lexiSettings.ai.global, $event.target as HTMLInputElement)">
-              </label>
-              <label class="block">
-                <span class="text-12px font-500 text-neutral-600">Model</span>
-                <input v-model="lexiSettings.ai.global.model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="gpt-4.1-mini">
-              </label>
-              <label class="block">
-                <span class="text-12px font-500 text-neutral-600">API Key</span>
-                <input v-model="lexiSettings.ai.global.apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="Bearer token">
-              </label>
-            </div>
-          </CollapsibleSection>
-
-          <div v-if="lexiSettings.ai.approvedHttpEndpoints.length" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3">
-            <div class="text-12px font-600 text-amber-900">
-              已确认的 HTTP Endpoint
-            </div>
-            <p class="mt-1 text-11px leading-4 text-amber-800">
-              HTTP 不加密。许可只对完整地址生效，地址变化后会重新确认。
-            </p>
-            <div class="mt-2 space-y-2">
-              <div v-for="endpoint in lexiSettings.ai.approvedHttpEndpoints" :key="endpoint" class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2">
-                <code class="min-w-0 break-all text-11px text-neutral-700">{{ endpoint }}</code>
-                <button type="button" class="shrink-0 border-0 bg-transparent text-11px text-red-600 cursor-pointer" :aria-label="`撤销 HTTP Endpoint ${endpoint}`" @click="revokeApprovedHttpEndpoint(endpoint)">
-                  撤销
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="mt-4 grid gap-4 lg:grid-cols-3">
-          <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
-            <div class="flex items-center justify-between">
-              <span class="text-14px font-600">{{ featureLabels[scene] }}</span>
-              <ToggleSwitch v-model="lexiSettings.ai[scene].enabled" :label="`${featureLabels[scene]} AI 场景`" />
-            </div>
-            <div class="mt-4 rounded-2 bg-neutral-50 p-3">
-              <div class="text-12px font-500 text-neutral-600">
-                绑定 Provider
-              </div>
-              <p class="mt-1 text-11px leading-4 text-neutral-500">
-                不勾选时使用全部启用 Provider；勾选后只在所选 Provider 间竞速。
+        <section v-else-if="activeTab === 'vocabulary'" id="options-panel-vocabulary" role="tabpanel" aria-labelledby="options-tab-vocabulary" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 class="text-16px font-600">
+                词库记录
+              </h2>
+              <p class="mt-1 text-12px text-neutral-500">
+                AI 补充、网页替换和划词翻译都会进入本地记录；产品名会标记为 product，只用于 hover 说明，不改写页面文字。
               </p>
-              <div class="mt-2 flex flex-wrap gap-2">
-                <label v-for="provider in lexiSettings.ai.providers" :key="`${scene}-${provider.id}`" class="inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-11px text-neutral-600">
-                  <input type="checkbox" :checked="providerSelected(scene, provider.id)" @change="toggleSceneProvider(scene, provider.id, ($event.target as HTMLInputElement).checked)">
-                  <span>{{ provider.label || provider.id }}</span>
-                </label>
-              </div>
             </div>
-            <label class="mt-4 block">
-              <span class="text-12px font-500 text-neutral-600">Endpoint 覆盖</span>
-              <input :value="lexiSettings.ai[scene].endpoint" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承 Provider / 全局" @change="confirmHttpEndpoint(lexiSettings.ai[scene], $event.target as HTMLInputElement)">
-            </label>
-            <label class="mt-3 block">
-              <span class="text-12px font-500 text-neutral-600">Model 覆盖</span>
-              <input v-model="lexiSettings.ai[scene].model" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
-            </label>
-            <label class="mt-3 block">
-              <span class="text-12px font-500 text-neutral-600">API Key 覆盖</span>
-              <input v-model="lexiSettings.ai[scene].apiKey" type="password" class="mt-1 h-10 w-full rounded-2 border border-neutral-300 px-3 text-13px outline-none focus:border-neutral-950" placeholder="留空继承全局">
-            </label>
-            <div class="mt-3 block">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-12px font-500 text-neutral-600">提示词</span>
-                <button type="button" class="rounded-full border border-neutral-200 bg-white px-2 py-1 text-11px text-neutral-600 cursor-pointer hover:bg-neutral-50" @click="resetScenePrompt(scene)">
-                  重置为系统提示词
-                </button>
-              </div>
-              <textarea
-                v-model="lexiSettings.ai[scene].prompt"
-                class="mt-1 min-h-28 w-full resize-y rounded-2 border border-neutral-300 px-3 py-2 text-13px leading-5 outline-none focus:border-neutral-950"
-              />
-            </div>
-            <div class="mt-4 flex items-center gap-3">
-              <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50" :disabled="testingScenes[scene]" @click="testScene(scene)">
-                {{ testingScenes[scene] ? '测试中' : '测试' }}
-              </button>
-              <span v-if="sceneTestResults[scene]" class="truncate text-12px" :class="sceneTestDetails[scene]?.ok ? 'text-emerald-600' : 'text-red-600'">
-                {{ sceneTestResults[scene] }}
-              </span>
-            </div>
-            <div v-if="sceneTestDetails[scene]" class="mt-3 space-y-2">
-              <div class="text-12px font-600 text-neutral-700">
-                请求内容
-              </div>
-              <pre class="max-h-44 overflow-auto rounded-2 bg-neutral-950 p-3 text-11px leading-4 text-neutral-100">{{ formatTestRequest(sceneTestDetails[scene]!) }}</pre>
-              <div class="text-12px font-600 text-neutral-700">
-                返回内容
-              </div>
-              <pre class="max-h-36 overflow-auto rounded-2 bg-neutral-50 p-3 text-11px leading-4 text-neutral-700">{{ sceneTestDetails[scene]!.response || '空响应' }}</pre>
-            </div>
+            <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · 产品 {{ productVocabularyCount }} · {{ formatBytes(storageStats.vocabulary) }}</span>
           </div>
-        </div>
-      </section>
-
-      <section v-else-if="activeTab === 'diagnostics'" id="options-panel-diagnostics" role="tabpanel" aria-labelledby="options-tab-diagnostics" class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <div class="flex shrink-0 items-center justify-between gap-3">
-            <h2 class="text-16px font-600">
-              最近 AI 调用
-            </h2>
-            <span class="text-12px text-neutral-500">{{ aiCallLogs.length }} 条</span>
+          <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+            <BaseInput
+              v-model="vocabularySearchQuery"
+              type="search"
+              placeholder="搜索原文、翻译、解释、上下文、标签、页面标题或 URL"
+            />
+            <BaseButton :disabled="!vocabularySearchQuery" @click="vocabularySearchQuery = ''">
+              <template #icon>
+                <span class="i-lucide-x" aria-hidden="true" />
+              </template>
+              清空
+            </BaseButton>
           </div>
-          <div class="mt-4 shrink-0 border-b border-neutral-100 pb-3">
-            <TrendBars :items="aiTrend" :height="160" />
-          </div>
-          <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-3">
-            <div class="rounded-2 bg-neutral-50 px-3 py-2">
-              <div class="text-neutral-500">
-                Tokens
+          <div class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h3 class="text-14px font-600">
+                今日学习概览
+              </h3>
+              <span class="text-12px text-neutral-500">新增 {{ todayStudySummary.total }} · 技术词 {{ todayStudySummary.technical }}</span>
+            </div>
+            <div class="mt-3 grid gap-2 text-12px lg:grid-cols-3">
+              <div class="rounded-2 bg-white px-3 py-2">
+                划词 {{ todayStudySummary.manual }}
               </div>
-              <div class="mt-1 text-16px font-700">
-                {{ totalAiTokens }}
+              <div class="rounded-2 bg-white px-3 py-2">
+                替换 {{ todayStudySummary.auto }}
+              </div>
+              <div class="rounded-2 bg-white px-3 py-2">
+                词库 {{ formatBytes(storageStats.vocabulary) }}
               </div>
             </div>
-            <div v-for="item in aiSceneTokenStats" :key="item.scene" class="rounded-2 bg-neutral-50 px-3 py-2">
-              <div class="text-neutral-500">
-                {{ featureLabels[item.scene] }}
-              </div>
-              <div class="mt-1 font-700">
-                {{ item.tokens }} · {{ item.calls }} 次
-              </div>
-            </div>
-          </div>
-          <div class="mt-3 shrink-0 border-b border-neutral-100 pb-3">
-            <TrendBars :items="aiTokenTrend" color="bg-blue-600" :height="96" />
-          </div>
-          <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-2">
-            <div class="rounded-2 bg-neutral-50 px-3 py-2">
-              <div class="text-neutral-500">
-                本地存储估算
-              </div>
-              <div class="mt-1 text-16px font-700">
-                {{ formatBytes(storageStats.total) }}
-              </div>
-            </div>
-            <div class="rounded-2 bg-neutral-50 px-3 py-2">
-              <div class="text-neutral-500">
-                词库占用
-              </div>
-              <div class="mt-1 text-16px font-700">
-                {{ formatBytes(storageStats.vocabulary) }}
-              </div>
-            </div>
-            <div v-for="item in storageStats.others" :key="item.label" class="rounded-2 bg-neutral-50 px-3 py-2">
-              <div class="text-neutral-500">
-                {{ item.label }}
-              </div>
-              <div class="mt-1 font-700">
-                {{ formatBytes(item.bytes) }}
-              </div>
-            </div>
-          </div>
-          <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <div v-for="log in aiCallLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
-              <div class="flex items-center justify-between gap-3">
-                <span class="text-13px font-600">{{ featureLabels[log.scene] }}</span>
-                <span class="text-12px" :class="log.ok ? 'text-emerald-600' : 'text-red-600'">{{ log.ok ? '成功' : '失败' }}</span>
-              </div>
-              <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.streamed ? '流式' : '普通' }} · {{ log.authSent ? `Key ${log.keyHint || '已发送'}` : '未发送 Key' }} · {{ log.durationMs }}ms · {{ log.totalTokens ?? 0 }} tokens{{ log.tokenEstimate ? ' 估算' : '' }}
-              </div>
-              <div v-if="log.error" class="mt-1 break-words text-12px leading-5 text-red-600">
-                {{ log.error }}
-              </div>
-            </div>
-            <p v-if="!aiCallLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-              暂无 AI 调用记录。
+            <p class="mt-3 text-12px leading-5 text-neutral-600">
+              {{ todayStudySummary.suggestion }}
+            </p>
+            <p v-if="todayStudySummary.terms.length" class="mt-2 text-12px leading-5 text-neutral-500">
+              {{ todayStudySummary.terms.join('；') }}
             </p>
           </div>
-        </div>
-
-        <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <div class="flex shrink-0 items-center justify-between gap-3">
-            <h2 class="text-16px font-600">
-              最近访问网页
-            </h2>
-            <span class="text-12px text-neutral-500">{{ pageVisitLogs.length }} 条</span>
-          </div>
-          <div class="mt-4 shrink-0 border-b border-neutral-100 pb-3">
-            <TrendBars :items="visitTrend" :height="160" />
-          </div>
-          <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-            <div v-for="visit in pageVisitLogs" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
-              <div class="break-words text-13px font-600 leading-5">
-                {{ visit.title || visit.host }}
-              </div>
-              <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                {{ formatTime(visit.createdAt) }} · {{ visit.host }} · 替换 {{ visit.replacements }}
-              </div>
-            </div>
-            <p v-if="!pageVisitLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-              暂无网页访问记录。
+          <div class="mt-4 max-h-[40rem] overflow-y-auto">
+            <table class="w-full border-collapse text-left text-12px">
+              <thead class="sticky top-0 bg-white text-neutral-500">
+                <tr class="border-b border-neutral-200">
+                  <th class="py-2 pr-3 font-500">
+                    原文
+                  </th>
+                  <th class="py-2 pr-3 font-500">
+                    替换/翻译
+                  </th>
+                  <th class="py-2 pr-3 font-500">
+                    标签
+                  </th>
+                  <th class="py-2 pr-3 font-500">
+                    来源
+                  </th>
+                  <th class="py-2 pr-3 font-500">
+                    次数
+                  </th>
+                  <th class="py-2 pr-3 font-500">
+                    页面
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="record in recentVocabularyRecords" :key="record.id" class="border-b border-neutral-100 align-top">
+                  <td class="max-w-56 break-words py-2 pr-3 font-600">
+                    {{ record.original }}
+                  </td>
+                  <td class="max-w-64 break-words py-2 pr-3">
+                    {{ record.replacement }}
+                  </td>
+                  <td class="max-w-48 break-words py-2 pr-3 text-neutral-500">
+                    <span v-if="record.tags.length" class="inline-flex flex-wrap gap-1">
+                      <span v-for="tag in record.tags" :key="tag" class="rounded-full bg-neutral-100 px-2 py-0.5" :class="tag === 'product' ? 'bg-purple-50 text-purple-700' : ''">
+                        {{ tag }}
+                      </span>
+                    </span>
+                    <span v-else>-</span>
+                  </td>
+                  <td class="py-2 pr-3 text-neutral-500">
+                    {{ record.source }}
+                  </td>
+                  <td class="py-2 pr-3 text-neutral-500">
+                    {{ record.seenCount }} / {{ record.selectedCount }}
+                  </td>
+                  <td class="max-w-72 break-words py-2 pr-3 text-neutral-500">
+                    <a v-if="record.pageUrl" :href="record.pageUrl" target="_blank" rel="noreferrer" class="text-neutral-600 underline underline-offset-2 hover:text-neutral-950">
+                      {{ record.pageTitle || record.pageUrl }}
+                    </a>
+                    <span v-else>-</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!recentVocabularyRecords.length" class="rounded-2 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+              {{ vocabularySearchQuery ? '没有匹配的词库记录。' : '暂无词库记录。' }}
             </p>
           </div>
-        </div>
+        </section>
 
-        <div class="grid gap-5 lg:col-span-2 lg:grid-cols-2">
-          <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-            <div class="flex shrink-0 items-start justify-between gap-3">
-              <div>
-                <h2 class="text-16px font-600">
-                  GitHub 速读缓存
-                </h2>
-                <p class="mt-1 text-12px text-neutral-500">
-                  仓库级缓存 {{ githubDigestStats.total }} 个，Quick {{ githubDigestStats.quick }} 个，Detail {{ githubDigestStats.detail }} 个，占用 {{ formatBytes(githubDigestStats.bytes) }}。
-                </p>
-              </div>
-              <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="clearGitHubDigestCache">
-                清空缓存
-              </button>
-            </div>
-            <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-              <div v-for="entry in githubDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="break-words text-14px font-700">
-                      {{ entry.repo || entry.key }}
-                    </div>
-                    <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                      {{ entry.languages?.join(' · ') || '暂无语言信息' }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }}
-                    </div>
-                  </div>
-                  <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeGitHubDigestCacheEntry(entry.key)">
-                    删除
-                  </button>
-                </div>
-                <div class="mt-2 flex flex-wrap gap-2 text-11px">
-                  <span class="rounded-full px-2 py-1" :class="entry.quickDigest ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'">Quick {{ entry.quickDigest ? '已缓存' : '无' }}</span>
-                  <span class="rounded-full px-2 py-1" :class="entry.digest ? 'bg-blue-50 text-blue-700' : 'bg-neutral-100 text-neutral-500'">Detail {{ entry.digest ? '已缓存' : '无' }}</span>
-                  <span v-for="topic in entry.topics?.slice(0, 5)" :key="`${entry.key}-${topic}`" class="rounded-full bg-neutral-100 px-2 py-1 text-neutral-600">{{ topic }}</span>
-                </div>
-                <p v-if="entry.quickDigest?.oneLine" class="mt-2 break-words text-12px leading-5 text-neutral-700">
-                  {{ entry.quickDigest.oneLine }}
-                </p>
-                <p v-if="entry.digest?.oneLine" class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                  详细：{{ entry.digest.oneLine }}
-                </p>
-              </div>
-              <p v-if="!githubDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-                暂无 GitHub 速读缓存。打开 GitHub 仓库页并生成速读后会出现在这里。
+        <section v-else-if="activeTab === 'ai'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 class="text-16px font-600">
+                AI 场景配置
+              </h2>
+              <p class="mt-1 text-12px leading-5 text-neutral-500">
+                场景留空时继承全局连接；需要不同模型或后端时再单独覆盖。
               </p>
             </div>
           </div>
 
-          <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-            <div class="flex shrink-0 items-start justify-between gap-3">
+          <div class="mt-4 rounded-2 border border-neutral-200 p-4">
+            <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 class="text-16px font-600">
-                  论坛 Lexi 速读缓存
-                </h2>
-                <p class="mt-1 text-12px text-neutral-500">
-                  帖子级缓存 {{ forumDigestStats.total }} 个，占用 {{ formatBytes(forumDigestStats.bytes) }}。
+                <h3 class="text-14px font-600">
+                  Provider 列表
+                </h3>
+                <p class="mt-1 text-12px leading-5 text-neutral-500">
+                  可配置多个 OpenAI 兼容后端。调用时按优先级和延迟进行竞速，先返回的结果会被采用。
                 </p>
               </div>
-              <button class="rounded-2 border border-neutral-200 bg-white px-3 py-2 text-12px cursor-pointer hover:bg-neutral-50" @click="clearForumDigestCache">
-                清空缓存
-              </button>
+              <BaseButton variant="primary" @click="addProvider">
+                <template #icon>
+                  <span class="i-lucide-plus" aria-hidden="true" />
+                </template>
+                添加 Provider
+              </BaseButton>
             </div>
-            <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
-              <div v-for="entry in forumDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
-                <div class="flex flex-wrap items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="break-words text-14px font-700">
-                      {{ entry.title || entry.key }}
-                    </div>
-                    <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
-                      {{ entry.host }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }} · 历史 {{ getForumDigestHistoryCount(entry) }}
-                    </div>
+
+            <div class="mt-4 grid gap-3">
+              <article v-for="provider in lexiSettings.ai.providers" :key="provider.id" class="rounded-2 border border-neutral-200 p-3">
+                <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_8rem_8rem_auto]">
+                  <FormField label="名称" compact>
+                    <BaseInput v-model="provider.label" size="sm" placeholder="OpenAI / Groq / 自建网关" />
+                  </FormField>
+                  <FormField label="优先级" compact>
+                    <BaseInput v-model="provider.priority" type="number" size="sm" :min="1" />
+                  </FormField>
+                  <FormField label="延迟 ms" compact>
+                    <BaseInput v-model="provider.delayMs" type="number" size="sm" :min="0" :step="50" />
+                  </FormField>
+                  <div class="flex items-end gap-2 pb-0.5">
+                    <BaseCheckbox v-model="provider.enabled" label="启用" />
+                    <BaseButton variant="danger" size="sm" :disabled="lexiSettings.ai.providers.length <= 1" @click="removeProvider(provider.id)">
+                      删除
+                    </BaseButton>
                   </div>
-                  <button class="border-0 bg-transparent text-12px text-neutral-500 cursor-pointer hover:text-red-600" @click="removeForumDigestCacheEntry(entry.key)">
-                    删除
-                  </button>
                 </div>
-                <p class="mt-2 break-words text-12px leading-5 text-neutral-700">
-                  {{ formatForumDigestSummary(entry.digest) }}
+                <div class="mt-3 grid gap-3 lg:grid-cols-3">
+                  <FormField label="Endpoint" compact>
+                    <BaseInput :model-value="provider.endpoint" size="sm" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(provider, $event.target as HTMLInputElement)" />
+                  </FormField>
+                  <FormField label="Model" compact>
+                    <BaseInput v-model="provider.model" size="sm" placeholder="gpt-4.1-mini" />
+                  </FormField>
+                  <FormField label="API Key" compact>
+                    <BaseInput v-model="provider.apiKey" type="password" size="sm" placeholder="Bearer token" />
+                  </FormField>
+                </div>
+              </article>
+            </div>
+
+            <CollapsibleSection title="兼容旧版全局连接 / 场景覆盖" class="mt-4">
+              <p class="text-12px leading-5 text-neutral-500">
+                这些字段可作为 Provider 和场景的补全值。一般建议直接把 Endpoint / Model / API Key 写在 Provider 中。
+              </p>
+              <div class="mt-3 grid gap-3 lg:grid-cols-3">
+                <FormField label="Endpoint" compact>
+                  <BaseInput :model-value="lexiSettings.ai.global.endpoint" size="sm" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(lexiSettings.ai.global, $event.target as HTMLInputElement)" />
+                </FormField>
+                <FormField label="Model" compact>
+                  <BaseInput v-model="lexiSettings.ai.global.model" size="sm" placeholder="gpt-4.1-mini" />
+                </FormField>
+                <FormField label="API Key" compact>
+                  <BaseInput v-model="lexiSettings.ai.global.apiKey" type="password" size="sm" placeholder="Bearer token" />
+                </FormField>
+              </div>
+            </CollapsibleSection>
+
+            <div v-if="lexiSettings.ai.approvedHttpEndpoints.length" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3">
+              <div class="text-12px font-600 text-amber-900">
+                已确认的 HTTP Endpoint
+              </div>
+              <p class="mt-1 text-11px leading-4 text-amber-800">
+                HTTP 不加密。许可只对完整地址生效，地址变化后会重新确认。
+              </p>
+              <div class="mt-2 space-y-2">
+                <div v-for="endpoint in lexiSettings.ai.approvedHttpEndpoints" :key="endpoint" class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2">
+                  <code class="min-w-0 break-all text-11px text-neutral-700">{{ endpoint }}</code>
+                  <BaseButton variant="danger" size="sm" :aria-label="`撤销 HTTP Endpoint ${endpoint}`" @click="revokeApprovedHttpEndpoint(endpoint)">
+                    撤销
+                  </BaseButton>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-4 grid gap-4 lg:grid-cols-3">
+            <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
+              <SettingToggle v-model="lexiSettings.ai[scene].enabled" :label="featureLabels[scene]" />
+              <div class="mt-4 rounded-2 bg-neutral-50 p-3">
+                <div class="text-12px font-500 text-neutral-600">
+                  绑定 Provider
+                </div>
+                <p class="mt-1 text-11px leading-4 text-neutral-500">
+                  不勾选时使用全部启用 Provider；勾选后只在所选 Provider 间竞速。
                 </p>
-                <a :href="entry.url" target="_blank" rel="noreferrer" class="mt-2 inline-block break-all text-12px text-neutral-500 underline underline-offset-2 hover:text-neutral-950">
-                  {{ entry.url }}
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <BaseCheckbox
+                    v-for="provider in lexiSettings.ai.providers"
+                    :key="`${scene}-${provider.id}`"
+                    class="provider-chip"
+                    :model-value="providerSelected(scene, provider.id)"
+                    :label="provider.label || provider.id"
+                    compact
+                    @update:model-value="toggleSceneProvider(scene, provider.id, $event)"
+                  />
+                </div>
+              </div>
+              <FormField class="mt-4" label="Endpoint 覆盖" compact>
+                <BaseInput :model-value="lexiSettings.ai[scene].endpoint" size="sm" placeholder="留空继承 Provider / 全局" @change="confirmHttpEndpoint(lexiSettings.ai[scene], $event.target as HTMLInputElement)" />
+              </FormField>
+              <FormField class="mt-3" label="Model 覆盖" compact>
+                <BaseInput v-model="lexiSettings.ai[scene].model" size="sm" placeholder="留空继承全局" />
+              </FormField>
+              <FormField class="mt-3" label="API Key 覆盖" compact>
+                <BaseInput v-model="lexiSettings.ai[scene].apiKey" type="password" size="sm" placeholder="留空继承全局" />
+              </FormField>
+              <div class="mt-3 block">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-12px font-500 text-neutral-600">提示词</span>
+                  <BaseButton variant="ghost" size="sm" @click="resetScenePrompt(scene)">
+                    <template #icon>
+                      <span class="i-lucide-rotate-ccw" aria-hidden="true" />
+                    </template>
+                    重置提示词
+                  </BaseButton>
+                </div>
+                <BaseTextarea v-model="lexiSettings.ai[scene].prompt" class="mt-2 min-h-28" />
+              </div>
+              <div class="mt-4 flex items-center gap-3">
+                <BaseButton :loading="testingScenes[scene]" loading-label="正在测试连接" @click="testScene(scene)">
+                  测试连接
+                </BaseButton>
+                <span v-if="sceneTestResults[scene]" class="truncate text-12px" :class="sceneTestDetails[scene]?.ok ? 'text-emerald-600' : 'text-red-600'">
+                  {{ sceneTestResults[scene] }}
+                </span>
+              </div>
+              <div v-if="sceneTestDetails[scene]" class="mt-3 space-y-2">
+                <div class="text-12px font-600 text-neutral-700">
+                  请求内容
+                </div>
+                <pre class="max-h-44 overflow-auto rounded-2 bg-neutral-950 p-3 text-11px leading-4 text-neutral-100">{{ formatTestRequest(sceneTestDetails[scene]!) }}</pre>
+                <div class="text-12px font-600 text-neutral-700">
+                  返回内容
+                </div>
+                <pre class="max-h-36 overflow-auto rounded-2 bg-neutral-50 p-3 text-11px leading-4 text-neutral-700">{{ sceneTestDetails[scene]!.response || '空响应' }}</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-else-if="activeTab === 'diagnostics'" id="options-panel-diagnostics" role="tabpanel" aria-labelledby="options-tab-diagnostics" class="options-panel grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+            <div class="flex shrink-0 items-center justify-between gap-3">
+              <h2 class="text-16px font-600">
+                最近 AI 调用
+              </h2>
+              <span class="text-12px text-neutral-500">{{ aiCallLogs.length }} 条</span>
+            </div>
+            <div class="mt-4 shrink-0 border-b border-neutral-100 pb-3">
+              <TrendBars :items="aiTrend" :height="160" />
+            </div>
+            <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-3">
+              <div class="rounded-2 bg-neutral-50 px-3 py-2">
+                <div class="text-neutral-500">
+                  Tokens
+                </div>
+                <div class="mt-1 text-16px font-700">
+                  {{ totalAiTokens }}
+                </div>
+              </div>
+              <div v-for="item in aiSceneTokenStats" :key="item.scene" class="rounded-2 bg-neutral-50 px-3 py-2">
+                <div class="text-neutral-500">
+                  {{ featureLabels[item.scene] }}
+                </div>
+                <div class="mt-1 font-700">
+                  {{ item.tokens }} · {{ item.calls }} 次
+                </div>
+              </div>
+            </div>
+            <div class="mt-3 shrink-0 border-b border-neutral-100 pb-3">
+              <TrendBars :items="aiTokenTrend" color="bg-blue-600" :height="96" />
+            </div>
+            <div class="mt-3 grid shrink-0 gap-2 border-b border-neutral-100 pb-3 text-12px lg:grid-cols-2">
+              <div class="rounded-2 bg-neutral-50 px-3 py-2">
+                <div class="text-neutral-500">
+                  本地存储估算
+                </div>
+                <div class="mt-1 text-16px font-700">
+                  {{ formatBytes(storageStats.total) }}
+                </div>
+              </div>
+              <div class="rounded-2 bg-neutral-50 px-3 py-2">
+                <div class="text-neutral-500">
+                  词库占用
+                </div>
+                <div class="mt-1 text-16px font-700">
+                  {{ formatBytes(storageStats.vocabulary) }}
+                </div>
+              </div>
+              <div v-for="item in storageStats.others" :key="item.label" class="rounded-2 bg-neutral-50 px-3 py-2">
+                <div class="text-neutral-500">
+                  {{ item.label }}
+                </div>
+                <div class="mt-1 font-700">
+                  {{ formatBytes(item.bytes) }}
+                </div>
+              </div>
+            </div>
+            <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              <div v-for="log in aiCallLogs" :key="log.id" class="rounded-2 border border-neutral-200 px-3 py-2">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-13px font-600">{{ featureLabels[log.scene] }}</span>
+                  <span class="text-12px" :class="log.ok ? 'text-emerald-600' : 'text-red-600'">{{ log.ok ? '成功' : '失败' }}</span>
+                </div>
+                <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                  {{ formatTime(log.createdAt) }} · {{ log.model || '未设置模型' }} · {{ log.streamed ? '流式' : '普通' }} · {{ log.authSent ? `Key ${log.keyHint || '已发送'}` : '未发送 Key' }} · {{ log.durationMs }}ms · {{ log.totalTokens ?? 0 }} tokens{{ log.tokenEstimate ? ' 估算' : '' }}
+                </div>
+                <div v-if="log.error" class="mt-1 break-words text-12px leading-5 text-red-600">
+                  {{ log.error }}
+                </div>
+              </div>
+              <p v-if="!aiCallLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                暂无 AI 调用记录。
+              </p>
+            </div>
+          </div>
+
+          <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+            <div class="flex shrink-0 items-center justify-between gap-3">
+              <h2 class="text-16px font-600">
+                最近访问网页
+              </h2>
+              <span class="text-12px text-neutral-500">{{ pageVisitLogs.length }} 条</span>
+            </div>
+            <div class="mt-4 shrink-0 border-b border-neutral-100 pb-3">
+              <TrendBars :items="visitTrend" :height="160" />
+            </div>
+            <div class="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              <div v-for="visit in pageVisitLogs" :key="visit.id" class="rounded-2 border border-neutral-200 px-3 py-2">
+                <div class="break-words text-13px font-600 leading-5">
+                  {{ visit.title || visit.host }}
+                </div>
+                <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                  {{ formatTime(visit.createdAt) }} · {{ visit.host }} · 替换 {{ visit.replacements }}
+                </div>
+              </div>
+              <p v-if="!pageVisitLogs.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                暂无网页访问记录。
+              </p>
+            </div>
+          </div>
+
+          <div class="grid gap-5 lg:col-span-2 lg:grid-cols-2">
+            <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+              <div class="flex shrink-0 items-start justify-between gap-3">
+                <div>
+                  <h2 class="text-16px font-600">
+                    GitHub 速读缓存
+                  </h2>
+                  <p class="mt-1 text-12px text-neutral-500">
+                    仓库级缓存 {{ githubDigestStats.total }} 个，Quick {{ githubDigestStats.quick }} 个，Detail {{ githubDigestStats.detail }} 个，占用 {{ formatBytes(githubDigestStats.bytes) }}。
+                  </p>
+                </div>
+                <BaseButton size="sm" @click="clearGitHubDigestCache">
+                  清空缓存
+                </BaseButton>
+              </div>
+              <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                <div v-for="entry in githubDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="break-words text-14px font-700">
+                        {{ entry.repo || entry.key }}
+                      </div>
+                      <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                        {{ entry.languages?.join(' · ') || '暂无语言信息' }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }}
+                      </div>
+                    </div>
+                    <BaseButton variant="danger" size="sm" @click="removeGitHubDigestCacheEntry(entry.key)">
+                      删除
+                    </BaseButton>
+                  </div>
+                  <div class="mt-2 flex flex-wrap gap-2 text-11px">
+                    <span class="rounded-full px-2 py-1" :class="entry.quickDigest ? 'bg-emerald-50 text-emerald-700' : 'bg-neutral-100 text-neutral-500'">Quick {{ entry.quickDigest ? '已缓存' : '无' }}</span>
+                    <span class="rounded-full px-2 py-1" :class="entry.digest ? 'bg-blue-50 text-blue-700' : 'bg-neutral-100 text-neutral-500'">Detail {{ entry.digest ? '已缓存' : '无' }}</span>
+                    <span v-for="topic in entry.topics?.slice(0, 5)" :key="`${entry.key}-${topic}`" class="rounded-full bg-neutral-100 px-2 py-1 text-neutral-600">{{ topic }}</span>
+                  </div>
+                  <p v-if="entry.quickDigest?.oneLine" class="mt-2 break-words text-12px leading-5 text-neutral-700">
+                    {{ entry.quickDigest.oneLine }}
+                  </p>
+                  <p v-if="entry.digest?.oneLine" class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                    详细：{{ entry.digest.oneLine }}
+                  </p>
+                </div>
+                <p v-if="!githubDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                  暂无 GitHub 速读缓存。打开 GitHub 仓库页并生成速读后会出现在这里。
+                </p>
+              </div>
+            </div>
+
+            <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+              <div class="flex shrink-0 items-start justify-between gap-3">
+                <div>
+                  <h2 class="text-16px font-600">
+                    论坛 Lexi 速读缓存
+                  </h2>
+                  <p class="mt-1 text-12px text-neutral-500">
+                    帖子级缓存 {{ forumDigestStats.total }} 个，占用 {{ formatBytes(forumDigestStats.bytes) }}。
+                  </p>
+                </div>
+                <BaseButton size="sm" @click="clearForumDigestCache">
+                  清空缓存
+                </BaseButton>
+              </div>
+              <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                <div v-for="entry in forumDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="break-words text-14px font-700">
+                        {{ entry.title || entry.key }}
+                      </div>
+                      <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                        {{ entry.host }} · {{ formatDateTime(entry.updatedAt) }} · {{ entry.sourceHash }} · 历史 {{ getForumDigestHistoryCount(entry) }}
+                      </div>
+                    </div>
+                    <BaseButton variant="danger" size="sm" @click="removeForumDigestCacheEntry(entry.key)">
+                      删除
+                    </BaseButton>
+                  </div>
+                  <p class="mt-2 break-words text-12px leading-5 text-neutral-700">
+                    {{ formatForumDigestSummary(entry.digest) }}
+                  </p>
+                  <a :href="entry.url" target="_blank" rel="noreferrer" class="mt-2 inline-block break-all text-12px text-neutral-500 underline underline-offset-2 hover:text-neutral-950">
+                    {{ entry.url }}
+                  </a>
+                </div>
+                <p v-if="!forumDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                  暂无论坛速读缓存。打开 linux.do、idcflare.com 或 Discourse 帖子后会出现在这里。
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-else id="options-panel-about" role="tabpanel" aria-labelledby="options-tab-about" class="options-panel about-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="about-hero">
+            <Logo class="about-hero__logo" />
+            <div class="about-hero__copy">
+              <div class="about-hero__title">
+                <h2>Lexi</h2>
+                <span>v{{ appVersion }}</span>
+              </div>
+              <p>在你每天阅读的网页里自然积累英文词汇，并通过划词翻译与内容速读降低理解成本。</p>
+              <div class="about-hero__actions">
+                <a class="button-primary" href="https://github.com/talex-touch/touch-xxeng-heart" target="_blank" rel="noreferrer">
+                  <span class="i-lucide-github" aria-hidden="true" />
+                  GitHub
                 </a>
               </div>
-              <p v-if="!forumDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
-                暂无论坛速读缓存。打开 linux.do、idcflare.com 或 Discourse 帖子后会出现在这里。
-              </p>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section v-else id="options-panel-about" role="tabpanel" aria-labelledby="options-tab-about" class="rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-        <h2 class="text-16px font-600">
-          关于 Lexi
-        </h2>
-        <div class="mt-4 space-y-3 text-14px leading-6 text-neutral-700">
-          <p>
-            当前版本：v{{ appVersion }}
-          </p>
-          <p>
-            Lexi 由 TalexDreamSoul 开发。
-          </p>
-          <p>
-            特别感谢 XinYu Wu 101-010-000 / XinRong Liu TomHolland。
-          </p>
-        </div>
-      </section>
-    </div>
+          <dl class="about-facts">
+            <div>
+              <dt>开发者</dt>
+              <dd>TalexDreamSoul</dd>
+            </div>
+            <div>
+              <dt>开源协议</dt>
+              <dd>MIT License</dd>
+            </div>
+            <div>
+              <dt>安装方式</dt>
+              <dd>Chrome / Edge 扩展</dd>
+            </div>
+            <div>
+              <dt>本地存储</dt>
+              <dd>{{ formatBytes(storageStats.total) }} · {{ vocabularyRecords.length }} 词</dd>
+            </div>
+          </dl>
+
+          <div class="about-section">
+            <h3>致谢</h3>
+            <p>感谢参与开发、测试并持续帮助 Lexi 改进的伙伴。</p>
+            <div class="about-people">
+              <div><span>T</span><strong>TalexDreamSoul</strong><small>开发与维护</small></div>
+              <div><span>X</span><strong>XinYu Wu</strong><small>101-010-000</small></div>
+              <div><span>X</span><strong>XinRong Liu</strong><small>TomHolland</small></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
   </main>
 </template>

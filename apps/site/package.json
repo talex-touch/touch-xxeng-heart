@@ -8,7 +8,7 @@
     "build": "nuxt generate",
     "generate": "nuxt generate",
     "preview": "pnpm dlx wrangler pages dev .output/public",
-    "deploy": "pnpm dlx wrangler pages deploy .output/public --project-name=lexi-tagzxia"
+    "deploy": "pnpm dlx wrangler pages deploy .output/public --project-name=lexi-web"
   },
   "devDependencies": {
     "nuxt": "^4.5.1",

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.4 - 2026-08-02
+
+Changes since v0.2.3.
+
+### Fixes
+- align Cloudflare Pages deployment (cbad353)
+
 ## v0.2.3 - 2026-08-02
 
 Changes since v0.2.2.
@@ -85,6 +92,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

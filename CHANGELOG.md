@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.6 - 2026-08-03
+
+Changes since v0.2.5.
+
+### Features
+- add multi-platform content digests (db0e0df)
+
 ## v0.2.5 - 2026-08-03
 
 Changes since v0.2.4.
@@ -99,6 +106,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

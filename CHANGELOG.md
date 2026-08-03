@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.5 - 2026-08-03
+
+Changes since v0.2.4.
+
+### Features
+- improve learning controls and extension packaging (b3c5a5b)
+
 ## v0.2.4 - 2026-08-02
 
 Changes since v0.2.3.
@@ -92,6 +99,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

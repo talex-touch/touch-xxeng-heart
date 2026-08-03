@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { LexiSettings } from './types'
+import type { LexiSettings, SiteSceneRule } from './types'
 import { defaultSettings, mergeSettings } from './defaults'
 
 describe('settings compatibility', () => {
@@ -48,6 +48,35 @@ describe('settings compatibility', () => {
     })
 
     expect(settings.replacement.density).toBe(0.35)
+  })
+
+  it('keeps NSFW content digest disabled for defaults and legacy settings', () => {
+    expect(defaultSettings.contentDigest.allowNsfw).toBe(false)
+    expect(mergeSettings({ contentDigest: undefined }).contentDigest.allowNsfw).toBe(false)
+    expect(mergeSettings({
+      contentDigest: {
+        ...defaultSettings.contentDigest,
+        allowNsfw: true,
+      },
+    }).contentDigest.allowNsfw).toBe(true)
+  })
+
+  it('adds the digest AI scene and enables it in legacy domain rules', () => {
+    const settings = mergeSettings({
+      siteRules: {
+        ...defaultSettings.siteRules,
+        sceneRules: [{
+          domain: 'example.com',
+          replacement: true,
+          selection: true,
+          daily: true,
+          omni: true,
+        } as unknown as SiteSceneRule],
+      },
+    })
+
+    expect(settings.ai.digest).toEqual(defaultSettings.ai.digest)
+    expect(settings.siteRules.sceneRules[0].digest).toBe(true)
   })
 
   it('migrates the old dialog shortcut to the current default', () => {

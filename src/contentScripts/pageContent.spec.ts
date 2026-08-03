@@ -91,6 +91,7 @@ describe('capturePageDocument', () => {
       <main><article>
         <p>这是页面本身的正文内容，应该被抽取出来用于回答问题。</p>
         <div data-lexi-page-translation="true"><p>这是 Lexi 注入的译文，不应该被当成页面正文。</p></div>
+        <aside data-lexi-content-digest="true"><p>这是 Lexi 注入的内容摘要，也不应该再次被抽取。</p></aside>
       </article></main>
     `
     const captured = capturePageDocument()
@@ -98,6 +99,7 @@ describe('capturePageDocument', () => {
 
     expect(allText).toContain('页面本身的正文内容')
     expect(allText).not.toContain('Lexi 注入的译文')
+    expect(allText).not.toContain('Lexi 注入的内容摘要')
   })
 
   it('does not duplicate text from nested block elements', () => {

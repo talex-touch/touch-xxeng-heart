@@ -1,4 +1,4 @@
-export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'omni'
+export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
 
 export interface AiConnectionConfig {
@@ -134,6 +134,7 @@ export interface SiteSceneRule {
   replacement: boolean
   selection: boolean
   daily: boolean
+  digest: boolean
   omni: boolean
 }
 
@@ -188,6 +189,71 @@ export interface UiSettings {
   mediaModifierShortcut: string
   customCss: string
 }
+
+export interface ContentDigestSettings {
+  enabled: boolean
+  autoGenerate: boolean
+  autoDelaySeconds: number
+  allowNsfw: boolean
+  cacheDays: number
+}
+
+export type ContentPlatform = 'reddit' | 'x' | 'youtube' | 'bilibili' | 'xiaohongshu' | 'zhihu'
+export type ContentDocumentType = 'discussion' | 'social-post' | 'video' | 'article'
+export type ContentBlockKind = 'body' | 'reply' | 'transcript' | 'metadata'
+export type ContentCompleteness = 'complete' | 'partial' | 'metadata-only'
+
+export interface ContentBlock {
+  id: string
+  kind: ContentBlockKind
+  text: string
+  author?: string
+  timestamp?: string
+  score?: number
+}
+
+export interface ContentDocument {
+  platform: ContentPlatform
+  contentType: ContentDocumentType
+  canonicalId: string
+  canonicalUrl: string
+  title: string
+  author?: string
+  publishedAt?: string
+  language?: string
+  blocks: ContentBlock[]
+  completeness: ContentCompleteness
+  coverage: string
+  limitations: string[]
+  nsfw: boolean
+  sourceHash: string
+}
+
+export interface ContentDigestResult {
+  oneLine: string
+  summary: string[]
+  keyPoints: string[]
+  viewpoints: string[]
+  actions: string[]
+  terms: string[]
+  coverage: string
+}
+
+export interface ContentDigestCacheEntry {
+  platform: ContentPlatform
+  contentType: ContentDocumentType
+  canonicalId: string
+  canonicalUrl: string
+  title: string
+  digest: ContentDigestResult
+  sourceHash: string
+  templateVersion: number
+  modelFingerprint: string
+  updatedAt: number
+  lastAccessedAt: number
+}
+
+export type ContentDigestCache = Record<string, ContentDigestCacheEntry>
 
 export interface GitHubDigestSettings {
   enabled: boolean
@@ -274,6 +340,7 @@ export interface LexiSettings {
   study: StudySettings
   history: HistorySettings
   ui: UiSettings
+  contentDigest: ContentDigestSettings
   githubDigest: GitHubDigestSettings
   forumDigest: ForumDigestSettings
   ai: AiSettings

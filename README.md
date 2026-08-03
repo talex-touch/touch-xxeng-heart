@@ -13,7 +13,8 @@ Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变�
 - 页面问答：索引正文结构，按问题检索相关段落并支持带来源的多轮追问。
 - 词汇进阶：记录出现次数、手动记录次数、复盘时间，并随学习量提升有效难度。
 - 每日推荐：侧边栏提供 Lexical 学习空间、专业术语和待复盘词汇。
-- 场景化速读：为 GitHub 仓库和 Discourse 主题生成可缓存的快速摘要。
+- 场景化速读：为 GitHub 仓库、Discourse 主题以及 Reddit、X、YouTube、Bilibili、小红书、知乎生成带读取范围的可缓存摘要。
+- 敏感内容保护：NSFW 内容速读默认关闭；关闭时不会提取、缓存或发送检测到的内容。
 - 媒体工具：支持媒体下载、AI Omni 图片 Prompt 提取和跨 frame 视频倍速。
 - 场景化 AI：替换、划词、每日推荐、AI Omni 分别支持独立 Provider；HTTP Endpoint 需逐地址确认。
 - 站点配置：支持全部网页、白名单、黑名单、特殊站点策略和总开关。
@@ -90,6 +91,8 @@ pnpm run package:all      # 顺序生成全部平台制品
 ```text
 brand/favicon-kit/                  品牌母版、平台导出与使用规范
 src/contentScripts/pageEnhancer.ts  顶层页面替换、翻译、对话和媒体增强编排
+src/contentScripts/contentAdapters.ts Reddit、X、视频与中文内容平台读取适配器
+src/contentScripts/contentDigest.ts  多平台摘要生命周期、缓存协调与通用卡片
 src/contentScripts/frame.ts         子 frame 轻量倍速入口
 src/contentScripts/ui/              对话 Markdown、倍速、定位和折叠等独立 UI 模块
 src/logic/                         配置、术语库、AI 请求、本地存储和学习进阶算法
@@ -146,6 +149,25 @@ Lexi 会向配置的 endpoint 发送 JSON POST 请求，并在 Header 中以 `Au
   }
 }
 ```
+
+## 内容速读协议
+
+多平台内容速读使用独立的“内容速读”AI 场景。页面正文、评论和字幕都按不可信数据处理，只发送当前页面已公开、已加载且符合设置的片段。NSFW 开关默认关闭。
+
+摘要请求期望返回：
+
+```json
+{
+  "oneLine": "",
+  "summary": [""],
+  "keyPoints": [""],
+  "viewpoints": [""],
+  "actions": [""],
+  "terms": [""]
+}
+```
+
+读取范围由客户端生成并展示，不接受模型覆盖。缓存只保存摘要、内容哈希和最少元数据，不保存正文、评论全文或字幕。
 
 ## 贡献
 

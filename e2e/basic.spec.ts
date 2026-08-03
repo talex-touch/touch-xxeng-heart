@@ -28,8 +28,11 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
 
   await expect(page.locator('.options-header')).toContainText('Lexi')
   await expect(page.getByRole('heading', { name: '网页启用范围' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '多平台内容速读' })).toBeVisible()
+  await expect(page.getByRole('switch', { name: '允许 NSFW 内容速读' })).toHaveAttribute('aria-checked', 'false')
   await page.getByRole('tab', { name: 'AI 场景' }).click()
   await expect(page.getByRole('heading', { name: 'AI 场景配置' })).toBeVisible()
+  await expect(page.getByRole('switch', { name: '内容速读' })).toBeVisible()
 })
 
 test('replacement strength maps levels and density tiers to plain language', async ({ page, extensionId }) => {

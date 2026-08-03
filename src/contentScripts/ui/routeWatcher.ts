@@ -7,6 +7,8 @@ export interface RouteWatcherOptions {
   refresh: () => Promise<void>
   /** Called when the extension context dies, so the caller can tear its UI down. */
   onDispose: () => void
+  /** Skip mutation refreshes while the caller has no relevant page mounted. */
+  shouldRefreshMutation?: () => boolean
   /** Debounce for DOM-mutation triggered refreshes. */
   mutationDelayMs?: number
   /** Delay after a URL change, giving the SPA time to swap the view in. */
@@ -87,6 +89,9 @@ export function startRouteWatcher(options: RouteWatcherOptions): RouteWatcher {
   document.addEventListener('visibilitychange', onVisibilityChange)
 
   observer = new MutationObserver(() => {
+    if (options.shouldRefreshMutation && !options.shouldRefreshMutation())
+      return
+
     window.clearTimeout(mutationTimer)
     mutationTimer = window.setTimeout(() => run('mutation refresh'), mutationDelayMs)
   })

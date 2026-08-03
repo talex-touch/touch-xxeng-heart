@@ -3,9 +3,9 @@ import { onMessage } from 'webext-bridge/background'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 import { appendBoundedLog } from '~/logic/analyticsQueue'
 import { createSerializedTaskQueue } from '~/logic/asyncQueue'
-import { pruneDigestCache } from '~/logic/digestCache'
+import { mergeDigestCacheEntry, pruneDigestCacheBySize } from '~/logic/digestCache'
 import { readJsonValue, toStoredJson } from '~/logic/storageJson'
-import { aiCallLogsStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationsStorageKey, pageVisitLogsStorageKey } from '~/logic/storageKeys'
+import { aiCallLogsStorageKey, contentDigestLeaseStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationsStorageKey, pageVisitLogsStorageKey } from '~/logic/storageKeys'
 import type { PageTranslationCache } from '~/logic/types'
 import type { AnalyticsLogPayload } from '~/logic/analytics'
 
@@ -155,7 +155,7 @@ listenRuntimeMessage<{ key?: unknown, cache?: unknown }>('lexi-write-page-transl
   })
 })
 
-const digestStorageKeys = new Set([githubDigestStorageKey, forumDigestStorageKey])
+const digestStorageKeys = new Set([githubDigestStorageKey, forumDigestStorageKey, contentDigestStorageKey])
 let digestCacheWrite: Promise<void> = Promise.resolve()
 
 function readDigestCache(value: unknown): DigestCache {
@@ -172,31 +172,102 @@ function enqueueDigestCacheWrite<T>(operation: () => Promise<T>) {
 }
 
 onMessage('lexi-upsert-digest-cache', async ({ data }) => {
-  const payload = data as { storageKey?: string, cacheKey?: string, entry?: string, maxEntries?: number }
+  const payload = data as { storageKey?: string, cacheKey?: string, entry?: string, maxEntries?: number, maxBytes?: number }
   const { storageKey, cacheKey } = payload
   const parsed = readJsonValue<DigestCache[string] | undefined>(payload.entry, undefined)
 
-  if (!storageKey || !digestStorageKeys.has(storageKey) || !cacheKey || !parsed?.sourceHash || !Number.isFinite(parsed.updatedAt))
+  if (!storageKey
+    || !digestStorageKeys.has(storageKey)
+    || !cacheKey
+    || cacheKey.length > 4096
+    || !payload.entry
+    || payload.entry.length > 128 * 1024
+    || !parsed?.sourceHash
+    || !Number.isFinite(parsed.updatedAt)) {
     return { ok: false, error: '摘要缓存更新参数无效' }
+  }
 
-  // Bound to a const so the narrowing survives into the async closure below.
   const entry = parsed
-  // A non-numeric maxEntries would otherwise reach pruneDigestCache as NaN.
   const requested = Number(payload.maxEntries)
   const maxEntries = Number.isFinite(requested) ? Math.max(1, Math.floor(requested)) : 80
+  const requestedBytes = Number(payload.maxBytes)
+  const maxBytes = Number.isFinite(requestedBytes) ? Math.max(1024, Math.floor(requestedBytes)) : 8 * 1024 * 1024
 
   return enqueueDigestCacheWrite(async () => {
     try {
       const stored = await browser.storage.local.get(storageKey)
       const cache = readDigestCache(stored[storageKey])
-      cache[cacheKey] = entry
-      await browser.storage.local.set({ [storageKey]: JSON.stringify(pruneDigestCache(cache, maxEntries)) })
+      cache[cacheKey] = mergeDigestCacheEntry(cache[cacheKey], entry)
+      await browser.storage.local.set({
+        [storageKey]: JSON.stringify(pruneDigestCacheBySize(cache, maxEntries, maxBytes)),
+      })
       return { ok: true }
     }
     catch (error) {
-      // Quota errors previously rejected opaquely, leaving the sender with no reason.
       console.warn('[Lexi] digest cache write failed', error)
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
+  })
+})
+
+interface DigestLease {
+  owner: string
+  expiresAt: number
+}
+
+type DigestLeases = Record<string, DigestLease>
+
+const digestLeaseQueue = createSerializedTaskQueue()
+
+function readDigestLeases(value: unknown, now: number) {
+  const parsed = readJsonValue<DigestLeases>(value, {})
+  return Object.fromEntries(Object.entries(parsed).filter(([, lease]) =>
+    typeof lease?.owner === 'string' && Number.isFinite(lease.expiresAt) && lease.expiresAt > now,
+  )) as DigestLeases
+}
+
+listenRuntimeMessage<{ key?: unknown, owner?: unknown, leaseMs?: unknown }>('lexi-acquire-digest-lease', (payload) => {
+  const key = typeof payload?.key === 'string' ? payload.key : ''
+  const owner = typeof payload?.owner === 'string' ? payload.owner : ''
+  const leaseMs = Math.min(120_000, Math.max(5_000, Number(payload?.leaseMs) || 45_000))
+  if (!/^[a-z0-9-]{8,80}$/i.test(key) || !/^[a-z0-9-]{8,80}$/i.test(owner))
+    return { ok: false, error: '摘要请求锁参数无效' }
+
+  return digestLeaseQueue(async () => {
+    const now = Date.now()
+    const stored = await browser.storage.local.get(contentDigestLeaseStorageKey)
+    const leases = readDigestLeases(stored[contentDigestLeaseStorageKey], now)
+    const current = leases[key]
+    if (current && current.owner !== owner) {
+      return {
+        ok: false,
+        busy: true,
+        retryAfterMs: Math.max(500, current.expiresAt - now),
+      }
+    }
+
+    leases[key] = { owner, expiresAt: now + leaseMs }
+    await browser.storage.local.set({ [contentDigestLeaseStorageKey]: JSON.stringify(leases) })
+    return { ok: true, expiresAt: leases[key].expiresAt }
+  })
+})
+
+listenRuntimeMessage<{ key?: unknown, owner?: unknown }>('lexi-release-digest-lease', (payload) => {
+  const key = typeof payload?.key === 'string' ? payload.key : ''
+  const owner = typeof payload?.owner === 'string' ? payload.owner : ''
+  if (!key || !owner)
+    return { ok: false }
+
+  return digestLeaseQueue(async () => {
+    const stored = await browser.storage.local.get(contentDigestLeaseStorageKey)
+    const leases = readDigestLeases(stored[contentDigestLeaseStorageKey], Date.now())
+    if (leases[key]?.owner === owner)
+      delete leases[key]
+
+    if (Object.keys(leases).length)
+      await browser.storage.local.set({ [contentDigestLeaseStorageKey]: JSON.stringify(leases) })
+    else
+      await browser.storage.local.remove(contentDigestLeaseStorageKey)
+    return { ok: true }
   })
 })

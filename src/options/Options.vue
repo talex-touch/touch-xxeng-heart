@@ -4,7 +4,7 @@ import { computed, ref, watchEffect } from 'vue'
 import { defaultSettings, featureLabels, promptDefaults } from '~/logic/defaults'
 import { testAiScene } from '~/logic/aiClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
-import { aiCallLogs, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
+import { aiCallLogs, contentDigestCache, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
 import { estimateStorageBytes, formatBytes, formatDateTime, formatTime } from '~/logic/format'
 import { normalizeForumCacheHistory } from '~/logic/forumDigestCache'
@@ -15,7 +15,7 @@ import type { AiConnectionConfig, AiProviderConfig, AiTestResult, FeatureScene, 
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
-const scenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'omni']
+const scenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'digest', 'omni']
 const tabs: Array<{ id: OptionsTab, label: string, icon: string, description: string }> = [
   { id: 'settings', label: '基础设置', icon: 'i-lucide-sliders-horizontal', description: '控制 Lexi 在哪些网页生效、替换多少词，以及划词与翻译的行为。' },
   { id: 'special', label: '特殊场景', icon: 'i-lucide-globe-2', description: '为信息流、论坛与学习网站配置更稳妥的独立规则。' },
@@ -63,6 +63,13 @@ const aiSceneTokenStats = computed(() => scenes.map(scene => ({
     .filter(log => log.scene === scene)
     .reduce((sum, log) => sum + (log.totalTokens ?? 0), 0),
 })))
+const contentDigestEntries = computed(() => Object.entries(contentDigestCache.value)
+  .map(([key, entry]) => ({ key, ...entry }))
+  .sort((a, b) => b.updatedAt - a.updatedAt))
+const contentDigestStats = computed(() => ({
+  total: contentDigestEntries.value.length,
+  bytes: estimateStorageBytes(contentDigestCache.value),
+}))
 const githubDigestEntries = computed(() => Object.entries(githubDigestCache.value)
   .map(([key, entry]) => ({ key, ...entry }))
   .sort((a, b) => b.updatedAt - a.updatedAt))
@@ -106,6 +113,9 @@ const storageStats = computed(() => {
     { label: 'AI 日志', bytes: estimateStorageBytes(aiCallLogs.value) },
     { label: '访问日志', bytes: estimateStorageBytes(pageVisitLogs.value) },
     { label: '设置', bytes: estimateStorageBytes(lexiSettings.value) },
+    { label: '多平台摘要缓存', bytes: estimateStorageBytes(contentDigestCache.value) },
+    { label: 'GitHub 摘要缓存', bytes: estimateStorageBytes(githubDigestCache.value) },
+    { label: '论坛摘要缓存', bytes: estimateStorageBytes(forumDigestCache.value) },
   ]
 
   return {
@@ -276,6 +286,16 @@ function onOptionsTabKeydown(event: KeyboardEvent, index: number) {
   requestAnimationFrame(() => document.getElementById(`options-tab-${tab.id}`)?.focus())
 }
 
+function clearContentDigestCache() {
+  contentDigestCache.value = {}
+}
+
+function removeContentDigestCacheEntry(key: string) {
+  const next = { ...contentDigestCache.value }
+  delete next[key]
+  contentDigestCache.value = next
+}
+
 function clearGitHubDigestCache() {
   githubDigestCache.value = {}
 }
@@ -402,6 +422,7 @@ function addSceneRule() {
     replacement: true,
     selection: true,
     daily: true,
+    digest: true,
     omni: true,
   }
   lexiSettings.value.siteRules.sceneRules = [rule, ...lexiSettings.value.siteRules.sceneRules]
@@ -758,11 +779,35 @@ function resetSettings() {
             <header class="settings-card__head">
               <div>
                 <h2>内容速读</h2>
-                <p>在 GitHub 仓库页与论坛帖子上生成摘要，统一使用“每日推荐”AI 场景配置。</p>
+                <p>为主流内容平台、GitHub 仓库和论坛帖子生成带读取范围的结构化摘要。</p>
               </div>
             </header>
 
             <div class="settings-stack">
+              <div class="settings-subcard">
+                <h3>多平台内容速读</h3>
+                <p>支持 Reddit、X、YouTube、Bilibili、小红书和知乎；只总结页面已公开、已加载的文字或字幕。使用前需在“AI 场景”中显式启用“内容速读”。</p>
+                <div class="settings-stack settings-stack--tight">
+                  <SettingToggle v-model="lexiSettings.contentDigest.enabled" label="显示多平台速读卡片" />
+                  <SettingToggle v-model="lexiSettings.contentDigest.autoGenerate" label="停留后自动生成摘要" />
+                  <SettingToggle
+                    v-model="lexiSettings.contentDigest.allowNsfw"
+                    label="允许 NSFW 内容速读"
+                    hint="默认关闭；关闭时不会提取、缓存或发送检测到的 NSFW 内容。"
+                  />
+                  <RangeControl
+                    v-model="lexiSettings.contentDigest.autoDelaySeconds"
+                    label="自动生成延迟"
+                    :display-value="`${lexiSettings.contentDigest.autoDelaySeconds} 秒`"
+                    :min="1"
+                    :max="30"
+                  />
+                  <FormField label="最长缓存天数" hint="动态帖子会使用更短的平台级缓存时间。">
+                    <BaseInput v-model="lexiSettings.contentDigest.cacheDays" type="number" :min="1" :max="60" />
+                  </FormField>
+                </div>
+              </div>
+
               <div class="settings-subcard">
                 <h3>GitHub Digest</h3>
                 <p>先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。</p>
@@ -1284,7 +1329,52 @@ function resetSettings() {
             </div>
           </div>
 
-          <div class="grid gap-5 lg:col-span-2 lg:grid-cols-2">
+          <div class="grid gap-5 lg:col-span-2 lg:grid-cols-2 xl:grid-cols-3">
+            <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+              <div class="flex shrink-0 items-start justify-between gap-3">
+                <div>
+                  <h2 class="text-16px font-600">
+                    多平台速读缓存
+                  </h2>
+                  <p class="mt-1 text-12px text-neutral-500">
+                    内容级缓存 {{ contentDigestStats.total }} 个，占用 {{ formatBytes(contentDigestStats.bytes) }}，软上限 5 MB。
+                  </p>
+                </div>
+                <BaseButton size="sm" @click="clearContentDigestCache">
+                  清空缓存
+                </BaseButton>
+              </div>
+              <div class="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                <div v-for="entry in contentDigestEntries" :key="entry.key" class="rounded-2 border border-neutral-200 px-3 py-3">
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="break-words text-14px font-700">
+                        {{ entry.title || entry.key }}
+                      </div>
+                      <div class="mt-1 break-words text-12px leading-5 text-neutral-500">
+                        {{ entry.platform }} · {{ entry.contentType }} · {{ formatDateTime(entry.updatedAt) }}
+                      </div>
+                    </div>
+                    <BaseButton variant="danger" size="sm" @click="removeContentDigestCacheEntry(entry.key)">
+                      删除
+                    </BaseButton>
+                  </div>
+                  <p class="mt-2 break-words text-12px leading-5 text-neutral-700">
+                    {{ entry.digest.oneLine }}
+                  </p>
+                  <p class="mt-1 break-words text-11px leading-5 text-neutral-500">
+                    {{ entry.digest.coverage }}
+                  </p>
+                  <a :href="entry.canonicalUrl" target="_blank" rel="noreferrer" class="mt-2 inline-block break-all text-12px text-neutral-500 underline underline-offset-2 hover:text-neutral-950">
+                    {{ entry.canonicalUrl }}
+                  </a>
+                </div>
+                <p v-if="!contentDigestEntries.length" class="rounded-2 border border-neutral-200 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+                  暂无多平台速读缓存。
+                </p>
+              </div>
+            </div>
+
             <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
               <div class="flex shrink-0 items-start justify-between gap-3">
                 <div>

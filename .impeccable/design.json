@@ -1,0 +1,227 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-03T09:28:04Z",
+  "title": "Design System: Lexi / 理析",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "清醒蓝",
+        "canonical": "#2f6fed",
+        "tonalRamp": ["#0c2452", "#153b82", "#1e52b2", "#2f6fed", "#668ff2", "#9bb4f7", "#cbd9fb", "#f2f6ff"]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "深清醒蓝",
+        "canonical": "#255fcf",
+        "tonalRamp": ["#0a204a", "#123675", "#1a4ca3", "#255fcf", "#5d84dd", "#91a9e9", "#c6d2f5", "#f1f4fc"]
+      },
+      "primary-soft": {
+        "role": "primary",
+        "displayName": "蓝雾底色",
+        "canonical": "#eaf1fe",
+        "tonalRamp": ["#12264d", "#28467c", "#4a6da8", "#7595cf", "#a4b9e5", "#c9d6f2", "#eaf1fe", "#f7f9ff"]
+      },
+      "canvas": {
+        "role": "neutral",
+        "displayName": "雾灰画布",
+        "canonical": "#f4f6f8",
+        "tonalRamp": ["#202326", "#3d4247", "#626970", "#899198", "#b0b7bd", "#d2d7db", "#e8ebee", "#f4f6f8"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "清晰白面",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#242424", "#464646", "#6c6c6c", "#949494", "#bcbcbc", "#dddddd", "#f1f1f1", "#ffffff"]
+      },
+      "surface-subtle": {
+        "role": "neutral",
+        "displayName": "浅雾分组",
+        "canonical": "#f5f7fa",
+        "tonalRamp": ["#202326", "#3e4248", "#626970", "#8a9199", "#b2b8bf", "#d3d8de", "#e9edf1", "#f5f7fa"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "墨黑正文",
+        "canonical": "#171a20",
+        "tonalRamp": ["#171a20", "#30343c", "#535963", "#7a818b", "#a3a9b1", "#c8ccd1", "#e5e7ea", "#f7f8f9"]
+      },
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "石墨次文",
+        "canonical": "#5a6270",
+        "tonalRamp": ["#191d23", "#303641", "#5a6270", "#7b8492", "#a1a8b2", "#c3c8ce", "#e0e3e7", "#f5f6f7"]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "可读灰",
+        "canonical": "#697384",
+        "tonalRamp": ["#1c2027", "#39414d", "#697384", "#8993a1", "#aab2bd", "#cbd0d6", "#e5e8eb", "#f7f8f9"]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "雾线",
+        "canonical": "#e7e9ee",
+        "tonalRamp": ["#22252b", "#43474f", "#686e78", "#9197a0", "#b9bec5", "#d5d8dd", "#e7e9ee", "#f8f9fa"]
+      },
+      "control-border": {
+        "role": "neutral",
+        "displayName": "控件线",
+        "canonical": "#d4d9e2",
+        "tonalRamp": ["#20242b", "#414752", "#666f7c", "#8f98a5", "#b5bdc8", "#d4d9e2", "#e8ebef", "#f8f9fa"]
+      },
+      "control-border-hover": {
+        "role": "neutral",
+        "displayName": "控件线悬停",
+        "canonical": "#aeb6c3",
+        "tonalRamp": ["#1c2128", "#39414c", "#5d6774", "#858f9c", "#aeb6c3", "#cbd0d7", "#e3e6ea", "#f6f7f8"]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "克制警示红",
+        "canonical": "#b9382e",
+        "tonalRamp": ["#3f0b08", "#6d1712", "#98251e", "#b9382e", "#d76e66", "#e9a49f", "#f6d2cf", "#fff3f2"]
+      },
+      "warning": {
+        "role": "tertiary",
+        "displayName": "确认警示褐",
+        "canonical": "#a85d12",
+        "tonalRamp": ["#351a03", "#5e3006", "#88480b", "#a85d12", "#ca863f", "#e2b078", "#f2d7b5", "#fff6e9"]
+      }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "页面标题", "purpose": "设置工作区的唯一一级标题。" },
+      "title": { "displayName": "面板标题", "purpose": "面板、分组和对话标题。" },
+      "body": { "displayName": "产品正文", "purpose": "设置说明、阅读内容和帮助文本。" },
+      "label": { "displayName": "控件标签", "purpose": "按钮、字段标签和紧凑状态。" },
+      "mono": { "displayName": "技术标识", "purpose": "端点、模型、Regex、代码和键值。" }
+    },
+    "shadows": [
+      { "name": "dialog-lift", "value": "0 18px 48px rgba(32, 42, 61, 0.20)", "purpose": "安全确认和真正脱离工作区的对话框。" },
+      { "name": "page-overlay", "value": "0 12px 34px rgba(15, 23, 42, 0.16)", "purpose": "注入第三方网页的悬浮摘要卡片。" },
+      { "name": "control-contact", "value": "0 1px 3px rgba(23, 26, 32, 0.20)", "purpose": "开关滑块和分段控件选中项。" }
+    ],
+    "motion": [
+      { "name": "fast-state", "value": "120ms ease", "purpose": "按钮 active 位移和即时触感。" },
+      { "name": "standard-state", "value": "160ms ease", "purpose": "颜色、边框和焦点状态变化。" },
+      { "name": "deliberate-state", "value": "180ms cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "导航、开关和短内容切换。" },
+      { "name": "reduced-motion", "value": "none", "purpose": "prefers-reduced-motion 下移除非必要动画。" }
+    ],
+    "breakpoints": [
+      { "name": "layout-single-column", "value": "1180px" },
+      { "name": "workspace-compact", "value": "1040px" },
+      { "name": "sidebar-to-tabs", "value": "860px" },
+      { "name": "mobile", "value": "640px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "局部操作组中唯一的主命令。",
+      "html": "<button class=\"ds-btn-primary\">保存设置</button>",
+      "css": ".ds-btn-primary { min-height: 38px; padding: 8px 13px; border: 1px solid #2f6fed; border-radius: 9px; background: #2f6fed; color: #fff; font: 600 12.5px/1.25 system-ui, sans-serif; cursor: pointer; transition: background-color 160ms ease, border-color 160ms ease, transform 120ms ease; } .ds-btn-primary:hover { background: #255fcf; border-color: #255fcf; } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "普通命令和主操作的低强调同伴。",
+      "html": "<button class=\"ds-btn-secondary\">取消</button>",
+      "css": ".ds-btn-secondary { min-height: 38px; padding: 8px 13px; border: 1px solid #e7e9ee; border-radius: 9px; background: #fff; color: #5a6270; font: 600 12.5px/1.25 system-ui, sans-serif; cursor: pointer; transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; } .ds-btn-secondary:hover { color: #171a20; background: #f5f7fa; border-color: #aeb6c3; } .ds-btn-secondary:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "低风险、低强调的内联工具命令。",
+      "html": "<button class=\"ds-btn-ghost\">重置提示词</button>",
+      "css": ".ds-btn-ghost { min-height: 32px; padding: 6px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #5a6270; font: 600 11.5px/1.25 system-ui, sans-serif; cursor: pointer; transition: color 160ms ease, background-color 160ms ease; } .ds-btn-ghost:hover { color: #171a20; background: #f5f7fa; } .ds-btn-ghost:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "删除和不可逆操作，禁止用于普通主命令。",
+      "html": "<button class=\"ds-btn-danger\">删除</button>",
+      "css": ".ds-btn-danger { min-height: 32px; padding: 6px 10px; border: 1px solid #ecc9c6; border-radius: 8px; background: #fbf2f1; color: #b9382e; font: 600 11.5px/1.25 system-ui, sans-serif; cursor: pointer; transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease; } .ds-btn-danger:hover { background: #b9382e; border-color: #b9382e; color: #fff; } .ds-btn-danger:focus-visible { outline: 2px solid #b9382e; outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "设置字段、端点和搜索的标准输入表面。",
+      "html": "<label class=\"ds-field\"><span>Model</span><input class=\"ds-input\" value=\"gpt-4.1-mini\"></label>",
+      "css": ".ds-field { display: grid; gap: 7px; color: #171a20; font: 500 13px/1.4 system-ui, sans-serif; } .ds-input { width: 100%; min-height: 40px; padding: 9px 12px; border: 1px solid #d4d9e2; border-radius: 9px; background: #fff; color: #171a20; font: 400 13.5px/1.4 system-ui, sans-serif; outline: none; transition: border-color 160ms ease, box-shadow 160ms ease; } .ds-input:hover { border-color: #aeb6c3; } .ds-input:focus { border-color: #2f6fed; box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.14); }"
+    },
+    {
+      "name": "Toggle Switch",
+      "kind": "input",
+      "refersTo": "toggle-on",
+      "description": "二元设置的统一开关，示例为开启状态。",
+      "html": "<button class=\"ds-toggle is-on\" type=\"button\" role=\"switch\" aria-checked=\"true\" aria-label=\"启用内容速读\"><span></span></button>",
+      "css": ".ds-toggle { position: relative; width: 44px; height: 26px; padding: 0; border: 0; border-radius: 999px; background: #d3d8e0; box-shadow: inset 0 0 0 1px #7d8797; cursor: pointer; transition: background-color 180ms ease; } .ds-toggle span { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(23, 26, 32, 0.20); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); } .ds-toggle.is-on { background: #2f6fed; box-shadow: none; } .ds-toggle.is-on span { transform: translateX(18px); } .ds-toggle:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }"
+    },
+    {
+      "name": "Active Navigation Item",
+      "kind": "nav",
+      "refersTo": "nav-active",
+      "description": "设置页侧导航的当前项。",
+      "html": "<button class=\"ds-nav-active\" aria-current=\"page\"><span aria-hidden=\"true\">⚙</span><span>基础设置</span></button>",
+      "css": ".ds-nav-active { width: 220px; min-height: 42px; display: flex; align-items: center; gap: 11px; padding: 0 12px; border: 0; border-radius: 10px; background: #eaf1fe; color: #2f6fed; font: 600 13.5px/1.5 system-ui, sans-serif; text-align: left; cursor: pointer; } .ds-nav-active:hover { background: #dfeafe; } .ds-nav-active:focus-visible { outline: 2px solid #2f6fed; outline-offset: 2px; }"
+    },
+    {
+      "name": "Settings Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "设置工作区的一级内容容器，平面且无阴影。",
+      "html": "<section class=\"ds-panel\"><h3>内容速读</h3><p>控制平台读取、自动生成和本地缓存。</p><div class=\"ds-panel-group\">多平台内容速读</div></section>",
+      "css": ".ds-panel { width: 340px; padding: 22px; border: 1px solid #e7e9ee; border-radius: 16px; background: #fff; color: #171a20; font: 400 14px/1.5 system-ui, sans-serif; } .ds-panel h3 { margin: 0; font-size: 16px; line-height: 1.35; } .ds-panel p { margin: 5px 0 18px; color: #5a6270; font-size: 12.5px; line-height: 1.6; } .ds-panel-group { padding: 15px; border-radius: 12px; background: #f5f7fa; font-size: 13.5px; font-weight: 600; }"
+    },
+    {
+      "name": "Inline Digest Card",
+      "kind": "custom",
+      "refersTo": "panel",
+      "description": "注入网页的签名速读组件，可收起并显示读取范围。",
+      "html": "<aside class=\"ds-digest\"><header><span>Lexi 速读 · Reddit</span><button aria-label=\"收起\">−</button></header><strong>讨论浏览器摘要缓存的失效策略。</strong><p>已读取主贴及 8 条已加载评论</p></aside>",
+      "css": ".ds-digest { width: 360px; padding: 12px; border: 1px solid rgba(17, 24, 39, 0.14); border-radius: 8px; background: #fff; color: #17191c; box-shadow: 0 12px 34px rgba(15, 23, 42, 0.16); font: 400 13px/1.5 system-ui, sans-serif; } .ds-digest header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 9px; border-bottom: 1px solid rgba(17, 24, 39, 0.14); } .ds-digest header span { color: #067647; font-size: 11px; font-weight: 700; } .ds-digest button { width: 28px; height: 28px; border: 1px solid rgba(17, 24, 39, 0.14); border-radius: 6px; background: #fff; cursor: pointer; } .ds-digest button:hover { background: #f5f7f8; } .ds-digest button:focus-visible { outline: 2px solid #067647; outline-offset: 2px; } .ds-digest strong { display: block; margin-top: 12px; } .ds-digest p { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid rgba(17, 24, 39, 0.14); color: #697384; font-size: 11px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "安静的阅读透镜",
+    "overview": "Lexi 的界面像一层覆盖在原网页上的透明阅读透镜：平时近乎隐形，只有当用户需要理解术语、翻译选区或掌握内容时才显出必要信息。产品 UI 使用近中性浅色表面、清醒的操作蓝和适中的信息密度，保持克制、聪明、可信，不与正文争夺注意力。\n\n设置页、弹窗和侧边栏是安静而精确的工具表面。它们依靠稳定网格、清楚标签、细边框和可预期状态建立信任；网页内卡片则更紧凑、可收起，并明确说明读取范围和缓存状态。系统明确拒绝重营销 SaaS 页面、游戏化学习应用、科幻 AI 助手和重型开发者面板。",
+    "keyCharacteristics": [
+      "近中性浅色画布，单一清醒蓝只表达操作和状态。",
+      "平面为主、浮层抬升；常驻表面不用装饰性阴影。",
+      "中文系统无衬线承担产品 UI，字号紧凑但不牺牲可读性。",
+      "控件状态完整、反馈直接，支持键盘和 reduced motion。",
+      "网页内工具可收起、就近出现，不遮蔽主要阅读内容。"
+    ],
+    "rules": [
+      { "name": "The Quiet Signal Rule", "body": "清醒蓝在任何产品屏幕中都不得成为大面积底色；它的稀缺性就是状态清晰度。", "section": "colors" },
+      { "name": "The Meaningful Color Rule", "body": "红色只表示错误或破坏，褐色只表示风险确认，领域色只表示术语领域；禁止互相借用。", "section": "colors" },
+      { "name": "The Reading Scale Rule", "body": "产品面板内禁止 hero 级字体和 viewport 流体字号；固定字号保证侧边栏、弹窗和设置页在一致 DPI 下保持稳定密度。", "section": "typography" },
+      { "name": "The Zero Tracking Rule", "body": "产品 UI 的字距始终为 0；仅官网品牌字标允许经过确认的专用字距。", "section": "typography" },
+      { "name": "The Flat-by-Default Rule", "body": "常驻表面禁止阴影。若一个设置分组需要阴影才能被理解，说明它的边框、背景层或信息结构设计错误。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 让清醒蓝只表达操作、选中、焦点和运行状态，控制在屏幕视觉面积的约 10% 以内。",
+      "Do 使用 1px 边框、白面和浅雾分组建立常驻层级，把阴影留给真正浮起的界面。",
+      "Do 使用共享 BaseButton、FormField、BaseInput、ToggleSwitch、SegmentedControl 和 TabBar，保持状态与尺寸一致。",
+      "Do 在窄弹窗、侧边栏和网页卡片中固定控件尺寸，让动态文本换行而不推动布局。",
+      "Do 为键盘焦点、错误、禁用、加载和 reduced motion 提供完整状态，并达到 WCAG 2.2 AA。",
+      "Do 保持 Crystal Jellyfish 图标的透明背景、完整轮廓和原始比例，不添加底板、描边、发光或品牌色覆盖。"
+    ],
+    "donts": [
+      "Don't 做重营销 SaaS 页面：产品界面禁止巨大宣传标题、装饰性区块和无处不在的功能推销。",
+      "Don't 做游戏化学习应用：禁止连续打卡、积分、彩带和制造学习焦虑的反馈。",
+      "Don't 做科幻 AI 助手：禁止紫蓝渐变、发光效果，以及把所有功能包装成聊天机器人。",
+      "Don't 做重型开发者面板：禁止终端式黑底、过密指标和只面向资深工程师的压迫感。",
+      "Don't 在常驻卡片上叠加阴影、玻璃模糊或卡片内卡片；内部层级只能使用浅雾色块和留白。",
+      "Don't 使用超过 1px 的彩色侧边条、渐变文字、装饰性光球或纯氛围背景。",
+      "Don't 让提示文字浅于可读灰 #697384，也不要只依靠颜色传达错误、选中或掌握状态。",
+      "Don't 在产品 UI 使用负字距、viewport 流体字号或 hero 级标题；官网专用品牌排版不得泄漏到扩展工具表面。"
+    ]
+  }
+}

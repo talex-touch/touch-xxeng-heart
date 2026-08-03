@@ -7,3 +7,5 @@ export const pageTranslationMemoryStorageKey = 'touch-xxeng-heart-page-translati
 export const pageTranslationActivationsStorageKey = 'touch-xxeng-heart-page-translation-activations'
 export const githubDigestStorageKey = 'touch-xxeng-heart-github-digests'
 export const forumDigestStorageKey = 'touch-xxeng-heart-forum-digests'
+export const contentDigestStorageKey = 'touch-xxeng-heart-content-digests'
+export const contentDigestLeaseStorageKey = 'touch-xxeng-heart-content-digest-leases'

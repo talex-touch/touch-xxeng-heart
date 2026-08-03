@@ -83,6 +83,7 @@ const ignoredSelectors = [
   '[data-lexi-dialog]',
   '[data-lexi-media-toolbar]',
   '[data-lexi-media-highlight]',
+  '[data-lexi-content-digest]',
   '[data-lexi-github-digest]',
   '[data-lexi-forum-digest]',
 ]

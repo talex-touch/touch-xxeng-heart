@@ -30,6 +30,7 @@ const excludedSelector = [
   '[data-lexi-media-toolbar]',
   '[data-lexi-video-speed-menu]',
   '[data-lexi-selection-translation]',
+  '[data-lexi-content-digest]',
   '[data-lexi-github-digest]',
   '[data-lexi-forum-digest]',
   '[data-lexi-media-highlight]',

@@ -1,3 +1,4 @@
+import { startContentDigest } from './contentDigest'
 import { startForumDigest } from './forumDigest'
 import { startGitHubDigest } from './githubDigest'
 import { startPageEnhancer } from './pageEnhancer'
@@ -28,6 +29,7 @@ export function ensurePageEnhancer() {
     return
 
   const startTopFrameFeatures = () => {
+    startContentDigest()
     startGitHubDigest()
     startForumDigest()
   }

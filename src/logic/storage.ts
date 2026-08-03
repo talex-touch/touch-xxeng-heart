@@ -1,6 +1,6 @@
 import { defaultSettings, mergeSettings } from './defaults'
-import { aiCallLogsStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
-import type { AiCallLog, ForumDigestCache, GitHubDigestCache, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
+import { aiCallLogsStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
+import type { AiCallLog, ContentDigestCache, ForumDigestCache, GitHubDigestCache, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
 import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
 
 // The `dataReady` promises these used to export were never awaited anywhere.
@@ -30,6 +30,12 @@ export const { data: aiCallLogs } = useWebExtensionStorage<AiCallLog[]>(
 export const { data: pageVisitLogs } = useWebExtensionStorage<PageVisitLog[]>(
   pageVisitLogsStorageKey,
   [],
+  { writeDefaults: false },
+)
+
+export const { data: contentDigestCache } = useWebExtensionStorage<ContentDigestCache>(
+  contentDigestStorageKey,
+  {},
   { writeDefaults: false },
 )
 

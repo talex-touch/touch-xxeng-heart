@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createForumDigestCacheEntry, getCachedForumDigestEntry, getForumDigestVersion, shouldAutoGenerateForumDigest } from './forumDigestCache'
-import type { ForumDigestResult } from './types'
+import type { ForumDigestCacheEntry, ForumDigestResult } from './types'
 
 const digest: ForumDigestResult = {
   oneLine: '主贴在讨论缓存复用。',
@@ -26,6 +26,26 @@ describe('forum digest cache', () => {
 
     expect(second.history.map(item => item.sourceHash)).toEqual(['hash-2', 'hash-1'])
     expect(getForumDigestVersion(second, 'hash-1')?.digest.oneLine).toBe(digest.oneLine)
+  })
+
+  it('restores history from a legacy entry without a history array', () => {
+    const legacyEntry = {
+      host: 'linux.do',
+      title: 'Legacy cache',
+      url: 'https://linux.do/t/a/1',
+      digest,
+      sourceHash: 'hash-1',
+      updatedAt: 1_000,
+    } as ForumDigestCacheEntry
+    const cache = { 'linux.do:https://linux.do/t/a/1': legacyEntry }
+
+    const restored = getCachedForumDigestEntry(cache, 'linux.do:https://linux.do/t/a/1', 1, 1_001)
+
+    expect(restored?.history).toEqual([{
+      sourceHash: 'hash-1',
+      digest,
+      createdAt: 1_000,
+    }])
   })
 
   it('expires stale entries by cache days', () => {

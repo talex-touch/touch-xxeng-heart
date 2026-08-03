@@ -17,6 +17,7 @@ import { getStoredState, primeStoredRecords } from '~/logic/settingsCache'
 import { createSerializedTaskQueue } from '~/logic/asyncQueue'
 import { createOperationEpoch } from '~/logic/operationEpoch'
 import type { OperationEpochHandle } from '~/logic/operationEpoch'
+import { getDifficultyWindow, getEffectiveDensity } from '~/logic/replacementLevels'
 import { readJsonValue } from '~/logic/storageJson'
 import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessaging'
 import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
@@ -280,8 +281,9 @@ function getCandidateRecord(index: ReplacementRecordIndex, candidate: Vocabulary
 }
 
 function createReplacementCandidatePool(settings: LexiSettings, records: VocabularyRecord[], conservative = false) {
-  const maxDifficulty = settings.replacement.difficulty
-  const minDifficulty = conservative ? Math.min(2, maxDifficulty) : 1
+  const { min, max: maxDifficulty } = getDifficultyWindow(settings.replacement.level)
+  // Conservative sites skip the easiest tier when the level still leaves room for it.
+  const minDifficulty = conservative ? Math.min(Math.max(min, 2), maxDifficulty) : min
   const filterCandidate = (candidate: VocabularyCandidate) => {
     if (isProductVocabularyCandidate(candidate))
       return true
@@ -1644,9 +1646,10 @@ function getReplacementBudget(settings: LexiSettings, hints = detectSpecialSiteH
   const maxPerPage = profile?.conservative
     ? Math.min(settings.replacement.maxPerPage, profile.maxPerPage ?? 6)
     : settings.replacement.maxPerPage
+  const levelDensity = getEffectiveDensity(settings.replacement)
   const density = profile?.conservative
-    ? Math.min(settings.replacement.density, profile.density ?? 0.06)
-    : settings.replacement.density
+    ? Math.min(levelDensity, profile.density ?? 0.06)
+    : levelDensity
 
   return {
     maxPerPage: Math.max(0, maxPerPage),

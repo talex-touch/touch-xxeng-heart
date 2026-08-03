@@ -4,6 +4,8 @@ import { sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 import { estimateStorageBytes, formatBytes } from '~/logic/format'
 import { openOptionsPage } from '~/logic/browserActions'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
+import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
+import type { DensityTierId } from '~/logic/replacementLevels'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, normalizeImportedRecord, reviewVocabularyRecord } from '~/logic/vocabularyRecords'
 import type { VocabularyReviewResult } from '~/logic/vocabularyRecords'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
@@ -49,9 +51,10 @@ const pageStats = ref<PageStats>({
   showFloatingStatus: false,
 })
 
+const activeLevel = computed(() => resolveReplacementLevel(lexiSettings.value.replacement.level))
 const difficulty = computed(() => getProgressDifficulty(
   vocabularyRecords.value,
-  lexiSettings.value.replacement.difficulty,
+  activeLevel.value.maxDifficulty,
 ))
 
 const dueRecords = computed(() => getDueRecords(vocabularyRecords.value).slice(0, 8))
@@ -63,7 +66,9 @@ const reviewMessage = ref('')
 const manualRecords = computed(() => vocabularyRecords.value.filter(record => record.source === 'manual').slice(0, 8))
 const autoRecords = computed(() => vocabularyRecords.value.filter(record => record.source === 'auto').slice(0, 8))
 const storageSize = computed(() => formatBytes(estimateStorageBytes(vocabularyRecords.value)))
-const replacementDensityPercent = computed(() => Math.round(lexiSettings.value.replacement.density * 100))
+const densityTierOptions = densityTiers.map(tier => ({ value: tier.id, label: tier.label }))
+const activeDensityTier = computed(() => resolveDensityTier(lexiSettings.value.replacement.density))
+const effectiveDensityLabel = computed(() => formatDensityPercent(getEffectiveDensity(lexiSettings.value.replacement)))
 const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string, description: string }> = [
   { value: 'url', label: '当前链接', description: '只在当前 URL 自动恢复' },
   { value: 'site', label: '整个站点', description: '同一域名下都自动翻译' },
@@ -101,6 +106,12 @@ const dailyRecommendations = computed(() => getTodayRecommendations(
   lexiSettings.value.study.dailyGoal,
   difficulty.value,
 ))
+
+function setDensityTier(id: DensityTierId) {
+  const tier = densityTiers.find(item => item.id === id)
+  if (tier)
+    lexiSettings.value.replacement.density = tier.value
+}
 
 function onSidepanelTabKeydown(event: KeyboardEvent, index: number) {
   let nextIndex = index
@@ -388,7 +399,7 @@ onBeforeUnmount(() => {
           Lexical
         </div>
         <div class="mt-1 truncate text-12px text-neutral-500">
-          难度 {{ difficulty }} · 已记录 {{ vocabularyRecords.length }} 词
+          等级 {{ activeLevel.level }} · {{ activeLevel.shortLabel }} · 已记录 {{ vocabularyRecords.length }} 词
         </div>
       </div>
       <button
@@ -613,25 +624,43 @@ onBeforeUnmount(() => {
 
         <label class="mt-4 block">
           <div class="flex items-center justify-between gap-3">
-            <span class="text-12px font-500 text-neutral-600">替换密度</span>
-            <span class="rounded-full bg-white px-2 py-1 text-12px text-neutral-700">{{ replacementDensityPercent }}%</span>
+            <span class="text-12px font-500 text-neutral-600">学习等级</span>
+            <span class="rounded-full bg-white px-2 py-1 text-12px text-neutral-700">{{ activeLevel.level }} · {{ activeLevel.shortLabel }}</span>
           </div>
-          <input v-model.number="lexiSettings.replacement.density" type="range" min="0.02" max="0.45" step="0.01" class="mt-2 w-full accent-neutral-950">
-          <p class="mt-1 text-11px text-neutral-500">
-            建议 10% - 25%，阅读压力过大时可降低。
+          <input
+            v-model.number="lexiSettings.replacement.level"
+            type="range"
+            :min="minReplacementLevel"
+            :max="maxReplacementLevel"
+            step="1"
+            class="mt-2 w-full accent-neutral-950"
+          >
+          <p class="mt-1 text-11px leading-4 text-neutral-500">
+            {{ activeLevel.label }} · {{ activeLevel.coverage }}。等级越低替换越多。
           </p>
         </label>
 
-        <div class="mt-3 grid grid-cols-2 gap-3">
-          <label class="block">
-            <span class="text-12px text-neutral-500">难度等级 1-5</span>
-            <input v-model.number="lexiSettings.replacement.difficulty" type="number" min="1" max="5" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
-          </label>
-          <label class="block">
-            <span class="text-12px text-neutral-500">单页最大替换数</span>
-            <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="40" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
-          </label>
+        <div class="mt-3">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-12px font-500 text-neutral-600">替换密度</span>
+            <span class="rounded-full bg-white px-2 py-1 text-12px text-neutral-700">{{ activeDensityTier.label }}</span>
+          </div>
+          <SegmentedControl
+            class="mt-2"
+            :model-value="activeDensityTier.id"
+            :options="densityTierOptions"
+            label="替换密度"
+            @update:model-value="setDensityTier"
+          />
+          <p class="mt-1 text-11px leading-4 text-neutral-500">
+            {{ activeDensityTier.hint }}；按当前等级折算后实际约 {{ effectiveDensityLabel }}。
+          </p>
         </div>
+
+        <label class="mt-3 block">
+          <span class="text-12px text-neutral-500">单页最大替换数</span>
+          <input v-model.number="lexiSettings.replacement.maxPerPage" type="number" min="1" max="40" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+        </label>
       </section>
 
       <section class="rounded-3 border border-neutral-200 bg-white px-3 py-3">

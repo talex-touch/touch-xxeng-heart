@@ -39,6 +39,9 @@ jobs:
       - name: Unit test
         run: pnpm test
 
+      - name: Check brand assets
+        run: pnpm brand:check
+
       - name: Build extension
         run: pnpm build
 

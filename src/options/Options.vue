@@ -9,6 +9,8 @@ import { summarizeByDay } from '~/logic/analytics'
 import { estimateStorageBytes, formatBytes, formatDateTime, formatTime } from '~/logic/format'
 import { normalizeForumCacheHistory } from '~/logic/forumDigestCache'
 import { approveHttpEndpoint, assertEndpointAllowed, isHttpEndpoint, normalizeEndpointApproval, revokeHttpEndpoint } from '~/logic/endpointPolicy'
+import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, replacementLevels, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
+import type { DensityTierId } from '~/logic/replacementLevels'
 import type { AiConnectionConfig, AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
@@ -32,6 +34,7 @@ const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string 
   { value: 'site', label: '当前站点' },
   { value: 'regex', label: '自定义 Regex' },
 ]
+const densityTierOptions = densityTiers.map(tier => ({ value: tier.id, label: tier.label }))
 
 const appVersion = __VERSION__
 const activeTab = ref<OptionsTab>('settings')
@@ -43,6 +46,11 @@ const domainText = computed({
   get: () => formatDomainList(lexiSettings.value.siteRules.domains),
   set: value => lexiSettings.value.siteRules.domains = parseDomainList(value),
 })
+
+const activeLevel = computed(() => resolveReplacementLevel(lexiSettings.value.replacement.level))
+const activeDensityTier = computed(() => resolveDensityTier(lexiSettings.value.replacement.density))
+const effectiveDensityLabel = computed(() => formatDensityPercent(getEffectiveDensity(lexiSettings.value.replacement)))
+const densityTaperLabel = computed(() => `×${activeLevel.value.densityScale}`)
 
 const visitTrend = computed(() => summarizeByDay(pageVisitLogs.value))
 const aiTrend = computed(() => summarizeByDay(aiCallLogs.value))
@@ -117,6 +125,12 @@ const resetSettingsDialog = ref<HTMLDialogElement>()
 let pendingHttpConnection: AiConnectionConfig | undefined
 let pendingHttpInput: HTMLInputElement | undefined
 const pendingHttpEndpoint = ref('')
+
+function setDensityTier(id: DensityTierId) {
+  const tier = densityTiers.find(item => item.id === id)
+  if (tier)
+    lexiSettings.value.replacement.density = tier.value
+}
 
 function ensureSpecialProfiles() {
   const current = new Map(lexiSettings.value.siteRules.specialProfiles.map(profile => [profile.id, profile]))
@@ -510,20 +524,117 @@ function resetSettings() {
       </header>
 
       <div id="options-content" class="options-content" tabindex="-1">
-        <section v-if="activeTab === 'settings'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="options-panel settings-layout grid gap-5 lg:grid-cols-[1fr_1fr]">
-          <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-            <div class="min-h-0">
-              <h2 class="text-16px font-600">
-                网页启用范围
-              </h2>
+        <section v-if="activeTab === 'settings'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="options-panel settings-layout">
+          <section class="settings-card settings-card--wide">
+            <header class="settings-card__head">
+              <div>
+                <h2>替换强度</h2>
+                <p>决定 Lexi 替换哪一档难度的词，以及一页里出现多少个。</p>
+              </div>
+              <SettingToggle v-model="lexiSettings.replacement.enabled" label="自动替换词汇" />
+            </header>
+
+            <div class="settings-split">
+              <div class="settings-stack">
+                <RangeControl
+                  v-model="lexiSettings.replacement.level"
+                  label="学习等级"
+                  hint="按你的英语水平选择，Lexi 只替换这一档的词。"
+                  :display-value="`${activeLevel.level} · ${activeLevel.shortLabel}`"
+                  :min="minReplacementLevel"
+                  :max="maxReplacementLevel"
+                  :disabled="!lexiSettings.replacement.enabled"
+                />
+                <div class="level-ends">
+                  <span>1 · 零基础，替换最多</span>
+                  <span>9 · 母语级，替换最少</span>
+                </div>
+
+                <div class="level-detail">
+                  <span class="level-detail__badge">L{{ activeLevel.level }}</span>
+                  <div>
+                    <strong>{{ activeLevel.label }}</strong>
+                    <small>{{ activeLevel.scale }} · {{ activeLevel.coverage }}</small>
+                  </div>
+                </div>
+              </div>
+
+              <div class="settings-stack">
+                <div class="settings-field">
+                  <span class="settings-field__label">替换密度</span>
+                  <SegmentedControl
+                    :model-value="activeDensityTier.id"
+                    :options="densityTierOptions"
+                    label="替换密度"
+                    :disabled="!lexiSettings.replacement.enabled"
+                    @update:model-value="setDensityTier"
+                  />
+                  <p class="settings-field__hint">
+                    {{ activeDensityTier.hint }}
+                  </p>
+                </div>
+
+                <div class="settings-callout">
+                  <span class="i-lucide-info" aria-hidden="true" />
+                  <p>
+                    等级越低，命中的都是最常见的词，一整页会被替换得很多，所以密度会按等级适度递减。
+                    当前等级 {{ activeLevel.level }} 折算系数 {{ densityTaperLabel }}，实际生效约 {{ effectiveDensityLabel }}。
+                  </p>
+                </div>
+
+                <FormField label="单页最多替换" hint="达到上限后停止替换，避免影响阅读。">
+                  <BaseInput
+                    v-model="lexiSettings.replacement.maxPerPage"
+                    type="number"
+                    :min="1"
+                    :max="80"
+                    :disabled="!lexiSettings.replacement.enabled"
+                  />
+                </FormField>
+
+                <p class="settings-note">
+                  信息流、论坛与学习类站点会在这个基础上进一步收敛，可在“特殊场景”里单独调整。
+                </p>
+              </div>
+            </div>
+
+            <CollapsibleSection class="level-guide" title="9 个等级分别对应什么" hint="点一行即可切换">
+              <ul class="level-table">
+                <li v-for="preset in replacementLevels" :key="preset.level">
+                  <button
+                    type="button"
+                    :class="{ 'is-active': preset.level === activeLevel.level }"
+                    :aria-pressed="preset.level === activeLevel.level"
+                    :disabled="!lexiSettings.replacement.enabled"
+                    @click="lexiSettings.replacement.level = preset.level"
+                  >
+                    <span class="level-table__no">{{ preset.level }}</span>
+                    <span class="level-table__copy">
+                      <strong>{{ preset.label }}</strong>
+                      <small>{{ preset.scale }} · {{ preset.coverage }}</small>
+                    </span>
+                  </button>
+                </li>
+              </ul>
+            </CollapsibleSection>
+          </section>
+
+          <section class="settings-card">
+            <header class="settings-card__head">
+              <div>
+                <h2>网页启用范围</h2>
+                <p>控制 Lexi 在哪些网页生效，以及每个域名可用的 AI 场景。</p>
+              </div>
+            </header>
+
+            <div class="settings-stack">
               <SettingToggle
                 v-model="lexiSettings.siteRules.enabled"
-                class="mt-4"
                 label="总开关"
                 hint="关闭后不替换、不划词翻译。"
               />
 
-              <FormField class="mt-5" label="匹配模式" hint="决定域名列表作为白名单还是黑名单使用。">
+              <FormField label="匹配模式" hint="决定域名列表作为白名单还是黑名单使用。">
                 <BaseSelect v-model="lexiSettings.siteRules.mode">
                   <option value="all">
                     全部网页
@@ -537,7 +648,7 @@ function resetSettings() {
                 </BaseSelect>
               </FormField>
 
-              <FormField class="mt-5" label="域名列表" hint="每行一个域名，支持填写子域名。">
+              <FormField label="域名列表" hint="每行一个域名，支持填写子域名。">
                 <BaseTextarea
                   v-model="domainText"
                   class="min-h-28"
@@ -545,7 +656,7 @@ function resetSettings() {
                 />
               </FormField>
 
-              <div class="mt-5 border-t border-neutral-100 pt-5">
+              <div class="settings-subcard">
                 <FormField label="域名场景规则" hint="按域名单独控制可用的 AI 场景。">
                   <div class="flex gap-2">
                     <BaseInput v-model="newSceneRuleDomain" class="min-w-0 flex-1" placeholder="docs.example.com" @keydown.enter="addSceneRule" />
@@ -558,7 +669,7 @@ function resetSettings() {
                   </div>
                 </FormField>
                 <div class="mt-3 space-y-2">
-                  <div v-for="(rule, index) in lexiSettings.siteRules.sceneRules" :key="rule.domain" class="rounded-2 border border-neutral-200 px-3 py-2">
+                  <div v-for="(rule, index) in lexiSettings.siteRules.sceneRules" :key="rule.domain" class="rounded-2 border border-neutral-200 bg-white px-3 py-2">
                     <div class="flex items-center justify-between gap-2">
                       <BaseInput v-model="rule.domain" size="sm" class="min-w-0 flex-1 font-600" aria-label="规则域名" />
                       <BaseButton variant="ghost" size="sm" @click="removeSceneRule(index)">
@@ -575,50 +686,34 @@ function resetSettings() {
                       />
                     </div>
                   </div>
-                  <p v-if="!lexiSettings.siteRules.sceneRules.length" class="rounded-2 bg-neutral-50 px-3 py-2 text-12px text-neutral-500">
+                  <p v-if="!lexiSettings.siteRules.sceneRules.length" class="settings-note">
                     暂无精细规则，默认按总开关和匹配模式启用全部场景。
                   </p>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="max-h-[34rem] overflow-y-auto rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-            <div class="min-h-0">
-              <h2 class="text-16px font-600">
-                替换与学习节奏
-              </h2>
-              <SettingToggle v-model="lexiSettings.replacement.enabled" class="mt-4" label="自动替换词汇" />
-              <RangeControl
-                v-model="lexiSettings.replacement.density"
-                class="mt-5"
-                label="替换密度"
-                hint="越高替换越密集，建议从 20% 起步。"
-                :display-value="`${Math.round(lexiSettings.replacement.density * 100)}%`"
-                :min="0.04"
-                :max="0.45"
-                :step="0.01"
+          <section class="settings-card">
+            <header class="settings-card__head">
+              <div>
+                <h2>划词与翻译</h2>
+                <p>控制划词翻译的触发方式、翻译方向，以及整页自动翻译。</p>
+              </div>
+            </header>
+
+            <div class="settings-stack">
+              <SettingToggle
+                v-model="lexiSettings.selection.autoTranslate"
+                label="划词自动翻译"
+                hint="选中文本后直接给出译文。"
               />
-              <RangeControl
-                v-model="lexiSettings.replacement.difficulty"
-                class="mt-5"
-                label="基础难度"
-                hint="1 最简单，5 会覆盖更多专业词汇。"
-                :display-value="`${lexiSettings.replacement.difficulty} / 5`"
-                :min="1"
-                :max="5"
-              />
-              <FormField class="mt-5" label="单页最多替换" hint="达到上限后停止替换，避免影响阅读。">
-                <BaseInput v-model="lexiSettings.replacement.maxPerPage" type="number" :min="1" :max="80" />
-              </FormField>
-              <SettingToggle v-model="lexiSettings.selection.autoTranslate" class="mt-4" label="划词自动翻译" />
               <SettingToggle
                 v-model="lexiSettings.selection.requireModifierKey"
-                class="mt-4"
                 label="按住修饰键触发划词翻译"
                 hint="macOS 使用 Command，Windows/Linux 使用 Ctrl。媒体点击可单独配置，默认 meta+shift。"
               />
-              <FormField class="mt-5" label="划词翻译方向" hint="自动判断会根据选中内容切换中英方向。">
+              <FormField label="划词翻译方向" hint="自动判断会根据选中内容切换中英方向。">
                 <BaseSelect v-model="lexiSettings.selection.translationDirection">
                   <option v-for="item in translationDirections" :key="item.value" :value="item.value">
                     {{ item.label }}
@@ -626,112 +721,126 @@ function resetSettings() {
                 </BaseSelect>
               </FormField>
 
-              <div class="mt-5 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
-                <h3 class="text-14px font-600">
-                  页面自动翻译
-                </h3>
-                <p class="mt-1 text-12px leading-5 text-neutral-500">
-                  启用后可按当前链接、站点或自定义 Regex 自动恢复；滚动停止后的可视区域优先翻译，其余内容预加载并缓存。
-                </p>
-                <FormField class="mt-3" label="启用范围">
-                  <BaseSelect v-model="lexiSettings.selection.pageTranslation.scope">
-                    <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
-                      {{ item.label }}
-                    </option>
-                  </BaseSelect>
-                </FormField>
-                <FormField v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-3" label="URL Regex">
-                  <BaseInput v-model="lexiSettings.selection.pageTranslation.regex" class="font-mono" placeholder="^https://docs\\.example\\.com/" />
-                </FormField>
-                <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                  <FormField label="合并请求段数" compact>
-                    <BaseInput v-model="lexiSettings.selection.pageTranslation.batchSize" type="number" :min="1" :max="8" />
+              <div class="settings-subcard">
+                <h3>页面自动翻译</h3>
+                <p>启用后可按当前链接、站点或自定义 Regex 自动恢复；滚动停止后的可视区域优先翻译，其余内容预加载并缓存。</p>
+                <div class="settings-stack settings-stack--tight">
+                  <FormField label="启用范围">
+                    <BaseSelect v-model="lexiSettings.selection.pageTranslation.scope">
+                      <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
+                        {{ item.label }}
+                      </option>
+                    </BaseSelect>
                   </FormField>
-                  <FormField label="预加载段数" compact>
-                    <BaseInput v-model="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" :min="0" :max="40" />
+                  <FormField v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" label="URL Regex">
+                    <BaseInput v-model="lexiSettings.selection.pageTranslation.regex" class="font-mono" placeholder="^https://docs\\.example\\.com/" />
                   </FormField>
-                  <FormField label="单页缓存上限" compact>
-                    <BaseInput v-model="lexiSettings.selection.pageTranslation.maxBlocksPerPage" type="number" :min="10" :max="300" />
-                  </FormField>
-                  <FormField label="缓存天数" compact>
-                    <BaseInput v-model="lexiSettings.selection.pageTranslation.cacheDays" type="number" :min="1" :max="90" />
+                  <div class="settings-fields">
+                    <FormField label="合并请求段数" compact>
+                      <BaseInput v-model="lexiSettings.selection.pageTranslation.batchSize" type="number" :min="1" :max="8" />
+                    </FormField>
+                    <FormField label="预加载段数" compact>
+                      <BaseInput v-model="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" :min="0" :max="40" />
+                    </FormField>
+                    <FormField label="单页缓存上限" compact>
+                      <BaseInput v-model="lexiSettings.selection.pageTranslation.maxBlocksPerPage" type="number" :min="10" :max="300" />
+                    </FormField>
+                    <FormField label="缓存天数" compact>
+                      <BaseInput v-model="lexiSettings.selection.pageTranslation.cacheDays" type="number" :min="1" :max="90" />
+                    </FormField>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <header class="settings-card__head">
+              <div>
+                <h2>内容速读</h2>
+                <p>在 GitHub 仓库页与论坛帖子上生成摘要，统一使用“每日推荐”AI 场景配置。</p>
+              </div>
+            </header>
+
+            <div class="settings-stack">
+              <div class="settings-subcard">
+                <h3>GitHub Digest</h3>
+                <p>先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。</p>
+                <div class="settings-stack settings-stack--tight">
+                  <SettingToggle v-model="lexiSettings.githubDigest.enabled" label="显示速读卡片" />
+                  <SettingToggle v-model="lexiSettings.githubDigest.autoGenerate" label="停留后自动生成详细总览" />
+                  <SettingToggle
+                    v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate"
+                    label="私有仓库也允许自动生成"
+                    hint="默认关闭；仍可手动点击生成。"
+                  />
+                  <RangeControl
+                    v-model="lexiSettings.githubDigest.autoDelaySeconds"
+                    label="自动生成延迟"
+                    :display-value="`${lexiSettings.githubDigest.autoDelaySeconds} 秒`"
+                    :min="8"
+                    :max="45"
+                  />
+                  <FormField label="缓存天数">
+                    <BaseInput v-model="lexiSettings.githubDigest.cacheDays" type="number" :min="1" :max="60" />
                   </FormField>
                 </div>
               </div>
-              <SettingToggle
-                v-model="lexiSettings.ui.showFloatingStatus"
-                class="mt-4"
-                label="右下角状态浮标"
-                hint="关闭后不显示“Lexi 已启用”。"
-              />
-              <FormField class="mt-5" label="快捷对话键" hint="默认 Ctrl/Command+Shift+M；无选区时会基于整页内容提问。">
-                <BaseInput v-model="lexiSettings.ui.dialogShortcut" placeholder="mod+shift+m" />
-              </FormField>
-              <FormField class="mt-5" label="媒体点击修饰键" hint="按住组合键点击媒体打开操作栏；视频倍速在 macOS 使用 Command+双指点按。">
-                <BaseInput v-model="lexiSettings.ui.mediaModifierShortcut" placeholder="meta+shift" />
-              </FormField>
-              <FormField class="mt-5" label="每日推荐数量">
-                <BaseInput v-model="lexiSettings.study.dailyGoal" type="number" :min="1" :max="30" />
-              </FormField>
 
-              <div class="mt-5 border-t border-neutral-100 pt-5">
-                <h3 class="text-14px font-600">
-                  GitHub Digest / Lexi 速读
-                </h3>
-                <p class="mt-1 text-12px leading-5 text-neutral-500">
-                  在 GitHub 仓库页先显示基础速读；停留一段时间或点击按钮后，结合 README 和当前页面内容生成详细总览。使用“每日推荐”AI 场景配置。
-                </p>
-                <SettingToggle v-model="lexiSettings.githubDigest.enabled" class="mt-4" label="显示速读卡片" />
-                <SettingToggle v-model="lexiSettings.githubDigest.autoGenerate" class="mt-3" label="停留后自动生成详细总览" />
-                <RangeControl
-                  v-model="lexiSettings.githubDigest.autoDelaySeconds"
-                  class="mt-4"
-                  label="自动生成延迟"
-                  :display-value="`${lexiSettings.githubDigest.autoDelaySeconds} 秒`"
-                  :min="8"
-                  :max="45"
-                />
-                <FormField class="mt-4" label="缓存天数">
-                  <BaseInput v-model="lexiSettings.githubDigest.cacheDays" type="number" :min="1" :max="60" />
-                </FormField>
-                <SettingToggle
-                  v-model="lexiSettings.githubDigest.allowPrivateAutoGenerate"
-                  class="mt-4"
-                  label="私有仓库也允许自动生成"
-                  hint="默认关闭；仍可手动点击生成。"
-                />
-
-                <div class="mt-5 border-t border-neutral-200 pt-4">
-                  <h4 class="text-13px font-600">
-                    Discourse / 论坛 Lexi 速读
-                  </h4>
-                  <p class="mt-1 text-12px leading-5 text-neutral-500">
-                    对 linux.do、idcflare.com 以及自动识别到的 Discourse 帖子，只读取主贴和前几楼做快速总结，降低 token 消耗。使用“每日推荐”AI 场景配置。
-                  </p>
-                  <SettingToggle v-model="lexiSettings.forumDigest.enabled" class="mt-4" label="显示论坛速读卡片" />
-                  <SettingToggle v-model="lexiSettings.forumDigest.autoGenerate" class="mt-3" label="自动生成整帖总结" />
+              <div class="settings-subcard">
+                <h3>Discourse / 论坛速读</h3>
+                <p>对 linux.do、idcflare.com 以及自动识别到的 Discourse 帖子，只读取主贴和前几楼做快速总结，降低 token 消耗。</p>
+                <div class="settings-stack settings-stack--tight">
+                  <SettingToggle v-model="lexiSettings.forumDigest.enabled" label="显示论坛速读卡片" />
+                  <SettingToggle v-model="lexiSettings.forumDigest.autoGenerate" label="自动生成整帖总结" />
                   <RangeControl
                     v-model="lexiSettings.forumDigest.autoDelaySeconds"
-                    class="mt-4"
                     label="自动生成延迟"
                     :display-value="`${lexiSettings.forumDigest.autoDelaySeconds} 秒`"
                     :min="1"
                     :max="20"
                   />
-                  <FormField class="mt-4" label="缓存天数">
+                  <FormField label="缓存天数">
                     <BaseInput v-model="lexiSettings.forumDigest.cacheDays" type="number" :min="1" :max="60" />
                   </FormField>
                 </div>
               </div>
-              <FormField class="mt-5" label="自定义样式 CSS" hint="仅应用于 Lexi 注入的页面组件。">
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <header class="settings-card__head">
+              <div>
+                <h2>界面与快捷键</h2>
+                <p>调整页面上的提示、快捷键与自定义样式。</p>
+              </div>
+            </header>
+
+            <div class="settings-stack">
+              <SettingToggle
+                v-model="lexiSettings.ui.showFloatingStatus"
+                label="右下角状态浮标"
+                hint="关闭后不显示“Lexi 已启用”。"
+              />
+              <FormField label="快捷对话键" hint="默认 Ctrl/Command+Shift+M；无选区时会基于整页内容提问。">
+                <BaseInput v-model="lexiSettings.ui.dialogShortcut" placeholder="mod+shift+m" />
+              </FormField>
+              <FormField label="媒体点击修饰键" hint="按住组合键点击媒体打开操作栏；视频倍速在 macOS 使用 Command+双指点按。">
+                <BaseInput v-model="lexiSettings.ui.mediaModifierShortcut" placeholder="meta+shift" />
+              </FormField>
+              <FormField label="每日推荐数量" hint="侧边栏每天推荐的新词数量。">
+                <BaseInput v-model="lexiSettings.study.dailyGoal" type="number" :min="1" :max="30" />
+              </FormField>
+
+              <CollapsibleSection title="自定义样式 CSS" hint="仅作用于 Lexi 注入的组件">
                 <BaseTextarea
                   v-model="lexiSettings.ui.customCss"
                   class="min-h-36 font-mono text-12px"
                   placeholder=".lexi-selection-translation { background: #fff; }&#10;.lexi-token { color: #2563eb; }"
                 />
-              </FormField>
+              </CollapsibleSection>
             </div>
-          </div>
+          </section>
         </section>
 
         <section v-else-if="activeTab === 'special'" id="options-panel-special" role="tabpanel" aria-labelledby="options-tab-special" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">

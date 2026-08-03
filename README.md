@@ -79,7 +79,10 @@ pnpm test         # 单元测试
 pnpm typecheck    # TypeScript 检查
 pnpm lint         # ESLint 检查
 pnpm test:e2e     # 构建并运行扩展端到端测试
-pnpm pack         # 打包扩展产物
+pnpm run package:chromium # 构建 Chromium ZIP/CRX
+pnpm run package:firefox  # 构建并校验 Firefox XPI
+pnpm run package:beta     # 构建 beta ZIP
+pnpm run package:all      # 顺序生成全部平台制品
 ```
 
 ## 项目结构

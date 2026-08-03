@@ -30,11 +30,11 @@ describe('site rules', () => {
     const settings = mergeSettings({
       replacement: {
         ...defaultSettings.replacement,
-        difficulty: 4,
+        level: 7,
       },
     })
 
-    expect(settings.replacement.difficulty).toBe(4)
+    expect(settings.replacement.level).toBe(7)
     expect(settings.ai.selection.enabled).toBe(false)
   })
 

@@ -7,6 +7,12 @@ type ChromiumManifest = Manifest.WebExtensionManifest & {
   side_panel?: {
     default_path: string
   }
+  browser_specific_settings?: {
+    gecko: {
+      id: string
+      strict_min_version: string
+    }
+  }
 }
 
 const extensionIcons = {
@@ -89,6 +95,13 @@ export async function getManifest() {
 
   // add sidepanel
   if (isFirefox) {
+    delete manifest.minimum_chrome_version
+    manifest.browser_specific_settings = {
+      gecko: {
+        id: 'lexi@tagzxia.com',
+        strict_min_version: '112.0',
+      },
+    }
     manifest.sidebar_action = {
       default_panel: 'dist/sidepanel/index.html',
     }

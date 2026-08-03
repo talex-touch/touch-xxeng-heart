@@ -7,12 +7,13 @@
     "dev": "nuxt dev",
     "build": "nuxt generate",
     "generate": "nuxt generate",
-    "preview": "pnpm dlx wrangler pages dev .output/public",
-    "deploy": "pnpm dlx wrangler pages deploy .output/public --project-name=lexi-web"
+    "preview": "pnpm run build && wrangler pages dev .output/public",
+    "deploy": "pnpm run build && wrangler pages deploy .output/public --project-name=lexi-web"
   },
   "devDependencies": {
     "nuxt": "^4.5.1",
     "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "vue-router": "^4.5.0",
+    "wrangler": "4.118.0"
   }
 }

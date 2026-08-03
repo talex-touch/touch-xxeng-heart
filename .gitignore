@@ -29,6 +29,7 @@ vite.config.*.timestamp-*.mjs
 .nuxt
 .output
 .nitro
+.wrangler
 
 # packaged tarballs
 *.tgz

@@ -1,4 +1,8 @@
-import type { AiProviderConfig, FeatureScene, LexiSettings, PageTranslationSettings } from './types'
+import { clampReplacementDensity, clampReplacementLevel, defaultReplacementLevel, densityTiers, levelFromLegacyDifficulty } from './replacementLevels'
+import type { AiProviderConfig, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings } from './types'
+
+/** Settings written before the 1-9 learner level replaced the 1-5 difficulty ceiling. */
+type StoredReplacementSettings = Partial<ReplacementSettings> & { difficulty?: number }
 
 const emptyAiConnection = {
   endpoint: '',
@@ -141,10 +145,10 @@ export const defaultSettings: LexiSettings = {
   },
   replacement: {
     enabled: true,
-    density: 0.12,
+    density: densityTiers[2].value,
     minTextLength: 18,
     maxPerPage: 18,
-    difficulty: 2,
+    level: defaultReplacementLevel,
   },
   selection: {
     enabled: true,
@@ -208,6 +212,21 @@ function normalizeProviders(value?: Partial<LexiSettings>): AiProviderConfig[] {
   }))
 }
 
+function normalizeReplacement(value?: StoredReplacementSettings): ReplacementSettings {
+  // `difficulty` is dropped rather than spread through, so the legacy key stops
+  // travelling with the settings once it has been converted to a level.
+  const { difficulty, ...stored } = value ?? {}
+
+  return {
+    ...defaultSettings.replacement,
+    ...stored,
+    density: clampReplacementDensity(stored.density),
+    level: stored.level == null
+      ? levelFromLegacyDifficulty(difficulty)
+      : clampReplacementLevel(stored.level),
+  }
+}
+
 export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
   const providers = normalizeProviders(value)
   const uiDialogShortcut = !value?.ui?.dialogShortcut || value.ui.dialogShortcut === 'mod+k'
@@ -224,10 +243,7 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       sceneRules: value?.siteRules?.sceneRules ?? defaultSettings.siteRules.sceneRules,
       specialProfiles: value?.siteRules?.specialProfiles ?? defaultSettings.siteRules.specialProfiles,
     },
-    replacement: {
-      ...defaultSettings.replacement,
-      ...value?.replacement,
-    },
+    replacement: normalizeReplacement(value?.replacement),
     selection: {
       ...defaultSettings.selection,
       ...value?.selection,

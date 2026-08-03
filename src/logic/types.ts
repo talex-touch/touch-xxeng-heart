@@ -156,10 +156,12 @@ export interface SpecialSiteProfile {
 
 export interface ReplacementSettings {
   enabled: boolean
+  /** Configured density before the per-level taper, 0.01 - 0.35. */
   density: number
   minTextLength: number
   maxPerPage: number
-  difficulty: number
+  /** Learner level 1-9; drives both the word difficulty window and the density taper. */
+  level: number
 }
 
 export interface SelectionSettings {

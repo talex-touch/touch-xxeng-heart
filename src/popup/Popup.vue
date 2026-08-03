@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { openOptionsPage } from '~/logic/browserActions'
+import { resolveReplacementLevel } from '~/logic/replacementLevels'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 
 const appVersion = __VERSION__
 
 const totalRecords = computed(() => vocabularyRecords.value.length)
+const activeLevel = computed(() => resolveReplacementLevel(lexiSettings.value.replacement.level))
 </script>
 
 <template>
@@ -33,10 +35,10 @@ const totalRecords = computed(() => vocabularyRecords.value.length)
       </div>
       <div class="rounded-2 border border-neutral-200 bg-neutral-50 px-2 py-3">
         <div class="text-18px font-700">
-          {{ lexiSettings.replacement.difficulty }}
+          {{ activeLevel.level }}
         </div>
-        <div class="mt-1 text-11px text-neutral-500">
-          难度
+        <div class="mt-1 truncate text-11px text-neutral-500">
+          等级 · {{ activeLevel.shortLabel }}
         </div>
       </div>
       <div class="rounded-2 border border-neutral-200 bg-neutral-50 px-2 py-3">

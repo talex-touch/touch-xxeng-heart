@@ -7,7 +7,7 @@ import { startRouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import type { RouteWatcher } from '~/contentScripts/ui/routeWatcher'
 import { requestGitHubDigest } from '~/logic/aiClient'
 import { mergeSettings } from '~/logic/defaults'
-import { getCurrentDigestCacheEntry } from '~/logic/digestCache'
+import { getCachedGitHubDigestEntry } from '~/logic/githubDigestCache'
 import { readJsonValue } from '~/logic/storageJson'
 import { githubDigestStorageKey, settingsStorageKey } from '~/logic/storageKeys'
 import { escapeHtml, normalizeText, simpleHash, uniq, withTimeout } from '~/logic/text'
@@ -436,21 +436,13 @@ function removeCard() {
   cardState = undefined
 }
 
-function getLegacyCacheKeys(info: GitHubRepoInfo) {
-  return [
-    info.key,
-    `github.com:${info.repo}`,
-    `github.com:${info.repo}`.toLowerCase(),
-    info.repo,
-    info.repo.toLowerCase(),
-    info.name,
-  ].filter(Boolean)
-}
-
 function getCachedEntry(cache: GitHubDigestCache, info: GitHubRepoInfo, settings: LexiSettings) {
-  return getLegacyCacheKeys(info)
-    .map(key => getCurrentDigestCacheEntry(cache[key], info.sourceHash, settings.githubDigest.cacheDays))
-    .find(Boolean)
+  return getCachedGitHubDigestEntry(
+    cache,
+    info,
+    info.sourceHash,
+    settings.githubDigest.cacheDays,
+  )
 }
 
 function createCacheEntry(info: GitHubRepoInfo, current?: GitHubDigestCacheEntry): GitHubDigestCacheEntry {

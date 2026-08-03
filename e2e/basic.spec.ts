@@ -26,10 +26,28 @@ test('popup opens Lexi controls', async ({ page, extensionId }) => {
 test('options exposes site and AI configuration', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
 
-  await expect(page.locator('header')).toContainText('Lexi')
+  await expect(page.locator('.options-header')).toContainText('Lexi')
   await expect(page.getByRole('heading', { name: '网页启用范围' })).toBeVisible()
   await page.getByRole('tab', { name: 'AI 场景' }).click()
   await expect(page.getByRole('heading', { name: 'AI 场景配置' })).toBeVisible()
+})
+
+test('replacement strength maps levels and density tiers to plain language', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+
+  const card = page.locator('.settings-card--wide')
+  const level = card.locator('input[type="range"]')
+
+  await expect(level).toHaveValue('5')
+  await expect(card.getByText('大学四级 CET-4 · 中等标准').first()).toBeVisible()
+
+  await card.getByRole('button', { name: '极少' }).click()
+  await expect(card.getByText('实际生效约 0.8%')).toBeVisible()
+
+  await card.getByRole('button', { name: '9 个等级分别对应什么' }).click()
+  await card.getByRole('button', { name: /零基础 \/ 小学/ }).click()
+  await expect(level).toHaveValue('1')
+  await expect(card.getByText('实际生效约 0.4%')).toBeVisible()
 })
 
 test('HTTP endpoints require per-address confirmation', async ({ page, extensionId }) => {

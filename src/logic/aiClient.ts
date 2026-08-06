@@ -1,9 +1,14 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
 import { recordAiCall } from './analytics'
+import { promptDefaults } from './defaults'
 import { buildDialogMessages } from './dialogHarness'
 import { assertEndpointAllowed } from './endpointPolicy'
+import { createSseParser, getProtocolAdapter, normalizeApiKey, resolveProtocol } from './providers'
 import type { DialogHarnessInput, DialogHarnessResult } from './dialogHarness'
-import type { AiConnectionConfig, AiTestResult, ContentDigestResult, ContentDocument, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+import type { AiChatMessage, ChatMessageContent, ProtocolAdapter, ProtocolUsage, ProviderModel, ResolvedAiProtocol } from './providers'
+import type { AiProviderConfig, AiTestResult, ContentDigestResult, ContentDocument, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+
+export type { AiChatMessage }
 
 interface AiReplacementResponse {
   items?: VocabularyCandidate[]
@@ -35,43 +40,6 @@ interface AiPageTranslationBatchResponse {
   }>
 }
 
-interface OpenAiChatResponse {
-  choices?: Array<{
-    message?: {
-      content?: string
-    }
-  }>
-  usage?: OpenAiUsage
-}
-
-interface OpenAiUsage {
-  prompt_tokens?: number
-  completion_tokens?: number
-  total_tokens?: number
-}
-
-interface OpenAiChatStreamChunk {
-  choices?: Array<{
-    delta?: {
-      content?: string
-    }
-    message?: {
-      content?: string
-    }
-  }>
-}
-
-type ChatMessageContentPart =
-  | { type: 'text', text: string }
-  | { type: 'image_url', image_url: { url: string, detail?: 'auto' | 'low' | 'high' } }
-
-type ChatMessageContent = string | ChatMessageContentPart[]
-
-export interface AiChatMessage {
-  role: 'system' | 'user' | 'assistant'
-  content: ChatMessageContent
-}
-
 interface MediaAnalysisInput {
   kind: 'image' | 'video' | 'audio' | 'media'
   src: string
@@ -95,42 +63,48 @@ interface AiRequestContext {
   providerLabel: string
   priority: number
   delayMs: number
+  protocol: ResolvedAiProtocol
+  adapter: ProtocolAdapter
+  /** Configured base URL; the adapter derives the real route from it. */
+  endpointBase: string
+  /** Resolved route, used for logs and diagnostics. */
   endpoint: string
-  headers: Record<string, string>
   apiKey: string
   startedAt: number
   model: string
   prompt: string
 }
 
-interface ResolvedAiConfig extends AiConnectionConfig {
+interface ResolvedAiConfig {
   providerId: string
   providerLabel: string
+  protocol: ResolvedAiProtocol
+  endpoint: string
+  apiKey: string
+  model: string
   priority: number
   delayMs: number
   prompt: string
 }
 
-function mergeConnection(...connections: Array<Partial<AiConnectionConfig> | undefined>): AiConnectionConfig {
-  const result: AiConnectionConfig = {
-    endpoint: '',
-    apiKey: '',
-    model: '',
+function toResolvedConfig(provider: AiProviderConfig, index: number, prompt: string): ResolvedAiConfig | undefined {
+  const endpoint = provider.endpoint?.trim() ?? ''
+  if (!endpoint)
+    return undefined
+
+  const model = provider.model?.trim() ?? ''
+
+  return {
+    providerId: provider.id || `provider-${index + 1}`,
+    providerLabel: provider.label || `Provider ${index + 1}`,
+    protocol: resolveProtocol(provider.protocol, endpoint, model),
+    endpoint,
+    apiKey: provider.apiKey?.trim() ?? '',
+    model,
+    priority: Number.isFinite(provider.priority) ? provider.priority : index + 1,
+    delayMs: Math.max(0, Number.isFinite(provider.delayMs) ? provider.delayMs : index * 450),
+    prompt,
   }
-
-  for (const connection of connections) {
-    if (!connection)
-      continue
-
-    if (connection.endpoint?.trim())
-      result.endpoint = connection.endpoint.trim()
-    if (connection.apiKey?.trim())
-      result.apiKey = connection.apiKey.trim()
-    if (connection.model?.trim())
-      result.model = connection.model.trim()
-  }
-
-  return result
 }
 
 function getAiConfigs(settings: LexiSettings, scene: FeatureScene) {
@@ -144,46 +118,15 @@ function getAiConfigs(settings: LexiSettings, scene: FeatureScene) {
     ? enabledProviders.filter(provider => selectedProviderIds.has(provider.id))
     : enabledProviders
 
-  const sourceProviders = providers.length
-    ? providers
-    : [{ id: 'legacy', label: 'Legacy / Global', enabled: true, priority: 1, delayMs: 0, ...settings.ai.global }]
-
-  const resolved = sourceProviders
-    .map((provider, index): ResolvedAiConfig | undefined => {
-      const connection = mergeConnection(settings.ai.global, provider, config)
-      if (!connection.endpoint)
-        return undefined
-
-      assertEndpointAllowed(connection.endpoint, settings.ai.approvedHttpEndpoints ?? [])
-
-      return {
-        ...connection,
-        providerId: provider.id || `provider-${index + 1}`,
-        providerLabel: provider.label || `Provider ${index + 1}`,
-        priority: Number.isFinite(provider.priority) ? provider.priority : index + 1,
-        delayMs: Math.max(0, Number.isFinite(provider.delayMs) ? provider.delayMs : index * 450),
-        prompt: config.prompt,
-      }
-    })
+  const resolved = providers
+    .map((provider, index) => toResolvedConfig(provider, index, config.prompt))
     .filter((item): item is ResolvedAiConfig => item != null)
     .sort((a, b) => a.priority - b.priority || a.delayMs - b.delayMs)
 
+  for (const item of resolved)
+    assertEndpointAllowed(item.endpoint, settings.ai.approvedHttpEndpoints ?? [])
+
   return resolved.length ? resolved : undefined
-}
-
-function resolveEndpoint(endpoint: string) {
-  const trimmed = endpoint.trim().replace(/\/$/, '')
-  if (trimmed.endsWith('/chat/completions'))
-    return trimmed
-
-  if (trimmed.endsWith('/v1'))
-    return `${trimmed}/chat/completions`
-
-  return `${trimmed}/v1/chat/completions`
-}
-
-function normalizeApiKey(value: string) {
-  return value.trim().replace(/^Bearer\s+/i, '').trim()
 }
 
 function getKeyHint(apiKey: string) {
@@ -192,22 +135,18 @@ function getKeyHint(apiKey: string) {
 }
 
 function createRequestContextFromConfig(config: ResolvedAiConfig): AiRequestContext {
-  const headers: Record<string, string> = {
-    'content-type': 'application/json',
-  }
-
-  const apiKey = normalizeApiKey(config.apiKey)
-  if (apiKey)
-    headers.authorization = `Bearer ${apiKey}`
+  const adapter = getProtocolAdapter(config.protocol)
 
   return {
     providerId: config.providerId,
     providerLabel: config.providerLabel,
     priority: config.priority,
     delayMs: config.delayMs,
-    endpoint: resolveEndpoint(config.endpoint),
-    headers,
-    apiKey,
+    protocol: config.protocol,
+    adapter,
+    endpointBase: config.endpoint,
+    endpoint: adapter.resolveChatUrl(config.endpoint, { model: config.model }),
+    apiKey: normalizeApiKey(config.apiKey),
     startedAt: performance.now(),
     model: config.model,
     prompt: config.prompt,
@@ -237,17 +176,19 @@ function modelAcceptsTemperature(model: string) {
   return !modelPrefersNonStreaming(model)
 }
 
-function buildChatBody(model: string, messages: AiChatMessage[], stream: boolean) {
-  const body: Record<string, unknown> = {
-    model,
+function getTemperature(model: string) {
+  return modelAcceptsTemperature(model) ? 0.2 : undefined
+}
+
+function buildChatPlan(request: AiRequestContext, messages: AiChatMessage[], stream: boolean) {
+  return request.adapter.buildChatRequest({
+    endpoint: request.endpointBase,
+    apiKey: request.apiKey,
+    model: request.model,
     messages,
     stream,
-  }
-
-  if (modelAcceptsTemperature(model))
-    body.temperature = 0.2
-
-  return JSON.stringify(body)
+    temperature: getTemperature(request.model),
+  })
 }
 
 /** Scene prompts stay the default system message unless the caller supplied its own. */
@@ -265,12 +206,12 @@ function estimateTokens(value: string) {
   return Math.max(1, Math.ceil(value.length / 4))
 }
 
-function getUsageLog(usage: OpenAiUsage | undefined, promptText: string, completionText = '') {
-  if (usage?.total_tokens) {
+function getUsageLog(usage: ProtocolUsage | undefined, promptText: string, completionText = '') {
+  if (usage?.totalTokens) {
     return {
-      promptTokens: usage.prompt_tokens,
-      completionTokens: usage.completion_tokens,
-      totalTokens: usage.total_tokens,
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      totalTokens: usage.totalTokens,
       tokenEstimate: false,
     }
   }
@@ -306,58 +247,52 @@ function parseJsonContent<T>(content: string): T {
   }
 }
 
-function extractJsonObject<T>(value: unknown): T {
+function extractJsonObject<T>(adapter: ProtocolAdapter, value: unknown): T {
   if (typeof value !== 'object' || value == null)
     throw new Error('AI response is not an object')
 
   const direct = value as T
-  const content = (value as OpenAiChatResponse).choices?.[0]?.message?.content
+  const content = adapter.readText(value)
   return content ? parseJsonContent<T>(content) : direct
 }
 
-function appendStreamLine(line: string) {
-  const trimmed = line.trim()
-  if (!trimmed.startsWith('data:'))
-    return ''
-
-  const data = trimmed.slice(5).trim()
-  if (!data || data === '[DONE]')
-    return ''
-
-  const chunk = JSON.parse(data) as OpenAiChatStreamChunk
-  return chunk.choices
-    ?.map(choice => choice.delta?.content ?? choice.message?.content ?? '')
-    .join('') ?? ''
-}
-
-async function readStreamContent(response: Response) {
+/**
+ * Streams the response body, handing every SSE event to the protocol adapter.
+ *
+ * `onContent` sees the accumulated text after each event so callers can render partial
+ * output without re-implementing the delta bookkeeping.
+ */
+async function readStreamedText(
+  response: Response,
+  adapter: ProtocolAdapter,
+  onContent?: (content: string) => void,
+) {
   const reader = response.body?.getReader()
   if (!reader)
     throw new Error('AI stream is empty')
 
   const decoder = new TextDecoder()
-  let buffer = ''
   let content = ''
+  const parser = createSseParser((event) => {
+    const delta = adapter.readStreamDelta(event)
+    if (!delta)
+      return
+
+    content += delta
+    onContent?.(content)
+  })
 
   while (true) {
     const { done, value } = await reader.read()
     if (value)
-      buffer += decoder.decode(value, { stream: !done })
+      parser.push(decoder.decode(value, { stream: !done }))
 
-    if (done)
-      buffer += decoder.decode()
-
-    const lines = buffer.split(/\r?\n/)
-    buffer = lines.pop() ?? ''
-    for (const line of lines)
-      content += appendStreamLine(line)
-
-    if (done)
+    if (done) {
+      parser.push(decoder.decode())
+      parser.end()
       break
+    }
   }
-
-  if (buffer)
-    content += appendStreamLine(buffer)
 
   if (!content.trim())
     throw new Error('AI stream response is empty')
@@ -378,19 +313,21 @@ async function readErrorText(response: Response) {
   }
 }
 
-async function readAiResponseJson<T>(response: Response): Promise<{ data: T, streamed: boolean }> {
+async function readAiResponseJson<T>(response: Response, adapter: ProtocolAdapter): Promise<{ data: T, streamed: boolean, usage?: ProtocolUsage }> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('text/event-stream')) {
-    const content = await readStreamContent(response)
+    const content = await readStreamedText(response, adapter)
     return {
       data: parseJsonContent<T>(content),
       streamed: true,
     }
   }
 
+  const payload = await response.json()
   return {
-    data: extractJsonObject<T>(await response.json()),
+    data: extractJsonObject<T>(adapter, payload),
     streamed: false,
+    usage: adapter.readUsage(payload),
   }
 }
 
@@ -455,12 +392,13 @@ function normalizeMarkdownAnswerText(value: string) {
 }
 
 async function fetchChatCompletion(request: AiRequestContext, messages: AiChatMessage[], stream: boolean, signal?: AbortSignal) {
-  return fetch(request.endpoint, {
-    method: 'POST',
-    headers: request.headers,
+  const plan = buildChatPlan(request, messages, stream)
+  return fetch(plan.url, {
+    method: plan.method,
+    headers: plan.headers,
     redirect: 'error',
     signal,
-    body: buildChatBody(request.model, messages, stream),
+    body: plan.body,
   })
 }
 
@@ -490,21 +428,21 @@ function isAbortError(error: unknown) {
     || (error instanceof Error && error.name === 'AbortError')
 }
 
-function getRawAiText(value: unknown) {
+function getRawAiText(adapter: ProtocolAdapter, value: unknown) {
   try {
-    return normalizeTranslationText(extractTextContent(value))
+    return normalizeTranslationText(extractTextContent(adapter, value))
   }
   catch {
     return JSON.stringify(value)
   }
 }
 
-function parseRawAiText(value: string) {
+function parseRawAiText(adapter: ProtocolAdapter, value: string) {
   if (!value.trim())
     return ''
 
   try {
-    return getRawAiText(JSON.parse(value))
+    return getRawAiText(adapter, JSON.parse(value))
   }
   catch {
     return normalizeTranslationText(value)
@@ -521,42 +459,12 @@ function getTranslationDirectionInstruction(direction: TranslationDirection) {
   return 'Auto-detect direction: if the selected text is mostly Chinese, translate it into natural English; otherwise translate it into Simplified Chinese. For English, mixed-language, code comments, UI text or any non-Chinese text, the final answer MUST be Simplified Chinese only.'
 }
 
-async function readStreamText(response: Response, onText?: (text: string) => void, normalizeText = normalizeTranslationText) {
-  const reader = response.body?.getReader()
-  if (!reader)
-    throw new Error('AI stream is empty')
-
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let content = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (value)
-      buffer += decoder.decode(value, { stream: !done })
-
-    if (done)
-      buffer += decoder.decode()
-
-    const lines = buffer.split(/\r?\n/)
-    buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      content += appendStreamLine(line)
-      const visible = normalizeText(content)
-      if (visible)
-        onText?.(visible)
-    }
-
-    if (done)
-      break
-  }
-
-  if (buffer) {
-    content += appendStreamLine(buffer)
-    const visible = normalizeText(content)
+async function readStreamText(response: Response, adapter: ProtocolAdapter, onText?: (text: string) => void, normalizeText = normalizeTranslationText) {
+  const content = await readStreamedText(response, adapter, (partial) => {
+    const visible = normalizeText(partial)
     if (visible)
       onText?.(visible)
-  }
+  })
 
   const text = normalizeText(content)
   if (!text)
@@ -565,20 +473,20 @@ async function readStreamText(response: Response, onText?: (text: string) => voi
   return text
 }
 
-function extractTextContent(value: unknown) {
+function extractTextContent(adapter: ProtocolAdapter, value: unknown) {
   if (typeof value === 'string')
     return value
 
   if (typeof value !== 'object' || value == null)
     throw new Error('AI response is not an object')
 
-  return (value as OpenAiChatResponse).choices?.[0]?.message?.content ?? JSON.stringify(value)
+  return adapter.readText(value) || JSON.stringify(value)
 }
 
-async function readAiResponseTextWithUsage(response: Response, promptText: string, onText?: (text: string) => void, normalizeText = normalizeTranslationText): Promise<{ text: string, streamed: boolean, usageLog: ReturnType<typeof getUsageLog> }> {
+async function readAiResponseTextWithUsage(response: Response, adapter: ProtocolAdapter, promptText: string, onText?: (text: string) => void, normalizeText = normalizeTranslationText): Promise<{ text: string, streamed: boolean, usageLog: ReturnType<typeof getUsageLog> }> {
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.includes('text/event-stream')) {
-    const text = await readStreamText(response, onText, normalizeText)
+    const text = await readStreamText(response, adapter, onText, normalizeText)
     return {
       text,
       streamed: true,
@@ -586,8 +494,8 @@ async function readAiResponseTextWithUsage(response: Response, promptText: strin
     }
   }
 
-  const json = await response.json() as OpenAiChatResponse
-  const text = normalizeText(extractTextContent(json))
+  const json = await response.json()
+  const text = normalizeText(extractTextContent(adapter, json))
   if (!text)
     throw new Error('AI response text is empty')
 
@@ -595,7 +503,7 @@ async function readAiResponseTextWithUsage(response: Response, promptText: strin
   return {
     text,
     streamed: false,
-    usageLog: getUsageLog(json.usage, promptText, text),
+    usageLog: getUsageLog(adapter.readUsage(json), promptText, text),
   }
 }
 
@@ -713,10 +621,12 @@ async function postAiJsonWithRequest<T>(
 
     let data: T
     let streamed = false
+    let usage: ProtocolUsage | undefined
     try {
-      const result = await readAiResponseJson<T>(response)
+      const result = await readAiResponseJson<T>(response, request.adapter)
       data = result.data
       streamed = result.streamed
+      usage = result.usage
     }
     catch (error) {
       if (!stream)
@@ -729,11 +639,12 @@ async function postAiJsonWithRequest<T>(
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
       }
 
-      const result = await readAiResponseJson<T>(response)
+      const result = await readAiResponseJson<T>(response, request.adapter)
       data = result.data
       streamed = result.streamed
+      usage = result.usage
     }
-    const usageLog = getUsageLog(undefined, `${system}\n${user}`, JSON.stringify(data))
+    const usageLog = getUsageLog(usage, `${system}\n${user}`, JSON.stringify(data))
 
     await recordAiCall({
       scene,
@@ -864,7 +775,7 @@ async function postAiTextWithRequest(
     let streamed = false
     let usageLog: ReturnType<typeof getUsageLog>
     try {
-      const result = await readAiResponseTextWithUsage(response, promptText, onText, normalizeText)
+      const result = await readAiResponseTextWithUsage(response, request.adapter, promptText, onText, normalizeText)
       translated = result.text
       streamed = result.streamed
       usageLog = result.usageLog
@@ -880,7 +791,7 @@ async function postAiTextWithRequest(
         throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
       }
 
-      const result = await readAiResponseTextWithUsage(response, promptText, onText, normalizeText)
+      const result = await readAiResponseTextWithUsage(response, request.adapter, promptText, onText, normalizeText)
       translated = result.text
       streamed = result.streamed
       usageLog = result.usageLog
@@ -1357,74 +1268,68 @@ export async function requestMediaAnalysis(
   return postAiText(settings, 'omni', [{ role: 'user', content }], onText)
 }
 
-export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
-  const request = createAiRequestContext(settings, scene)
-  if (!request)
-    throw new Error('AI 场景未启用或 Endpoint 未配置')
+function createSceneTestMessage(settings: LexiSettings, scene: FeatureScene): ChatMessageContent {
+  if (scene === 'selection') {
+    return [
+      getTranslationDirectionInstruction(settings.selection.translationDirection),
+      'Translate only the selected text. Make it natural and human-sounding; avoid translationese.',
+      'Selected text: optimistic update',
+      'Context: The UI applies an optimistic update before the server confirms the change.',
+    ].join('\n')
+  }
 
-  const user = scene === 'selection'
-    ? [
-        getTranslationDirectionInstruction(settings.selection.translationDirection),
-        'Translate only the selected text. Make it natural and human-sounding; avoid translationese.',
-        'Selected text: optimistic update',
-        'Context: The UI applies an optimistic update before the server confirms the change.',
-      ].join('\n')
-    : scene === 'omni'
-      ? [
-          {
-            type: 'text' as const,
-            text: 'Connection test for Lexi AI Omni. 请用简体中文说明：这是一张用于测试多模态连接的 1x1 图片，并返回一句简短分析。',
-          },
-          {
-            type: 'image_url' as const,
-            image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', detail: 'low' as const },
-          },
-        ]
-      : JSON.stringify({
-        scene,
-        text: '上下文',
-        context: '模型需要足够的上下文才能给出稳定结果。',
-        instruction: 'Connection test. Return a minimal valid result for this scene.',
-      })
+  if (scene === 'omni') {
+    return [
+      {
+        type: 'text' as const,
+        text: 'Connection test for Lexi AI Omni. 请用简体中文说明：这是一张用于测试多模态连接的 1x1 图片，并返回一句简短分析。',
+      },
+      {
+        type: 'image_url' as const,
+        image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=', detail: 'low' as const },
+      },
+    ]
+  }
 
+  return JSON.stringify({
+    scene,
+    text: '上下文',
+    context: '模型需要足够的上下文才能给出稳定结果。',
+    instruction: 'Connection test. Return a minimal valid result for this scene.',
+  })
+}
+
+async function runAiTest(request: AiRequestContext, scene: FeatureScene, user: ChatMessageContent): Promise<AiTestResult> {
   const requestUser = typeof user === 'string' ? user : JSON.stringify(user)
-  const body = buildChatBody(
-    request.model,
-    [{ role: 'system', content: request.prompt }, { role: 'user', content: user }],
-    false,
-  )
+  const messages: AiChatMessage[] = [{ role: 'system', content: request.prompt }, { role: 'user', content: user }]
+  const plan = buildChatPlan(request, messages, false)
+  const describeRequest = () => ({
+    endpoint: plan.url,
+    protocol: request.protocol,
+    model: request.model,
+    system: request.prompt,
+    user: requestUser,
+    stream: false,
+    authSent: Boolean(request.apiKey),
+    keyHint: getKeyHint(request.apiKey),
+  })
 
   try {
-    const response = await fetch(request.endpoint, {
-      method: 'POST',
-      headers: request.headers,
+    const response = await fetch(plan.url, {
+      method: plan.method,
+      headers: plan.headers,
       redirect: 'error',
-      body,
+      body: plan.body,
     })
 
     const durationMs = Math.round(performance.now() - request.startedAt)
     const rawResponse = await response.text()
-    const responseText = parseRawAiText(rawResponse)
+    const responseText = parseRawAiText(request.adapter, rawResponse)
     const usageLog = getUsageLog(undefined, `${request.prompt}\n${requestUser}`, responseText)
-    const result: AiTestResult = {
-      ok: response.ok,
-      request: {
-        endpoint: request.endpoint,
-        model: request.model,
-        system: request.prompt,
-        user: requestUser,
-        stream: false,
-        authSent: Boolean(request.apiKey),
-        keyHint: getKeyHint(request.apiKey),
-      },
-      response: responseText,
-      status: response.status,
-      durationMs,
-    }
 
     await recordAiCall({
       scene,
-      endpoint: request.endpoint,
+      endpoint: plan.url,
       model: request.model,
       authSent: Boolean(request.apiKey),
       keyHint: getKeyHint(request.apiKey),
@@ -1436,41 +1341,86 @@ export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
       durationMs,
     })
 
-    return result
+    return {
+      ok: response.ok,
+      request: describeRequest(),
+      response: responseText,
+      status: response.status,
+      durationMs,
+    }
   }
   catch (error) {
-    if (error instanceof Error) {
-      const durationMs = Math.round(performance.now() - request.startedAt)
-      await recordAiCall({
-        scene,
-        endpoint: request.endpoint,
-        model: request.model,
-        authSent: Boolean(request.apiKey),
-        keyHint: getKeyHint(request.apiKey),
-        streamed: false,
-        ok: false,
-        error: error.message,
-        durationMs,
-      })
+    if (!(error instanceof Error))
+      throw error
 
-      return {
-        ok: false,
-        request: {
-          endpoint: request.endpoint,
-          model: request.model,
-          system: request.prompt,
-          user: requestUser,
-          stream: false,
-          authSent: Boolean(request.apiKey),
-          keyHint: getKeyHint(request.apiKey),
-        },
-        response: error.message,
-        durationMs,
-      }
+    const durationMs = Math.round(performance.now() - request.startedAt)
+    await recordAiCall({
+      scene,
+      endpoint: plan.url,
+      model: request.model,
+      authSent: Boolean(request.apiKey),
+      keyHint: getKeyHint(request.apiKey),
+      streamed: false,
+      ok: false,
+      error: error.message,
+      durationMs,
+    })
+
+    return {
+      ok: false,
+      request: describeRequest(),
+      response: error.message,
+      durationMs,
     }
-
-    throw error
   }
+}
+
+export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
+  const request = createAiRequestContext(settings, scene)
+  if (!request)
+    throw new Error('AI 场景未启用，或绑定的 Provider 没有填写 Endpoint')
+
+  return runAiTest(request, scene, createSceneTestMessage(settings, scene))
+}
+
+/** Provider-level check for the AI settings table; independent of scene bindings. */
+export async function testAiProvider(settings: LexiSettings, provider: AiProviderConfig, scene: FeatureScene = 'selection') {
+  const config = toResolvedConfig(provider, 0, settings.ai[scene].prompt || promptDefaults[scene])
+  if (!config)
+    throw new Error('请先填写 Endpoint')
+
+  if (!config.model)
+    throw new Error('请先填写或选择模型')
+
+  assertEndpointAllowed(config.endpoint, settings.ai.approvedHttpEndpoints ?? [])
+
+  return runAiTest(createRequestContextFromConfig(config), scene, createSceneTestMessage(settings, scene))
+}
+
+/** Model catalogue for the provider editor; throws with a readable reason on failure. */
+export async function fetchProviderModels(settings: LexiSettings, provider: AiProviderConfig): Promise<ProviderModel[]> {
+  const endpoint = provider.endpoint?.trim() ?? ''
+  if (!endpoint)
+    throw new Error('请先填写 Endpoint')
+
+  assertEndpointAllowed(endpoint, settings.ai.approvedHttpEndpoints ?? [])
+
+  const adapter = getProtocolAdapter(resolveProtocol(provider.protocol, endpoint, provider.model ?? ''))
+  const plan = adapter.buildModelsRequest({ endpoint, apiKey: provider.apiKey ?? '' })
+  const response = await fetch(plan.url, {
+    method: plan.method,
+    headers: plan.headers,
+    redirect: 'error',
+  })
+
+  if (!response.ok)
+    throw new Error(normalizeAiErrorMessage(response.status, await readErrorText(response)))
+
+  const models = adapter.readModels(await response.json())
+  if (!models.length)
+    throw new Error('该 Endpoint 没有返回可用模型列表，请手动填写模型名。')
+
+  return models.sort((a, b) => a.id.localeCompare(b.id))
 }
 
 export function localTranslateSelection(text: string): SelectionTranslation {

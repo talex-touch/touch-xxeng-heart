@@ -1,8 +1,18 @@
 import { clampReplacementDensity, clampReplacementLevel, defaultReplacementLevel, densityTiers, levelFromLegacyDifficulty } from './replacementLevels'
-import type { AiProviderConfig, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings } from './types'
+import type { AiConnectionConfig, AiProviderConfig, AiSceneConfig, AiSettings, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings } from './types'
 
 /** Settings written before the 1-9 learner level replaced the 1-5 difficulty ceiling. */
 type StoredReplacementSettings = Partial<ReplacementSettings> & { difficulty?: number }
+
+/** Scenes and a global block used to carry their own connection; providers own it now. */
+type LegacySceneConfig = Partial<AiSceneConfig> & Partial<AiConnectionConfig>
+type LegacyAiSettings = Partial<Record<FeatureScene, LegacySceneConfig>> & {
+  global?: Partial<AiConnectionConfig>
+  providers?: Array<Partial<AiProviderConfig>>
+  approvedHttpEndpoints?: string[]
+}
+
+export const featureScenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'digest', 'omni']
 
 const emptyAiConnection = {
   endpoint: '',
@@ -47,10 +57,9 @@ export const promptDefaults: Record<FeatureScene, string> = {
   ].join(' '),
 }
 
-function createAiSceneConfig(scene: FeatureScene) {
+function createAiSceneConfig(scene: FeatureScene): AiSceneConfig {
   return {
     enabled: false,
-    ...emptyAiConnection,
     prompt: promptDefaults[scene],
     providerIds: [],
   }
@@ -61,8 +70,10 @@ function createDefaultProvider(): AiProviderConfig {
     id: 'default',
     label: '默认 Provider',
     enabled: true,
+    protocol: 'auto',
     priority: 1,
     delayMs: 0,
+    updatedAt: 0,
     ...emptyAiConnection,
   }
 }
@@ -170,7 +181,7 @@ export const defaultSettings: LexiSettings = {
   },
   history: {
     enabled: true,
-    maxRecords: 500,
+    maxRecords: 3000,
   },
   ui: {
     showFloatingStatus: false,
@@ -199,7 +210,6 @@ export const defaultSettings: LexiSettings = {
     cacheDays: 7,
   },
   ai: {
-    global: { ...emptyAiConnection },
     providers: [createDefaultProvider()],
     approvedHttpEndpoints: [],
     replacement: createAiSceneConfig('replacement'),
@@ -208,23 +218,109 @@ export const defaultSettings: LexiSettings = {
     digest: createAiSceneConfig('digest'),
     omni: createAiSceneConfig('omni'),
   },
+  sync: {
+    enabled: false,
+    includeApiKeys: true,
+    lastSyncedAt: 0,
+    lastPulledAt: 0,
+    lastError: '',
+  },
 }
 
-function normalizeProviders(value?: Partial<LexiSettings>): AiProviderConfig[] {
-  const sourceProviders = value?.ai?.providers?.length
-    ? value.ai.providers
-    : value?.ai?.global && (value.ai.global.endpoint || value.ai.global.model || value.ai.global.apiKey)
-      ? [{ ...createDefaultProvider(), ...value.ai.global }]
-      : defaultSettings.ai.providers
+export const minVocabularyLimit = 50
+export const maxVocabularyLimit = 20000
 
-  return sourceProviders.map((provider, index) => ({
+/** Keeps a hand-edited or synced ceiling inside what the sidepanel and options allow. */
+export function clampVocabularyLimit(value?: number) {
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    return defaultSettings.history.maxRecords
+
+  return Math.min(maxVocabularyLimit, Math.max(minVocabularyLimit, Math.round(value)))
+}
+
+function hasConnection(value?: Partial<AiConnectionConfig>) {
+  return Boolean(value?.endpoint?.trim() || value?.model?.trim() || value?.apiKey?.trim())
+}
+
+function normalizeProvider(provider: Partial<AiProviderConfig>, index: number): AiProviderConfig {
+  return {
     ...createDefaultProvider(),
     ...provider,
     id: provider.id || `provider-${index + 1}`,
     label: provider.label || `Provider ${index + 1}`,
-    priority: Number.isFinite(provider.priority) ? provider.priority : index + 1,
-    delayMs: Number.isFinite(provider.delayMs) ? provider.delayMs : index * 450,
-  }))
+    protocol: provider.protocol ?? 'auto',
+    priority: Number.isFinite(provider.priority) ? provider.priority as number : index + 1,
+    delayMs: Number.isFinite(provider.delayMs) ? provider.delayMs as number : index * 450,
+    updatedAt: Number.isFinite(provider.updatedAt) ? provider.updatedAt as number : 0,
+  }
+}
+
+/** Fills gaps from the retired global connection so folded providers stay callable. */
+function fillFromGlobal(provider: AiProviderConfig, global?: Partial<AiConnectionConfig>): AiProviderConfig {
+  if (!hasConnection(global))
+    return provider
+
+  return {
+    ...provider,
+    endpoint: provider.endpoint?.trim() || global?.endpoint?.trim() || '',
+    model: provider.model?.trim() || global?.model?.trim() || '',
+    apiKey: provider.apiKey?.trim() || global?.apiKey?.trim() || '',
+  }
+}
+
+/**
+ * Providers are the only place a connection lives now.
+ *
+ * Old settings kept one global connection plus a per-scene override, both of which are
+ * folded into provider rows exactly once: after the next write the legacy keys are gone,
+ * and the deterministic `legacy-*` ids keep a repeated merge from duplicating rows.
+ */
+function mergeAiSettings(value?: LegacyAiSettings): AiSettings {
+  const global = value?.global
+  const stored = Array.isArray(value?.providers) && value.providers.length
+    ? value.providers
+    : hasConnection(global)
+      ? [{ ...createDefaultProvider(), ...global }]
+      : [createDefaultProvider()]
+
+  const providers = stored.map((provider, index) => fillFromGlobal(normalizeProvider(provider, index), global))
+  const scenes = {} as Record<FeatureScene, AiSceneConfig>
+
+  for (const scene of featureScenes) {
+    const storedScene = value?.[scene]
+    const providerIds = Array.isArray(storedScene?.providerIds) ? [...storedScene.providerIds] : []
+    const legacyEndpoint = storedScene?.endpoint?.trim()
+
+    if (legacyEndpoint) {
+      const id = `legacy-${scene}`
+      if (!providers.some(provider => provider.id === id)) {
+        providers.push(normalizeProvider({
+          id,
+          label: `${featureLabels[scene]} 覆盖`,
+          endpoint: legacyEndpoint,
+          model: storedScene?.model?.trim() || global?.model?.trim() || '',
+          apiKey: storedScene?.apiKey?.trim() || global?.apiKey?.trim() || '',
+          priority: providers.length + 1,
+          delayMs: 0,
+        }, providers.length))
+      }
+
+      if (!providerIds.includes(id))
+        providerIds.push(id)
+    }
+
+    scenes[scene] = {
+      enabled: storedScene?.enabled ?? defaultSettings.ai[scene].enabled,
+      prompt: storedScene?.prompt || promptDefaults[scene],
+      providerIds,
+    }
+  }
+
+  return {
+    ...scenes,
+    providers,
+    approvedHttpEndpoints: value?.approvedHttpEndpoints ?? defaultSettings.ai.approvedHttpEndpoints,
+  }
 }
 
 function normalizeReplacement(value?: StoredReplacementSettings): ReplacementSettings {
@@ -243,7 +339,6 @@ function normalizeReplacement(value?: StoredReplacementSettings): ReplacementSet
 }
 
 export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
-  const providers = normalizeProviders(value)
   const uiDialogShortcut = !value?.ui?.dialogShortcut || value.ui.dialogShortcut === 'mod+k'
     ? defaultSettings.ui.dialogShortcut
     : value.ui.dialogShortcut
@@ -277,6 +372,7 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
     history: {
       ...defaultSettings.history,
       ...value?.history,
+      maxRecords: clampVocabularyLimit(value?.history?.maxRecords),
     },
     ui: {
       ...defaultSettings.ui,
@@ -296,38 +392,10 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       ...defaultSettings.forumDigest,
       ...value?.forumDigest,
     },
-    ai: {
-      global: {
-        ...defaultSettings.ai.global,
-        ...value?.ai?.global,
-      },
-      providers,
-      approvedHttpEndpoints: value?.ai?.approvedHttpEndpoints ?? defaultSettings.ai.approvedHttpEndpoints,
-      replacement: {
-        ...defaultSettings.ai.replacement,
-        ...value?.ai?.replacement,
-        providerIds: value?.ai?.replacement?.providerIds ?? defaultSettings.ai.replacement.providerIds,
-      },
-      selection: {
-        ...defaultSettings.ai.selection,
-        ...value?.ai?.selection,
-        providerIds: value?.ai?.selection?.providerIds ?? defaultSettings.ai.selection.providerIds,
-      },
-      daily: {
-        ...defaultSettings.ai.daily,
-        ...value?.ai?.daily,
-        providerIds: value?.ai?.daily?.providerIds ?? defaultSettings.ai.daily.providerIds,
-      },
-      digest: {
-        ...defaultSettings.ai.digest,
-        ...value?.ai?.digest,
-        providerIds: value?.ai?.digest?.providerIds ?? defaultSettings.ai.digest.providerIds,
-      },
-      omni: {
-        ...defaultSettings.ai.omni,
-        ...value?.ai?.omni,
-        providerIds: value?.ai?.omni?.providerIds ?? defaultSettings.ai.omni.providerIds,
-      },
+    ai: mergeAiSettings(value?.ai as LegacyAiSettings | undefined),
+    sync: {
+      ...defaultSettings.sync,
+      ...value?.sync,
     },
   }
 }

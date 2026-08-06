@@ -6,10 +6,12 @@ import { openOptionsPage } from '~/logic/browserActions'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
 import type { DensityTierId } from '~/logic/replacementLevels'
-import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, normalizeImportedRecord, reviewVocabularyRecord } from '~/logic/vocabularyRecords'
+import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, reviewVocabularyRecord } from '~/logic/vocabularyRecords'
+import { exportVocabularyRecords, importVocabularyRecords } from '~/logic/vocabularyTransfer'
+import { maxVocabularyLimit, minVocabularyLimit } from '~/logic/defaults'
 import type { VocabularyReviewResult } from '~/logic/vocabularyRecords'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
-import type { PageTranslationScope, TranslationDirection, VocabularyRecord } from '~/logic/types'
+import type { PageTranslationScope, TranslationDirection } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
 type PageContextStatus = 'loading' | 'supported' | 'unsupported'
@@ -28,7 +30,6 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
 ]
 const cleanupDays = ref(30)
 const importMessage = ref('')
-const maxImportBytes = 2 * 1024 * 1024
 const hostLabel = ref('')
 const pageContextStatus = ref<PageContextStatus>('loading')
 const pageContextSupported = computed(() => pageContextStatus.value === 'supported')
@@ -287,13 +288,7 @@ function togglePageTranslation() {
 }
 
 function exportRecords() {
-  const blob = new Blob([JSON.stringify(vocabularyRecords.value, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `lexi-vocabulary-${new Date().toISOString().slice(0, 10)}.json`
-  link.click()
-  URL.revokeObjectURL(url)
+  exportVocabularyRecords(vocabularyRecords.value)
 }
 
 function clearRecords() {
@@ -338,28 +333,14 @@ async function importRecords(event: Event) {
     return
 
   try {
-    const file = input.files[0]
-    if (file.size > maxImportBytes)
-      throw new Error('导入文件过大，请控制在 2 MB 以内')
+    const result = await importVocabularyRecords(
+      input.files[0],
+      vocabularyRecords.value,
+      lexiSettings.value.history.maxRecords,
+    )
 
-    const text = await file.text()
-    const records = JSON.parse(text) as VocabularyRecord[]
-    if (!Array.isArray(records))
-      throw new Error('导入文件不是数组')
-
-    const normalizedRecords = records
-      .slice(0, lexiSettings.value.history.maxRecords)
-      .map(record => normalizeImportedRecord(record))
-      .filter((record): record is VocabularyRecord => Boolean(record))
-
-    const merged = new Map(vocabularyRecords.value.map(record => [record.id, record]))
-    for (const record of normalizedRecords)
-      merged.set(record.id, record)
-
-    vocabularyRecords.value = [...merged.values()]
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, lexiSettings.value.history.maxRecords)
-    importMessage.value = `已导入 ${normalizedRecords.length} 条，跳过 ${records.length - normalizedRecords.length} 条无效记录`
+    vocabularyRecords.value = result.records
+    importMessage.value = `已导入 ${result.imported} 条，跳过 ${result.skipped} 条无效记录`
   }
   catch (error) {
     importMessage.value = error instanceof Error ? error.message : '导入失败'
@@ -715,8 +696,8 @@ onBeforeUnmount(() => {
         </div>
 
         <label class="mt-3 block">
-          <span class="text-12px text-neutral-500">历史记录上限（条）</span>
-          <input v-model.number="lexiSettings.history.maxRecords" type="number" min="50" max="5000" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
+          <span class="text-12px text-neutral-500">词库记录上限（条）</span>
+          <input v-model.number="lexiSettings.history.maxRecords" type="number" :min="minVocabularyLimit" :max="maxVocabularyLimit" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 text-12px outline-none focus:border-neutral-950">
         </label>
       </section>
     </section>

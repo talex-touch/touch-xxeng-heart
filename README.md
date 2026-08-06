@@ -16,7 +16,9 @@ Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变�
 - 场景化速读：为 GitHub 仓库、Discourse 主题以及 Reddit、X、YouTube、Bilibili、小红书、知乎生成带读取范围的可缓存摘要。
 - 敏感内容保护：NSFW 内容速读默认关闭；关闭时不会提取、缓存或发送检测到的内容。
 - 媒体工具：支持媒体下载、AI Omni 图片 Prompt 提取和跨 frame 视频倍速。
-- 场景化 AI：替换、划词、每日推荐、AI Omni 分别支持独立 Provider；HTTP Endpoint 需逐地址确认。
+- 场景化 AI：替换、划词、每日推荐、内容速读、AI Omni 分别绑定 Provider；HTTP Endpoint 需逐地址确认。
+- 多协议 Provider：支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Google Gemini，可自动识别协议、拉取模型列表并逐个测试。
+- 设置同步：可选把设置镜像到浏览器账号同步区（约 100KB 配额），词库仍保存在本机并支持 JSON 导入导出。
 - 站点配置：支持全部网页、白名单、黑名单、特殊站点策略和总开关。
 
 ## 品牌图标
@@ -106,7 +108,18 @@ extension/assets/                  扩展图标资产
 
 ## AI 后端协议
 
-Lexi 会向配置的 endpoint 发送 JSON POST 请求，并在 Header 中以 `Authorization: Bearer <apiKey>` 传入密钥。HTTPS 地址可直接使用；HTTP 地址会在设置页逐个弹框确认，许可仅对规范化后的完整地址生效，可随时撤销。
+每个 Provider 选择一种协议，请求格式、鉴权 Header 和流式解析都由对应适配器负责（`src/logic/providers/`）：
+
+| 协议 | 请求 | 鉴权 |
+| --- | --- | --- |
+| `openai-chat` | `POST {base}/v1/chat/completions` | `Authorization: Bearer` |
+| `openai-responses` | `POST {base}/v1/responses` | `Authorization: Bearer` |
+| `anthropic-messages` | `POST {base}/v1/messages` | `x-api-key` + `anthropic-version` |
+| `gemini` | `POST {base}/v1beta/models/{model}:generateContent` | `x-goog-api-key` |
+
+协议选择“自动识别”时，先看 Endpoint 是否已写明完整路由，其次看域名，最后看模型名前缀（`claude-` / `gemini-`），都不匹配时按 OpenAI Chat 处理。系统提示词在 Responses 走 `instructions`、在 Anthropic 走 `system`、在 Gemini 走 `systemInstruction`。
+
+HTTPS 地址可直接使用；HTTP 地址会在设置页逐个弹框确认，许可仅对规范化后的完整地址生效，可随时撤销，且不参与账号同步。
 
 替换场景期望返回：
 
@@ -168,6 +181,18 @@ Lexi 会向配置的 endpoint 发送 JSON POST 请求，并在 Header 中以 `Au
 ```
 
 读取范围由客户端生成并展示，不接受模型覆盖。缓存只保存摘要、内容哈希和最少元数据，不保存正文、评论全文或字幕。
+
+## 数据存放与同步
+
+运行时真源始终是 `storage.local`。在设置页开启「同步到 Google 账号」后，设置会额外镜像一份到浏览器账号同步区（`storage.sync`）：
+
+- 同步：站点规则、替换强度、划词与页面翻译、速读、界面、词库上限、Provider 与提示词。
+- 不同步：词库记录、AI 调用日志、访问日志、速读缓存（体积远超 100KB 配额），以及已确认的 HTTP Endpoint（属于本机授权）。
+- API Key 默认随设置一起同步，可在同一张卡片里单独关掉；开启时 Key 会随浏览器同步上传到 Google 服务器，建议同时启用 Chrome 同步密码短语。
+
+同步区单项上限 8KB，因此设置被切成 `lexi-sync-settings-chunk-*` 分片写入，并由 `lexi-sync-settings-meta` 记录分片数与长度；分片没凑齐时整份快照会被忽略，等下次改动重新同步。设备之间按写入时间取新，另一台设备的快照到达时才会覆盖本机。
+
+词库换设备用设置页「词库记录」里的 JSON 导出/导入，同名词条按最新记录覆盖，超出词库上限时保留最近更新的部分。
 
 ## 贡献
 

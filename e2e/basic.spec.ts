@@ -13,6 +13,9 @@ declare const chrome: {
       get: (key: string | null) => Promise<Record<string, unknown>>
       set: (items: Record<string, unknown>) => Promise<void>
     }
+    sync: {
+      get: (key: string | null) => Promise<Record<string, unknown>>
+    }
   }
 }
 
@@ -31,8 +34,56 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
   await expect(page.getByRole('heading', { name: '多平台内容速读' })).toBeVisible()
   await expect(page.getByRole('switch', { name: '允许 NSFW 内容速读' })).toHaveAttribute('aria-checked', 'false')
   await page.getByRole('tab', { name: 'AI 场景' }).click()
-  await expect(page.getByRole('heading', { name: 'AI 场景配置' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Provider' })).toBeVisible()
+  await expect(page.getByRole('columnheader', { name: '协议' })).toBeVisible()
   await expect(page.getByRole('switch', { name: '内容速读' })).toBeVisible()
+})
+
+test('providers are created, tested and removed from the table', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('tab', { name: 'AI 场景' }).click()
+
+  // Wait for the stored settings to land; edits made before that first read are lost.
+  await expect(page.getByRole('row', { name: /默认 Provider/ })).toBeVisible()
+
+  const editor = page.getByRole('dialog', { name: '添加 Provider' })
+  await page.getByRole('button', { name: '添加 Provider' }).click()
+  await expect(editor).toBeVisible()
+
+  await editor.getByLabel('名称').fill('Responses 网关')
+  await editor.getByLabel('协议').selectOption('openai-responses')
+  await editor.getByLabel('Endpoint').fill('https://api.example.test/v1')
+  await editor.getByLabel('模型').fill('gpt-5')
+  await editor.getByRole('button', { name: '保存' }).click()
+  await expect(editor).toBeHidden()
+
+  const row = page.getByRole('row', { name: /Responses 网关/ })
+  await expect(row).toContainText('OpenAI Responses')
+  await expect(row).toContainText('gpt-5')
+
+  await row.getByRole('button', { name: '删除' }).click()
+  await expect(page.getByRole('row', { name: /Responses 网关/ })).toHaveCount(0)
+})
+
+test('enabling sync mirrors settings into the browser account', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+
+  await expect(page.getByRole('heading', { name: '同步到 Google 账号' })).toBeVisible()
+  await page.getByRole('switch', { name: '启用同步' }).click()
+
+  // The background service worker debounces the push, so poll rather than wait once.
+  await expect.poll(async () => page.evaluate(async () => {
+    const items = await chrome.storage.sync.get(null)
+    return Object.keys(items).filter(key => key.startsWith('lexi-sync-settings')).length
+  }), { timeout: 15000 }).toBeGreaterThan(1)
+
+  const mirrored = await page.evaluate(async () => {
+    const items = await chrome.storage.sync.get(null)
+    return JSON.parse(String(items['lexi-sync-settings-meta']))
+  })
+
+  expect(mirrored.chunks).toBeGreaterThan(0)
+  expect(mirrored.updatedAt).toBeGreaterThan(0)
 })
 
 test('replacement strength maps levels and density tiers to plain language', async ({ page, extensionId }) => {
@@ -56,9 +107,10 @@ test('replacement strength maps levels and density tiers to plain language', asy
 test('HTTP endpoints require per-address confirmation', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
   await page.getByRole('tab', { name: 'AI 场景' }).click()
+  await page.getByRole('row', { name: /默认 Provider/ }).getByRole('button', { name: '编辑' }).click()
 
-  const provider = page.locator('article').first()
-  const endpoint = provider.getByLabel('Endpoint')
+  const editor = page.getByRole('dialog', { name: '编辑 Provider' })
+  const endpoint = editor.getByLabel('Endpoint')
   const approval = page.getByRole('dialog', { name: '确认使用 HTTP Endpoint' })
 
   await endpoint.fill('http://API.example.com:80/v1/')

@@ -1,5 +1,9 @@
+import type { AiProtocol } from './providers'
+
 export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
+
+export type { AiProtocol }
 
 export interface AiConnectionConfig {
   endpoint: string
@@ -11,18 +15,21 @@ export interface AiProviderConfig extends AiConnectionConfig {
   id: string
   label: string
   enabled: boolean
+  /** Wire format; `auto` is resolved from the endpoint and model at request time. */
+  protocol: AiProtocol
   priority: number
   delayMs: number
+  updatedAt: number
 }
 
-export interface AiSceneConfig extends AiConnectionConfig {
+/** Scenes own their prompt and pick providers; the connection lives on the provider. */
+export interface AiSceneConfig {
   enabled: boolean
   prompt: string
   providerIds: string[]
 }
 
 export type AiSettings = Record<FeatureScene, AiSceneConfig> & {
-  global: AiConnectionConfig
   providers: AiProviderConfig[]
   approvedHttpEndpoints: string[]
 }
@@ -31,6 +38,7 @@ export interface AiTestResult {
   ok: boolean
   request: {
     endpoint: string
+    protocol: AiProtocol
     model: string
     system: string
     user: string
@@ -180,7 +188,17 @@ export interface StudySettings {
 
 export interface HistorySettings {
   enabled: boolean
+  /** Vocabulary ceiling; older entries are dropped once the list passes it. */
   maxRecords: number
+}
+
+export interface SyncSettings {
+  enabled: boolean
+  /** API keys leave the device when this is on; the options page spells that out. */
+  includeApiKeys: boolean
+  lastSyncedAt: number
+  lastPulledAt: number
+  lastError: string
 }
 
 export interface UiSettings {
@@ -344,6 +362,7 @@ export interface LexiSettings {
   githubDigest: GitHubDigestSettings
   forumDigest: ForumDigestSettings
   ai: AiSettings
+  sync: SyncSettings
 }
 
 export interface VocabularyCandidate {

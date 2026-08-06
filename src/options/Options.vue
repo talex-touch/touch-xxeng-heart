@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
-import { defaultSettings, featureLabels, promptDefaults } from '~/logic/defaults'
-import { testAiScene } from '~/logic/aiClient'
+import { defaultSettings, featureLabels, maxVocabularyLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
+import { fetchProviderModels, testAiProvider, testAiScene } from '~/logic/aiClient'
+import { getProtocolLabel, protocolOptions } from '~/logic/providers'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, contentDigestCache, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
@@ -10,8 +11,11 @@ import { estimateStorageBytes, formatBytes, formatDateTime, formatTime } from '~
 import { normalizeForumCacheHistory } from '~/logic/forumDigestCache'
 import { approveHttpEndpoint, assertEndpointAllowed, isHttpEndpoint, normalizeEndpointApproval, revokeHttpEndpoint } from '~/logic/endpointPolicy'
 import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, replacementLevels, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
+import { getSyncQuota, pullSettingsFromSync, pushSettingsToSync } from '~/logic/settingsSync'
+import { exportVocabularyRecords, importVocabularyRecords } from '~/logic/vocabularyTransfer'
 import type { DensityTierId } from '~/logic/replacementLevels'
-import type { AiConnectionConfig, AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
+import type { ProviderModel } from '~/logic/providers'
+import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 
@@ -132,9 +136,62 @@ const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
 const sceneTestDetails = ref<Partial<Record<FeatureScene, AiTestResult>>>({})
 const httpApprovalDialog = ref<HTMLDialogElement>()
 const resetSettingsDialog = ref<HTMLDialogElement>()
-let pendingHttpConnection: AiConnectionConfig | undefined
+let pendingHttpConnection: { endpoint: string } | undefined
 let pendingHttpInput: HTMLInputElement | undefined
 const pendingHttpEndpoint = ref('')
+
+const providerPageSize = 8
+const providerSearchQuery = ref('')
+const providerPage = ref(1)
+const providerDialog = ref<HTMLDialogElement>()
+const providerDraft = ref<AiProviderConfig>()
+const providerDraftIsNew = ref(false)
+const providerModels = ref<ProviderModel[]>([])
+const providerModelsError = ref('')
+const loadingProviderModels = ref(false)
+const providerTestResult = ref<AiTestResult>()
+const providerTestMessage = ref('')
+const testingProvider = ref(false)
+const providerRowTests = ref<Record<string, { loading: boolean, ok: boolean, message: string }>>({})
+const vocabularyImportInput = ref<HTMLInputElement>()
+const vocabularyTransferMessage = ref('')
+const syncMessage = ref('')
+const syncBusy = ref(false)
+const syncQuota = ref<{ used: number, total: number }>()
+
+const filteredProviders = computed(() => {
+  const query = normalizeSearchText(providerSearchQuery.value)
+  if (!query)
+    return lexiSettings.value.ai.providers
+
+  return lexiSettings.value.ai.providers.filter(provider => normalizeSearchText([
+    provider.label,
+    provider.endpoint,
+    provider.model,
+    getProtocolLabel(provider.protocol),
+  ].filter(Boolean).join(' ')).includes(query))
+})
+const providerPageCount = computed(() => Math.max(1, Math.ceil(filteredProviders.value.length / providerPageSize)))
+const pagedProviders = computed(() => {
+  const start = (providerPage.value - 1) * providerPageSize
+  return filteredProviders.value.slice(start, start + providerPageSize)
+})
+const providerRangeLabel = computed(() => {
+  const total = filteredProviders.value.length
+  if (!total)
+    return '0 条'
+
+  const start = (providerPage.value - 1) * providerPageSize + 1
+  return `${start}-${Math.min(total, start + providerPageSize - 1)} / ${total} 条`
+})
+const activeProtocolHint = computed(() => protocolOptions.find(option => option.value === providerDraft.value?.protocol)?.hint ?? '')
+const sceneProviderNames = computed(() => new Map(lexiSettings.value.ai.providers.map(provider => [provider.id, provider.label || provider.id])))
+
+// Deleting or filtering can leave the cursor past the last page.
+watchEffect(() => {
+  if (providerPage.value > providerPageCount.value)
+    providerPage.value = providerPageCount.value
+})
 
 function setDensityTier(id: DensityTierId) {
   const tier = densityTiers.find(item => item.id === id)
@@ -164,25 +221,140 @@ function createProvider(): AiProviderConfig {
     id: `provider-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     label: '新 Provider',
     enabled: true,
+    protocol: 'auto',
     endpoint: '',
     apiKey: '',
     model: '',
     priority: lexiSettings.value.ai.providers.length + 1,
     delayMs: Math.max(0, lexiSettings.value.ai.providers.length * 350),
+    updatedAt: Date.now(),
   }
 }
 
-function addProvider() {
-  lexiSettings.value.ai.providers = [...lexiSettings.value.ai.providers, createProvider()]
+function openProviderEditor(provider?: AiProviderConfig) {
+  providerDraftIsNew.value = !provider
+  providerDraft.value = provider ? { ...provider } : createProvider()
+  providerModels.value = []
+  providerModelsError.value = ''
+  providerTestResult.value = undefined
+  providerTestMessage.value = ''
+  providerDialog.value?.showModal()
+}
+
+function closeProviderEditor() {
+  providerDialog.value?.close()
+  providerDraft.value = undefined
+}
+
+function saveProviderDraft() {
+  const draft = providerDraft.value
+  if (!draft)
+    return
+
+  const provider: AiProviderConfig = {
+    ...draft,
+    label: draft.label.trim() || '未命名 Provider',
+    endpoint: draft.endpoint.trim(),
+    model: draft.model.trim(),
+    apiKey: draft.apiKey.trim(),
+    updatedAt: Date.now(),
+  }
+  const providers = lexiSettings.value.ai.providers
+  const index = providers.findIndex(item => item.id === provider.id)
+  lexiSettings.value.ai.providers = index < 0
+    ? [...providers, provider]
+    : providers.map(item => (item.id === provider.id ? provider : item))
+
+  if (index < 0)
+    providerPage.value = Math.max(1, Math.ceil((filteredProviders.value.length + 1) / providerPageSize))
+
+  closeProviderEditor()
 }
 
 function removeProvider(id: string) {
-  if (lexiSettings.value.ai.providers.length <= 1)
-    return
-
   lexiSettings.value.ai.providers = lexiSettings.value.ai.providers.filter(provider => provider.id !== id)
   for (const scene of scenes)
     lexiSettings.value.ai[scene].providerIds = lexiSettings.value.ai[scene].providerIds.filter(providerId => providerId !== id)
+}
+
+function toggleProviderEnabled(id: string, enabled: boolean) {
+  lexiSettings.value.ai.providers = lexiSettings.value.ai.providers.map(provider => (
+    provider.id === id ? { ...provider, enabled, updatedAt: Date.now() } : provider
+  ))
+}
+
+async function loadProviderModels() {
+  const draft = providerDraft.value
+  if (!draft)
+    return
+
+  loadingProviderModels.value = true
+  providerModelsError.value = ''
+  try {
+    providerModels.value = await fetchProviderModels(lexiSettings.value, draft)
+  }
+  catch (error) {
+    providerModels.value = []
+    providerModelsError.value = error instanceof Error ? error.message : '获取模型列表失败'
+  }
+  finally {
+    loadingProviderModels.value = false
+  }
+}
+
+async function testProviderDraft() {
+  const draft = providerDraft.value
+  if (!draft)
+    return
+
+  testingProvider.value = true
+  providerTestMessage.value = ''
+  providerTestResult.value = undefined
+  try {
+    const result = await testAiProvider(lexiSettings.value, draft)
+    providerTestResult.value = result
+    providerTestMessage.value = result.ok ? `连接成功 · ${result.durationMs}ms` : `连接失败 · ${result.status ?? '网络错误'}`
+  }
+  catch (error) {
+    providerTestMessage.value = error instanceof Error ? error.message : '连接失败'
+  }
+  finally {
+    testingProvider.value = false
+  }
+}
+
+async function testProviderRow(provider: AiProviderConfig) {
+  providerRowTests.value = {
+    ...providerRowTests.value,
+    [provider.id]: { loading: true, ok: false, message: '' },
+  }
+
+  try {
+    const result = await testAiProvider(lexiSettings.value, provider)
+    providerRowTests.value = {
+      ...providerRowTests.value,
+      [provider.id]: {
+        loading: false,
+        ok: result.ok,
+        message: result.ok ? `成功 · ${result.durationMs}ms` : `失败 · ${result.status ?? '网络错误'}`,
+      },
+    }
+  }
+  catch (error) {
+    providerRowTests.value = {
+      ...providerRowTests.value,
+      [provider.id]: {
+        loading: false,
+        ok: false,
+        message: error instanceof Error ? error.message : '测试失败',
+      },
+    }
+  }
+}
+
+function describeProviderScenes(id: string) {
+  const bound = scenes.filter(scene => lexiSettings.value.ai[scene].providerIds.includes(id))
+  return bound.length ? bound.map(scene => featureLabels[scene]).join('、') : '全部启用场景'
 }
 
 function providerSelected(scene: FeatureScene, providerId: string) {
@@ -199,7 +371,7 @@ function toggleSceneProvider(scene: FeatureScene, providerId: string, enabled: b
   lexiSettings.value.ai[scene].providerIds = [...current]
 }
 
-function confirmHttpEndpoint(connection: AiConnectionConfig, input: HTMLInputElement) {
+function confirmHttpEndpoint(connection: { endpoint: string }, input: HTMLInputElement) {
   const endpoint = normalizeEndpointApproval(input.value)
   input.setCustomValidity('')
   if (!endpoint) {
@@ -437,6 +609,80 @@ function resetSettings() {
   lexiSettings.value = structuredClone(defaultSettings)
   resetSettingsDialog.value?.close()
 }
+
+async function refreshSyncQuota() {
+  syncQuota.value = await getSyncQuota()
+}
+
+watchEffect(() => {
+  if (activeTab.value === 'settings')
+    void refreshSyncQuota()
+})
+
+async function syncNow() {
+  syncBusy.value = true
+  syncMessage.value = ''
+  try {
+    const result = await pushSettingsToSync(lexiSettings.value)
+    lexiSettings.value.sync = {
+      ...lexiSettings.value.sync,
+      lastSyncedAt: result.updatedAt,
+      lastError: '',
+    }
+    syncMessage.value = `已上传 ${formatBytes(result.bytes)} 到 Google 账号`
+    await refreshSyncQuota()
+  }
+  catch (error) {
+    syncMessage.value = error instanceof Error ? error.message : '同步失败'
+    lexiSettings.value.sync = { ...lexiSettings.value.sync, lastError: syncMessage.value }
+  }
+  finally {
+    syncBusy.value = false
+  }
+}
+
+async function pullSyncNow() {
+  syncBusy.value = true
+  syncMessage.value = ''
+  try {
+    const settings = await pullSettingsFromSync()
+    syncMessage.value = settings ? '已拉取 Google 账号中的设置' : 'Google 账号中还没有 Lexi 设置'
+  }
+  catch (error) {
+    syncMessage.value = error instanceof Error ? error.message : '拉取失败'
+  }
+  finally {
+    syncBusy.value = false
+  }
+}
+
+function exportVocabulary() {
+  exportVocabularyRecords(vocabularyRecords.value)
+  vocabularyTransferMessage.value = `已导出 ${vocabularyRecords.value.length} 条记录`
+}
+
+async function importVocabulary(event: Event) {
+  const input = event.target
+  if (!(input instanceof HTMLInputElement) || !input.files?.[0])
+    return
+
+  try {
+    const result = await importVocabularyRecords(
+      input.files[0],
+      vocabularyRecords.value,
+      lexiSettings.value.history.maxRecords,
+    )
+
+    vocabularyRecords.value = result.records
+    vocabularyTransferMessage.value = `已导入 ${result.imported} 条，跳过 ${result.skipped} 条无效记录`
+  }
+  catch (error) {
+    vocabularyTransferMessage.value = error instanceof Error ? error.message : '导入失败'
+  }
+  finally {
+    input.value = ''
+  }
+}
 </script>
 
 <template>
@@ -465,6 +711,92 @@ function resetSettings() {
           </BaseButton>
         </div>
       </div>
+    </dialog>
+
+    <dialog
+      ref="providerDialog"
+      class="options-dialog options-dialog--wide"
+      aria-labelledby="provider-editor-title"
+      @cancel.prevent="closeProviderEditor"
+    >
+      <form v-if="providerDraft" class="options-dialog__body" method="dialog" @submit.prevent="saveProviderDraft">
+        <h2 id="provider-editor-title">
+          {{ providerDraftIsNew ? '添加 Provider' : '编辑 Provider' }}
+        </h2>
+        <p>协议决定请求格式；选择“自动识别”时按 Endpoint 与模型名推断。</p>
+
+        <div class="provider-form">
+          <FormField label="名称" compact>
+            <BaseInput v-model="providerDraft.label" size="sm" placeholder="OpenAI / Claude / 自建网关" />
+          </FormField>
+          <FormField label="协议" :hint="activeProtocolHint" compact>
+            <BaseSelect v-model="providerDraft.protocol" size="sm">
+              <option v-for="option in protocolOptions" :key="option.value" :value="option.value">
+                {{ option.label }}
+              </option>
+            </BaseSelect>
+          </FormField>
+
+          <FormField class="provider-form__wide" label="Endpoint" hint="填基础地址即可，例如 https://api.example.com 或 .../v1。" compact>
+            <BaseInput :model-value="providerDraft.endpoint" size="sm" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(providerDraft, $event.target as HTMLInputElement)" />
+          </FormField>
+
+          <FormField class="provider-form__wide" label="API Key" compact>
+            <BaseInput v-model="providerDraft.apiKey" type="password" size="sm" placeholder="sk-..." autocomplete="off" />
+          </FormField>
+
+          <FormField class="provider-form__wide" label="模型" hint="可直接输入，或先拉取该 Endpoint 的模型列表再选择。" compact>
+            <div class="provider-form__model">
+              <BaseInput v-model="providerDraft.model" size="sm" list="provider-model-options" placeholder="gpt-4.1-mini" />
+              <BaseButton size="sm" :loading="loadingProviderModels" loading-label="正在获取模型列表" @click="loadProviderModels">
+                获取模型
+              </BaseButton>
+            </div>
+            <datalist id="provider-model-options">
+              <option v-for="model in providerModels" :key="model.id" :value="model.id">
+                {{ model.label || model.id }}
+              </option>
+            </datalist>
+          </FormField>
+
+          <FormField label="优先级" hint="数字越小越先发起。" compact>
+            <BaseInput v-model="providerDraft.priority" type="number" size="sm" :min="1" />
+          </FormField>
+          <FormField label="延迟 ms" hint="竞速时延后发起，用于兜底 Provider。" compact>
+            <BaseInput v-model="providerDraft.delayMs" type="number" size="sm" :min="0" :step="50" />
+          </FormField>
+        </div>
+
+        <p v-if="providerModelsError" class="provider-form__error">
+          {{ providerModelsError }}
+        </p>
+        <p v-else-if="providerModels.length" class="provider-form__note">
+          已获取 {{ providerModels.length }} 个模型，输入框可直接下拉选择。
+        </p>
+
+        <div class="mt-4">
+          <BaseCheckbox v-model="providerDraft.enabled" label="启用此 Provider" />
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <BaseButton :loading="testingProvider" loading-label="正在测试连接" @click="testProviderDraft">
+            测试连接
+          </BaseButton>
+          <span v-if="providerTestMessage" class="text-12px" :class="providerTestResult?.ok ? 'text-emerald-600' : 'text-red-600'">
+            {{ providerTestMessage }}
+          </span>
+        </div>
+        <pre v-if="providerTestResult" class="mt-2 max-h-32 overflow-auto rounded-2 bg-neutral-50 p-3 text-11px leading-4 text-neutral-700">{{ providerTestResult.response || '空响应' }}</pre>
+
+        <div class="options-dialog__actions">
+          <BaseButton type="button" @click="closeProviderEditor">
+            取消
+          </BaseButton>
+          <BaseButton type="submit" variant="primary">
+            保存
+          </BaseButton>
+        </div>
+      </form>
     </dialog>
 
     <dialog
@@ -856,6 +1188,74 @@ function resetSettings() {
           <section class="settings-card">
             <header class="settings-card__head">
               <div>
+                <h2>同步到 Google 账号</h2>
+                <p>把设置镜像到浏览器账号同步区，换设备登录同一账号后自动带上。</p>
+              </div>
+              <SettingToggle v-model="lexiSettings.sync.enabled" label="启用同步" />
+            </header>
+
+            <div class="settings-stack">
+              <SettingToggle
+                v-model="lexiSettings.sync.includeApiKeys"
+                label="同步中包含 API Key"
+                hint="开启后 Key 会随浏览器同步上传到 Google 服务器；建议在 Chrome 设置中启用同步密码短语。关闭时其他设备需要重新填写 Key。"
+                :disabled="!lexiSettings.sync.enabled"
+              />
+
+              <div class="settings-callout">
+                <span class="i-lucide-info" aria-hidden="true" />
+                <p>
+                  同步区配额约 100KB，只放设置：站点规则、替换强度、速读、界面、Provider 与提示词。
+                  词库、AI 日志、访问记录和速读缓存体积远超配额，仍然只保存在本机；已确认的 HTTP Endpoint 属于本机授权，也不参与同步。
+                </p>
+              </div>
+
+              <div class="settings-fields">
+                <div class="settings-field">
+                  <span class="settings-field__label">同步区占用</span>
+                  <p class="settings-field__hint">
+                    {{ syncQuota ? `${formatBytes(syncQuota.used)} / ${formatBytes(syncQuota.total)}` : '读取中…' }}
+                  </p>
+                </div>
+                <div class="settings-field">
+                  <span class="settings-field__label">最近上传</span>
+                  <p class="settings-field__hint">
+                    {{ lexiSettings.sync.lastSyncedAt ? formatDateTime(lexiSettings.sync.lastSyncedAt) : '尚未上传' }}
+                  </p>
+                </div>
+                <div class="settings-field">
+                  <span class="settings-field__label">最近拉取</span>
+                  <p class="settings-field__hint">
+                    {{ lexiSettings.sync.lastPulledAt ? formatDateTime(lexiSettings.sync.lastPulledAt) : '尚未拉取' }}
+                  </p>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-3">
+                <BaseButton :loading="syncBusy" loading-label="正在同步" :disabled="!lexiSettings.sync.enabled" @click="syncNow">
+                  <template #icon>
+                    <span class="i-lucide-cloud-upload" aria-hidden="true" />
+                  </template>
+                  立即上传
+                </BaseButton>
+                <BaseButton :loading="syncBusy" loading-label="正在拉取" :disabled="!lexiSettings.sync.enabled" @click="pullSyncNow">
+                  <template #icon>
+                    <span class="i-lucide-cloud-download" aria-hidden="true" />
+                  </template>
+                  从账号拉取
+                </BaseButton>
+                <span v-if="syncMessage" class="text-12px text-neutral-600">{{ syncMessage }}</span>
+              </div>
+
+              <p v-if="lexiSettings.sync.lastError" class="settings-note text-red-600">
+                {{ lexiSettings.sync.lastError }}
+              </p>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <header class="settings-card__head">
+              <div>
                 <h2>界面与快捷键</h2>
                 <p>调整页面上的提示、快捷键与自定义样式。</p>
               </div>
@@ -978,6 +1378,50 @@ function resetSettings() {
               清空
             </BaseButton>
           </div>
+
+          <div class="mt-4 rounded-2 border border-neutral-200 p-4">
+            <div class="grid gap-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
+              <FormField label="词库上限（条）" :hint="`达到上限后按更新时间保留最新的记录，可设置 ${minVocabularyLimit} - ${maxVocabularyLimit}。`">
+                <BaseInput
+                  v-model="lexiSettings.history.maxRecords"
+                  type="number"
+                  :min="minVocabularyLimit"
+                  :max="maxVocabularyLimit"
+                  :step="100"
+                />
+              </FormField>
+              <div>
+                <span class="text-12px font-500 text-neutral-600">备份与迁移</span>
+                <p class="mt-1 text-12px leading-5 text-neutral-500">
+                  词库体积较大，不随 Google 同步；换设备时用 JSON 导入导出，同名词条会按最新记录覆盖。
+                </p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <BaseButton size="sm" @click="exportVocabulary">
+                    <template #icon>
+                      <span class="i-lucide-download" aria-hidden="true" />
+                    </template>
+                    导出 JSON
+                  </BaseButton>
+                  <BaseButton size="sm" @click="vocabularyImportInput?.click()">
+                    <template #icon>
+                      <span class="i-lucide-upload" aria-hidden="true" />
+                    </template>
+                    导入 JSON
+                  </BaseButton>
+                  <input
+                    ref="vocabularyImportInput"
+                    type="file"
+                    accept="application/json,.json"
+                    class="hidden"
+                    @change="importVocabulary"
+                  >
+                </div>
+                <p v-if="vocabularyTransferMessage" class="mt-2 text-12px text-neutral-600">
+                  {{ vocabularyTransferMessage }}
+                </p>
+              </div>
+            </div>
+          </div>
           <div class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <h3 class="text-14px font-600">
@@ -1068,99 +1512,146 @@ function resetSettings() {
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="text-16px font-600">
-                AI 场景配置
+                Provider
               </h2>
               <p class="mt-1 text-12px leading-5 text-neutral-500">
-                场景留空时继承全局连接；需要不同模型或后端时再单独覆盖。
+                每个 Provider 是一条独立连接：协议、Endpoint、模型和 API Key。同一场景绑定多个时按优先级和延迟竞速，先返回的结果被采用。
               </p>
             </div>
+            <BaseButton variant="primary" @click="openProviderEditor()">
+              <template #icon>
+                <span class="i-lucide-plus" aria-hidden="true" />
+              </template>
+              添加 Provider
+            </BaseButton>
           </div>
 
-          <div class="mt-4 rounded-2 border border-neutral-200 p-4">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h3 class="text-14px font-600">
-                  Provider 列表
-                </h3>
-                <p class="mt-1 text-12px leading-5 text-neutral-500">
-                  可配置多个 OpenAI 兼容后端。调用时按优先级和延迟进行竞速，先返回的结果会被采用。
-                </p>
-              </div>
-              <BaseButton variant="primary" @click="addProvider">
-                <template #icon>
-                  <span class="i-lucide-plus" aria-hidden="true" />
-                </template>
-                添加 Provider
+          <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,22rem)_auto] lg:items-center">
+            <BaseInput
+              v-model="providerSearchQuery"
+              type="search"
+              placeholder="搜索名称、协议、Endpoint 或模型"
+            />
+            <span class="text-12px text-neutral-500">{{ providerRangeLabel }}</span>
+          </div>
+
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full border-collapse text-left text-12px">
+              <thead class="bg-white text-neutral-500">
+                <tr class="border-b border-neutral-200">
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    名称
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    协议
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    Endpoint
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    模型
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    优先级 / 延迟
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    绑定场景
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    启用
+                  </th>
+                  <th scope="col" class="py-2 pr-3 text-right font-500">
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="provider in pagedProviders" :key="provider.id" class="border-b border-neutral-100 align-top">
+                  <td class="max-w-48 break-words py-2 pr-3 font-600">
+                    {{ provider.label || provider.id }}
+                    <span v-if="providerRowTests[provider.id]?.message" class="mt-1 block text-11px font-400" :class="providerRowTests[provider.id]?.ok ? 'text-emerald-600' : 'text-red-600'">
+                      {{ providerRowTests[provider.id]?.message }}
+                    </span>
+                  </td>
+                  <td class="py-2 pr-3 text-neutral-500">
+                    {{ getProtocolLabel(provider.protocol) }}
+                  </td>
+                  <td class="max-w-64 break-all py-2 pr-3 text-neutral-500">
+                    {{ provider.endpoint || '未填写' }}
+                  </td>
+                  <td class="max-w-48 break-all py-2 pr-3 text-neutral-500">
+                    {{ provider.model || '未填写' }}
+                  </td>
+                  <td class="py-2 pr-3 text-neutral-500">
+                    {{ provider.priority }} · {{ provider.delayMs }}ms
+                  </td>
+                  <td class="max-w-40 break-words py-2 pr-3 text-neutral-500">
+                    {{ describeProviderScenes(provider.id) }}
+                  </td>
+                  <td class="py-2 pr-3">
+                    <BaseCheckbox
+                      :model-value="provider.enabled"
+                      :aria-label="`启用 ${provider.label || provider.id}`"
+                      compact
+                      @update:model-value="toggleProviderEnabled(provider.id, $event)"
+                    />
+                  </td>
+                  <td class="py-2 pr-0">
+                    <div class="flex justify-end gap-2">
+                      <BaseButton size="sm" :loading="providerRowTests[provider.id]?.loading" loading-label="正在测试" @click="testProviderRow(provider)">
+                        测试
+                      </BaseButton>
+                      <BaseButton size="sm" @click="openProviderEditor(provider)">
+                        编辑
+                      </BaseButton>
+                      <BaseButton variant="danger" size="sm" @click="removeProvider(provider.id)">
+                        删除
+                      </BaseButton>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!pagedProviders.length" class="rounded-2 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+              {{ providerSearchQuery ? '没有匹配的 Provider。' : '还没有 Provider，点击右上角添加一个后即可在场景中绑定。' }}
+            </p>
+          </div>
+
+          <div v-if="providerPageCount > 1" class="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <span class="text-12px text-neutral-500">第 {{ providerPage }} / {{ providerPageCount }} 页</span>
+            <div class="flex gap-2">
+              <BaseButton size="sm" :disabled="providerPage <= 1" @click="providerPage -= 1">
+                上一页
+              </BaseButton>
+              <BaseButton size="sm" :disabled="providerPage >= providerPageCount" @click="providerPage += 1">
+                下一页
               </BaseButton>
             </div>
+          </div>
 
-            <div class="mt-4 grid gap-3">
-              <article v-for="provider in lexiSettings.ai.providers" :key="provider.id" class="rounded-2 border border-neutral-200 p-3">
-                <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_8rem_8rem_auto]">
-                  <FormField label="名称" compact>
-                    <BaseInput v-model="provider.label" size="sm" placeholder="OpenAI / Groq / 自建网关" />
-                  </FormField>
-                  <FormField label="优先级" compact>
-                    <BaseInput v-model="provider.priority" type="number" size="sm" :min="1" />
-                  </FormField>
-                  <FormField label="延迟 ms" compact>
-                    <BaseInput v-model="provider.delayMs" type="number" size="sm" :min="0" :step="50" />
-                  </FormField>
-                  <div class="flex items-end gap-2 pb-0.5">
-                    <BaseCheckbox v-model="provider.enabled" label="启用" />
-                    <BaseButton variant="danger" size="sm" :disabled="lexiSettings.ai.providers.length <= 1" @click="removeProvider(provider.id)">
-                      删除
-                    </BaseButton>
-                  </div>
-                </div>
-                <div class="mt-3 grid gap-3 lg:grid-cols-3">
-                  <FormField label="Endpoint" compact>
-                    <BaseInput :model-value="provider.endpoint" size="sm" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(provider, $event.target as HTMLInputElement)" />
-                  </FormField>
-                  <FormField label="Model" compact>
-                    <BaseInput v-model="provider.model" size="sm" placeholder="gpt-4.1-mini" />
-                  </FormField>
-                  <FormField label="API Key" compact>
-                    <BaseInput v-model="provider.apiKey" type="password" size="sm" placeholder="Bearer token" />
-                  </FormField>
-                </div>
-              </article>
+          <div v-if="lexiSettings.ai.approvedHttpEndpoints.length" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3">
+            <div class="text-12px font-600 text-amber-900">
+              已确认的 HTTP Endpoint
             </div>
-
-            <CollapsibleSection title="兼容旧版全局连接 / 场景覆盖" class="mt-4">
-              <p class="text-12px leading-5 text-neutral-500">
-                这些字段可作为 Provider 和场景的补全值。一般建议直接把 Endpoint / Model / API Key 写在 Provider 中。
-              </p>
-              <div class="mt-3 grid gap-3 lg:grid-cols-3">
-                <FormField label="Endpoint" compact>
-                  <BaseInput :model-value="lexiSettings.ai.global.endpoint" size="sm" placeholder="https://api.example.com/v1" @change="confirmHttpEndpoint(lexiSettings.ai.global, $event.target as HTMLInputElement)" />
-                </FormField>
-                <FormField label="Model" compact>
-                  <BaseInput v-model="lexiSettings.ai.global.model" size="sm" placeholder="gpt-4.1-mini" />
-                </FormField>
-                <FormField label="API Key" compact>
-                  <BaseInput v-model="lexiSettings.ai.global.apiKey" type="password" size="sm" placeholder="Bearer token" />
-                </FormField>
-              </div>
-            </CollapsibleSection>
-
-            <div v-if="lexiSettings.ai.approvedHttpEndpoints.length" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3">
-              <div class="text-12px font-600 text-amber-900">
-                已确认的 HTTP Endpoint
-              </div>
-              <p class="mt-1 text-11px leading-4 text-amber-800">
-                HTTP 不加密。许可只对完整地址生效，地址变化后会重新确认。
-              </p>
-              <div class="mt-2 space-y-2">
-                <div v-for="endpoint in lexiSettings.ai.approvedHttpEndpoints" :key="endpoint" class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2">
-                  <code class="min-w-0 break-all text-11px text-neutral-700">{{ endpoint }}</code>
-                  <BaseButton variant="danger" size="sm" :aria-label="`撤销 HTTP Endpoint ${endpoint}`" @click="revokeApprovedHttpEndpoint(endpoint)">
-                    撤销
-                  </BaseButton>
-                </div>
+            <p class="mt-1 text-11px leading-4 text-amber-800">
+              HTTP 不加密。许可只对完整地址生效，地址变化后会重新确认；该许可只保存在本机，不会随 Google 同步。
+            </p>
+            <div class="mt-2 space-y-2">
+              <div v-for="endpoint in lexiSettings.ai.approvedHttpEndpoints" :key="endpoint" class="flex items-center justify-between gap-3 rounded-2 bg-white px-3 py-2">
+                <code class="min-w-0 break-all text-11px text-neutral-700">{{ endpoint }}</code>
+                <BaseButton variant="danger" size="sm" :aria-label="`撤销 HTTP Endpoint ${endpoint}`" @click="revokeApprovedHttpEndpoint(endpoint)">
+                  撤销
+                </BaseButton>
               </div>
             </div>
           </div>
+
+          <h3 class="mt-6 text-14px font-600">
+            场景
+          </h3>
+          <p class="mt-1 text-12px leading-5 text-neutral-500">
+            场景决定这项能力是否开启、用哪些 Provider、以及使用什么提示词。
+          </p>
 
           <div class="mt-4 grid gap-4 lg:grid-cols-3">
             <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
@@ -1178,22 +1669,16 @@ function resetSettings() {
                     :key="`${scene}-${provider.id}`"
                     class="provider-chip"
                     :model-value="providerSelected(scene, provider.id)"
-                    :label="provider.label || provider.id"
+                    :label="sceneProviderNames.get(provider.id) ?? provider.id"
                     compact
                     @update:model-value="toggleSceneProvider(scene, provider.id, $event)"
                   />
+                  <p v-if="!lexiSettings.ai.providers.length" class="text-11px text-neutral-500">
+                    还没有 Provider。
+                  </p>
                 </div>
               </div>
-              <FormField class="mt-4" label="Endpoint 覆盖" compact>
-                <BaseInput :model-value="lexiSettings.ai[scene].endpoint" size="sm" placeholder="留空继承 Provider / 全局" @change="confirmHttpEndpoint(lexiSettings.ai[scene], $event.target as HTMLInputElement)" />
-              </FormField>
-              <FormField class="mt-3" label="Model 覆盖" compact>
-                <BaseInput v-model="lexiSettings.ai[scene].model" size="sm" placeholder="留空继承全局" />
-              </FormField>
-              <FormField class="mt-3" label="API Key 覆盖" compact>
-                <BaseInput v-model="lexiSettings.ai[scene].apiKey" type="password" size="sm" placeholder="留空继承全局" />
-              </FormField>
-              <div class="mt-3 block">
+              <div class="mt-4 block">
                 <div class="flex items-center justify-between gap-2">
                   <span class="text-12px font-500 text-neutral-600">提示词</span>
                   <BaseButton variant="ghost" size="sm" @click="resetScenePrompt(scene)">

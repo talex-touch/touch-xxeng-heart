@@ -1,5 +1,6 @@
 import browser from 'webextension-polyfill'
 import { onMessage } from 'webext-bridge/background'
+import { startSettingsSync } from './settingsSync'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 import { appendBoundedLog } from '~/logic/analyticsQueue'
 import { createSerializedTaskQueue } from '~/logic/asyncQueue'
@@ -24,6 +25,9 @@ if (!__FIREFOX__) {
     .setPanelBehavior({ openPanelOnActionClick: true })
     .catch((error: unknown) => console.error(error))
 }
+
+// Registered at the top level so a storage change can wake the service worker.
+startSettingsSync()
 
 browser.runtime.onInstalled.addListener((): void => {
   // `onInstalled` also fires on update/reload, where the menu id already exists and

@@ -102,46 +102,82 @@ describe('ai client transport policy', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('uses the legacy global connection when no providers are available', async () => {
+  it('takes the connection from the bound provider', async () => {
     const settings = mergeSettings()
     settings.ai.selection.enabled = true
-    settings.ai.providers = []
-    settings.ai.global = {
-      endpoint: 'https://legacy.example.com/v1',
-      apiKey: 'legacy-key',
-      model: 'legacy-model',
+    settings.ai.providers[0] = {
+      ...settings.ai.providers[0],
+      endpoint: 'https://provider.example.com/v1',
+      apiKey: 'provider-key',
+      model: 'provider-model',
     }
-    stubSuccessfulAiResponse()
-
-    const result = await testAiScene(settings, 'selection')
-
-    expect(result.request).toMatchObject({
-      endpoint: 'https://legacy.example.com/v1/chat/completions',
-      model: 'legacy-model',
-      authSent: true,
-      keyHint: '...-key',
-    })
-  })
-
-  it('merges global, provider and scene connections in precedence order', async () => {
-    const settings = mergeSettings()
-    settings.ai.selection.enabled = true
-    settings.ai.global = {
-      endpoint: 'https://global.example.com/v1',
-      apiKey: 'global-key',
-      model: 'global-model',
-    }
-    settings.ai.providers[0].endpoint = 'https://provider.example.com/v1'
-    settings.ai.selection.model = 'scene-model'
     stubSuccessfulAiResponse()
 
     const result = await testAiScene(settings, 'selection')
 
     expect(result.request).toMatchObject({
       endpoint: 'https://provider.example.com/v1/chat/completions',
-      model: 'scene-model',
+      protocol: 'openai-chat',
+      model: 'provider-model',
       authSent: true,
       keyHint: '...-key',
     })
+  })
+
+  it('sends a Responses provider to /v1/responses with instructions', async () => {
+    const settings = mergeSettings()
+    settings.ai.selection.enabled = true
+    settings.ai.providers[0] = {
+      ...settings.ai.providers[0],
+      protocol: 'openai-responses',
+      endpoint: 'https://api.openai.com/v1',
+      apiKey: 'sk-test',
+      model: 'gpt-5',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      output: [{ type: 'message', content: [{ type: 'output_text', text: '乐观更新' }] }],
+      usage: { input_tokens: 12, output_tokens: 4, total_tokens: 16 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await testAiScene(settings, 'selection')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.openai.com/v1/responses')
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
+    expect(body.instructions).toContain('翻译')
+    expect(body.input[0].content[0].type).toBe('input_text')
+    expect(body.messages).toBeUndefined()
+    expect(result.response).toBe('乐观更新')
+  })
+
+  it('routes Claude models to the Anthropic messages API', async () => {
+    const settings = mergeSettings()
+    settings.ai.selection.enabled = true
+    settings.ai.providers[0] = {
+      ...settings.ai.providers[0],
+      protocol: 'auto',
+      endpoint: 'https://api.anthropic.com',
+      apiKey: 'sk-ant-test',
+      model: 'claude-sonnet-4-5',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      content: [{ type: 'text', text: '乐观更新' }],
+      usage: { input_tokens: 9, output_tokens: 3 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await testAiScene(settings, 'selection')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.anthropic.com/v1/messages')
+    const init = fetchMock.mock.calls[0][1] as RequestInit
+    expect(init.headers).toMatchObject({
+      'x-api-key': 'sk-ant-test',
+      'anthropic-version': '2023-06-01',
+    })
+    const body = JSON.parse(init.body as string)
+    expect(body.system).toContain('翻译')
+    expect(body.messages[0].role).toBe('user')
+    expect(result.request.protocol).toBe('anthropic-messages')
+    expect(result.response).toBe('乐观更新')
   })
 })

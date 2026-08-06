@@ -29,15 +29,14 @@ export function getContentDigestModelFingerprint(settings: LexiSettings) {
     .filter(provider => provider.enabled && (!selected.size || selected.has(provider.id)))
     .map(provider => ({
       id: provider.id,
-      endpoint: scene.endpoint || provider.endpoint || settings.ai.global.endpoint,
-      model: scene.model || provider.model || settings.ai.global.model,
+      protocol: provider.protocol,
+      endpoint: provider.endpoint,
+      model: provider.model,
     }))
     .sort((left, right) => left.id.localeCompare(right.id))
 
   return simpleHash(JSON.stringify({
     scene: 'digest',
-    endpoint: scene.endpoint || settings.ai.global.endpoint,
-    model: scene.model || settings.ai.global.model,
     providers,
   }))
 }

@@ -24,6 +24,52 @@ describe('settings compatibility', () => {
     expect(settings.ai.selection).toEqual(defaultSettings.ai.selection)
   })
 
+  it('folds a legacy scene override into its own provider and binds the scene to it', () => {
+    const legacyAi = {
+      global: { endpoint: 'https://global.example.com/v1', apiKey: 'global-key', model: 'global-model' },
+      providers: [{ id: 'default', label: '默认 Provider', enabled: true, endpoint: '', apiKey: '', model: '' }],
+      selection: { enabled: true, endpoint: 'https://scene.example.com/v1', model: 'scene-model', prompt: '译文' },
+    } as unknown as LexiSettings['ai']
+
+    const settings = mergeSettings({ ai: legacyAi })
+    const legacyProvider = settings.ai.providers.find(provider => provider.id === 'legacy-selection')
+
+    // The global connection fills the gaps the provider left empty.
+    expect(settings.ai.providers[0]).toMatchObject({
+      id: 'default',
+      endpoint: 'https://global.example.com/v1',
+      model: 'global-model',
+      apiKey: 'global-key',
+      protocol: 'auto',
+    })
+    expect(legacyProvider).toMatchObject({
+      endpoint: 'https://scene.example.com/v1',
+      model: 'scene-model',
+      apiKey: 'global-key',
+    })
+    expect(settings.ai.selection.providerIds).toEqual(['legacy-selection'])
+    expect(settings.ai.selection).not.toHaveProperty('endpoint')
+  })
+
+  it('keeps the scene migration idempotent across repeated merges', () => {
+    const legacyAi = {
+      selection: { enabled: true, endpoint: 'https://scene.example.com/v1' },
+    } as unknown as LexiSettings['ai']
+
+    const once = mergeSettings({ ai: legacyAi })
+    const twice = mergeSettings(once)
+
+    expect(twice.ai.providers).toHaveLength(once.ai.providers.length)
+    expect(twice.ai.selection.providerIds).toEqual(['legacy-selection'])
+  })
+
+  it('defaults the vocabulary ceiling to 3000 and clamps hand-edited values', () => {
+    expect(defaultSettings.history.maxRecords).toBe(3000)
+    expect(mergeSettings({ history: { enabled: true, maxRecords: 99999 } }).history.maxRecords).toBe(20000)
+    expect(mergeSettings({ history: { enabled: true, maxRecords: 1 } }).history.maxRecords).toBe(50)
+    expect(mergeSettings({ history: { enabled: true, maxRecords: Number.NaN } }).history.maxRecords).toBe(3000)
+  })
+
   it('converts the legacy 1-5 difficulty ceiling into a learner level', () => {
     const legacyReplacement = {
       enabled: true,

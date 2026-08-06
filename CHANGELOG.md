@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.7 - 2026-08-06
+
+Changes since v0.2.6.
+
+### Features
+- route AI providers by protocol and sync settings (bf677c5)
+
 ## v0.2.6 - 2026-08-03
 
 Changes since v0.2.5.
@@ -106,6 +113,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

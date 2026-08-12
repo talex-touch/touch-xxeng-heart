@@ -1,4 +1,5 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
+import { getDifficultyWindow } from './replacementLevels'
 import { normalizeMarkdownAnswerText, normalizeTranslationText, parseJsonContent } from './aiText'
 import { requestProviderModels, runAiScene, testAiConnection } from './aiTransport'
 import { buildDialogMessages } from './dialogHarness'
@@ -205,20 +206,24 @@ export async function requestReplacementCandidates(
   text: string,
   context: string,
 ) {
+  const { min, max } = getDifficultyWindow(settings.replacement.level)
   const data = await postAiJson<AiReplacementResponse>('replacement', {
     text,
     context,
     instruction: [
-      'Extract two kinds of reusable vocabulary entries from the page text.',
-      '1) Chinese programming/AI terms that are useful for learning English: set original to the Chinese term and replacement to a natural English expression. Do NOT extract single Chinese characters or ambiguous one-character terms; Chinese terms must contain at least two CJK characters.',
-      '2) Product, brand, model, platform, library, framework, CLI or service names such as Codex, ChatGPT, Claude, GitHub Actions, Vite, React, Next.js: record them as product knowledge, but DO NOT translate or rename them. For product entries set original and replacement to the exact same surface name from the page.',
-      'Add tag "product" for product/name entries; add "technical" for general technical terms. You may add more concise tags such as ai, cli, framework, platform.',
+      'Extract three kinds of reusable vocabulary entries from the page text for a Chinese reader learning English while browsing.',
+      `The learner's difficulty window is ${min}-${max} on a 1-5 scale (1 everyday basics, 5 rare or highly specialised). Prefer entries inside this window and set difficulty accordingly.`,
+      '1) General everyday Chinese words and short phrases — this is the primary goal, NOT limited to technical vocabulary: set original to the Chinese expression and replacement to the natural English expression a native speaker would use. Do NOT extract single Chinese characters or ambiguous one-character terms; Chinese originals must contain at least two CJK characters.',
+      '2) Chinese programming/AI terms that are useful for learning English: same rules, tag them "technical".',
+      '3) Product, brand, model, platform, library, framework, CLI or service names such as Codex, ChatGPT, Claude, GitHub Actions, Vite, React, Next.js: record them as product knowledge, but DO NOT translate or rename them. For product entries set original and replacement to the exact same surface name from the page.',
+      'Add tag "general" for everyday entries, "technical" for technical terms, and "product" for product/name entries. You may add more concise tags such as ai, cli, framework, platform.',
       'Product entries will be reused by Lexi for hover explanations only, not for text replacement.',
       'Write meaning with Chinese first and English if useful, e.g. "反向代理；英文：a server that forwards client requests to backend servers" so the hover tooltip is understandable to Chinese readers.',
-      'Return compact JSON only: {"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["technical"],"difficulty":2}]}',
+      'Return compact JSON only: {"items":[{"original":"","replacement":"","meaning":"","example":"","tags":["general"],"difficulty":2}]}',
     ].join(' '),
   }, [
-    'You are Lexi vocabulary extractor for programmer English learning.',
+    'You are Lexi vocabulary extractor for learning English while reading Chinese pages.',
+    'Balance everyday vocabulary and technical terms; everyday words matter as much as jargon.',
     'Return only valid compact JSON. No markdown, no explanations, no hidden reasoning.',
     'Write all meaning fields in Chinese first; include brief English explanation only if useful.',
     'Preserve product names exactly. Never translate product names; mark them with tag "product".',

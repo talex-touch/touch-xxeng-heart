@@ -583,29 +583,94 @@ function getPageStyleContent(customCss = '') {
       --lexi-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
 
-    /* Replaced word: soft tint, no underline — the official .term treatment. */
+    /* Dark pages get the iOS dark material: same structure, inverted surfaces. */
+    [data-lexi-theme="dark"] .lexi-token,
+    [data-lexi-theme="dark"] .lexi-token-tooltip,
+    [data-lexi-theme="dark"] .lexi-toast,
+    [data-lexi-theme="dark"] .lexi-selection-translation,
+    [data-lexi-theme="dark"] .lexi-page-translation,
+    [data-lexi-theme="dark"] .lexi-media-highlight,
+    [data-lexi-theme="dark"] .lexi-media-toolbar {
+      --lexi-ink: #f2f2f4;
+      --lexi-ink-2: #b6b6c2;
+      --lexi-ink-3: #8e8e9a;
+      --lexi-line: rgba(255, 255, 255, 0.12);
+      --lexi-line-strong: rgba(255, 255, 255, 0.22);
+      --lexi-bg: #1c1c1e;
+      --lexi-bg-subtle: rgba(255, 255, 255, 0.06);
+      --lexi-accent: #6fa8ff;
+      --lexi-accent-ink: #8db8ff;
+      --lexi-accent-soft: rgba(111, 168, 255, 0.16);
+      --lexi-tech-soft: rgba(111, 168, 255, 0.16);
+      --lexi-prod: #a18bff;
+      --lexi-prod-soft: rgba(161, 139, 255, 0.18);
+      --lexi-glass-bg: rgba(28, 28, 30, 0.72);
+      --lexi-glass-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.6);
+    }
+
+    [data-lexi-theme="dark"] .lexi-selection-translation[data-lexi-loading="true"] {
+      background: linear-gradient(100deg, rgba(28, 28, 30, 0.86) 0%, rgba(38, 42, 52, 0.84) 48%, rgba(28, 28, 30, 0.86) 100%);
+      background-size: 220% 100%;
+    }
+
+    [data-lexi-theme="dark"] .lexi-page-translation[data-lexi-loading="true"] {
+      background:
+        linear-gradient(rgba(28, 28, 30, 0.88), rgba(28, 28, 30, 0.88)) padding-box,
+        linear-gradient(110deg, #6fa8ff, #1976ff, #6fa8ff) border-box;
+      background-size: 100% 100%, 240% 100%;
+      color: rgba(141, 184, 255, 0.8);
+    }
+
+    [data-lexi-theme="dark"] .lexi-media-toolbar__button:first-child {
+      background: #ececec;
+      color: #0d0d0d;
+    }
+
+    [data-lexi-theme="dark"] .lexi-media-toolbar__button:first-child:hover {
+      background: #ffffff;
+    }
+
+    @supports not (backdrop-filter: blur(4px)) {
+      [data-lexi-theme="dark"] .lexi-token-tooltip,
+      [data-lexi-theme="dark"] .lexi-selection-translation,
+      [data-lexi-theme="dark"] .lexi-media-toolbar {
+        background: rgba(28, 28, 30, 0.97);
+      }
+    }
+
+    /* Replaced word: keep the page's own type, mark it with a quiet underline
+       only; the tint appears on hover. Layout is untouched (no padding). */
     .lexi-token {
-      border-radius: 5px;
-      background: var(--lexi-tech-soft);
-      padding: 1px 4px;
-      color: var(--lexi-ink);
-      font-weight: 600;
+      border-radius: 3px;
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font-weight: inherit;
       cursor: help;
-      text-decoration: none;
-      transition: background-color 0.15s ease;
+      text-decoration: underline;
+      text-decoration-color: rgba(25, 118, 255, 0.42);
+      text-decoration-thickness: 1.5px;
+      text-underline-offset: 3px;
+      transition: background-color 0.15s ease, text-decoration-color 0.15s ease;
     }
 
     .lexi-token:hover {
-      background: #d9e7fd;
+      background: var(--lexi-accent-soft);
+      text-decoration-color: var(--lexi-accent);
+    }
+
+    [data-lexi-theme="dark"] .lexi-token {
+      text-decoration-color: rgba(111, 168, 255, 0.48);
     }
 
     /* Product entity: text untouched, one small domain dot after it (.ent). */
     .lexi-token-product {
       background: transparent;
-      padding: 1px 2px;
+      padding: 0;
       color: inherit;
       font-weight: inherit;
-      border-radius: 4px;
+      border-radius: 3px;
+      text-decoration: none;
     }
 
     .lexi-token-product::after {
@@ -624,7 +689,8 @@ function getPageStyleContent(customCss = '') {
       color: var(--lexi-ink);
     }
 
-    /* Hover card: the frosted definition card from the official hero mock. */
+    /* Hover card: the frosted definition card from the official hero mock.
+       Kept in layout while closed so it can be measured, then faded in/out. */
     .lexi-token-tooltip {
       all: initial;
       box-sizing: border-box;
@@ -642,12 +708,31 @@ function getPageStyleContent(customCss = '') {
       color: var(--lexi-ink);
       padding: 14px 16px;
       font: 13px/1.6 var(--lexi-font-sans);
-      animation: lexi-card-enter 160ms ease-out both;
+      opacity: 0;
+      visibility: hidden;
+      transform: translateY(4px) scale(0.98);
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 160ms ease, visibility 0s linear 160ms;
+    }
+
+    .lexi-token-tooltip[data-lexi-open="true"] {
+      opacity: 1;
+      visibility: visible;
+      transform: none;
+      pointer-events: auto;
+      transition: opacity 160ms ease, transform 160ms ease;
     }
 
     @supports not (backdrop-filter: blur(4px)) {
       .lexi-token-tooltip {
         background: rgba(255, 255, 255, 0.97);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .lexi-token-tooltip {
+        transition: none;
+        transform: none;
       }
     }
 
@@ -768,6 +853,10 @@ function getPageStyleContent(customCss = '') {
       transform: translateX(-50%) translateY(10px);
       opacity: 0;
       animation: lexi-toast-enter 180ms ease-out forwards;
+    }
+
+    .lexi-toast[data-lexi-closing="true"] {
+      animation: lexi-toast-exit 200ms ease forwards;
     }
 
     .lexi-selection-translation {
@@ -972,6 +1061,17 @@ function getPageStyleContent(customCss = '') {
       to {
         opacity: 1;
         transform: translateX(-50%) translateY(0);
+      }
+    }
+
+    @keyframes lexi-toast-exit {
+      from {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+      to {
+        opacity: 0;
+        transform: translateX(-50%) translateY(6px);
       }
     }
 
@@ -1691,7 +1791,38 @@ function getPageStyleContent(customCss = '') {
   `
 }
 
+function parseCssColor(value: string): [number, number, number, number] | undefined {
+  const match = value.match(/rgba?\(([^)]+)\)/)
+  if (!match)
+    return undefined
+
+  const parts = match[1].split(',').map(part => Number.parseFloat(part.trim()))
+  if (parts.length < 3 || parts.slice(0, 3).some(Number.isNaN))
+    return undefined
+
+  return [parts[0], parts[1], parts[2], Number.isNaN(parts[3]) ? 1 : parts[3] ?? 1]
+}
+
+/** Injected UI follows the page's own theme, not the OS preference. */
+function detectPageTheme(): 'light' | 'dark' {
+  let element: Element | null = document.body ?? document.documentElement
+  while (element) {
+    const color = parseCssColor(getComputedStyle(element).backgroundColor)
+    if (color && color[3] > 0.02) {
+      const [r, g, b] = color
+      const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+      return luminance < 0.45 ? 'dark' : 'light'
+    }
+
+    element = element.parentElement
+  }
+
+  return 'light'
+}
+
 function ensurePageStyles(customCss = '') {
+  document.documentElement.dataset.lexiTheme = detectPageTheme()
+
   const content = getPageStyleContent(customCss)
   const current = document.getElementById('lexi-page-style')
   if (current) {
@@ -1716,7 +1847,7 @@ function getTokenFromEvent(event: Event) {
 function createTooltip() {
   const tooltip = document.createElement('div')
   tooltip.className = 'lexi-token-tooltip'
-  tooltip.hidden = true
+  tooltip.dataset.lexiOpen = 'false'
   document.documentElement.appendChild(tooltip)
   return tooltip
 }
@@ -1729,17 +1860,18 @@ function showLexiToast(message: string, customCss = '') {
   toast.dataset.lexiToast = 'true'
   toast.textContent = message
   document.documentElement.appendChild(toast)
-  window.setTimeout(() => toast.remove(), 3200)
+  window.setTimeout(() => {
+    toast.dataset.lexiClosing = 'true'
+    window.setTimeout(() => toast.remove(), 220)
+  }, 3000)
 }
 
 function positionHoverCard(tooltip: HTMLElement, token: HTMLElement) {
   const margin = 12
   const gap = 8
   const rect = token.getBoundingClientRect()
-
-  // Measure while invisible so the first paint already lands anchored to the token.
-  tooltip.style.visibility = 'hidden'
-  tooltip.hidden = false
+  // The card keeps its layout while closed (only opacity/visibility change),
+  // so it is always measurable before opening.
   const { offsetWidth: width, offsetHeight: height } = tooltip
 
   const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
@@ -1751,7 +1883,6 @@ function positionHoverCard(tooltip: HTMLElement, token: HTMLElement) {
 
   tooltip.style.left = `${left}px`
   tooltip.style.top = `${Math.max(margin, top)}px`
-  tooltip.style.visibility = ''
 }
 
 function restoreReplacedTokens(original: string) {
@@ -3338,6 +3469,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let tooltip: HTMLElement | undefined
   let activeTooltipToken: HTMLElement | undefined
   let tooltipHideTimer: number | undefined
+  let tooltipRepositionFrame: number | undefined
   let dynamicObserver: MutationObserver | undefined
   let dynamicTimer: number | undefined
   let selectionTimer: number | undefined
@@ -4402,12 +4534,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
       .catch(error => console.warn('[Lexi] dialog failed', error))
   }
 
+  const isTooltipOpen = () => tooltip?.dataset.lexiOpen === 'true'
+
   const hideTooltip = () => {
     window.clearTimeout(tooltipHideTimer)
     tooltipHideTimer = undefined
     activeTooltipToken = undefined
     if (tooltip)
-      tooltip.hidden = true
+      tooltip.dataset.lexiOpen = 'false'
   }
 
   const cancelTooltipHide = () => {
@@ -4418,6 +4552,31 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const scheduleTooltipHide = () => {
     cancelTooltipHide()
     tooltipHideTimer = window.setTimeout(hideTooltip, 200)
+  }
+
+  const followTokenOnScroll = () => {
+    if (tooltipRepositionFrame !== undefined || !isTooltipOpen() || !activeTooltipToken)
+      return
+
+    tooltipRepositionFrame = window.requestAnimationFrame(() => {
+      tooltipRepositionFrame = undefined
+      const token = activeTooltipToken
+      if (!tooltip || !isTooltipOpen() || !token)
+        return
+
+      if (!token.isConnected) {
+        hideTooltip()
+        return
+      }
+
+      const rect = token.getBoundingClientRect()
+      if (rect.bottom < 0 || rect.top > window.innerHeight) {
+        hideTooltip()
+        return
+      }
+
+      positionHoverCard(tooltip, token)
+    })
   }
 
   const onEscape = (event: KeyboardEvent) => {
@@ -4475,35 +4634,40 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const onPointerOver = (event: MouseEvent | PointerEvent) => {
     const token = getTokenFromEvent(event)
-    if (!token)
+    if (!token) {
+      // Pointer landed on something that is neither the token nor the card — the
+      // "left both" signal that pointerout alone misses (iframes, page edges).
+      const target = event.target
+      if (isTooltipOpen() && !(target instanceof Node && (tooltip?.contains(target) || activeTooltipToken?.contains(target))))
+        scheduleTooltipHide()
       return
+    }
 
     cancelTooltipHide()
-    if (activeTooltipToken === token && tooltip && !tooltip.hidden)
+    if (activeTooltipToken === token && isTooltipOpen())
       return
 
     const card = ensureTooltip()
     activeTooltipToken = token
     renderHoverCard(card, token, archiveHoveredToken)
     positionHoverCard(card, token)
+    card.dataset.lexiOpen = 'true'
   }
 
   const onPointerOut = (event: MouseEvent | PointerEvent) => {
     const token = getTokenFromEvent(event)
-    if (!token || !tooltip || tooltip.hidden)
+    if (!token || !isTooltipOpen())
       return
 
     const related = event.relatedTarget
-    if (related instanceof Node && (token.contains(related) || tooltip.contains(related)))
+    if (related instanceof Node && (token.contains(related) || tooltip?.contains(related)))
       return
 
     scheduleTooltipHide()
   }
 
   function onPageScroll() {
-    // A fixed-position card drifts off its token as soon as the page scrolls.
-    if (tooltip && !tooltip.hidden)
-      hideTooltip()
+    followTokenOnScroll()
 
     if (mediaToolbarState)
       positionMediaUi(mediaToolbarState)
@@ -4606,6 +4770,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.clearTimeout(selectionTimer)
     window.clearTimeout(pageTranslationTimer)
     window.clearTimeout(tooltipHideTimer)
+    if (tooltipRepositionFrame !== undefined)
+      window.cancelAnimationFrame(tooltipRepositionFrame)
     pageTranslationEnabled = false
     pageTranslationScanPending = false
     pageTranslationInFlight.clear()

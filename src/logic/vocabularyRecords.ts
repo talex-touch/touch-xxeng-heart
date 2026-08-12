@@ -88,9 +88,9 @@ export function upsertVocabularyRecord(
   })
 }
 
-const exposureGraceCount = 4
+const exposureGraceCount = 6
 const exposureCooldownStepMs = 12 * 60 * 60 * 1000
-const exposureCooldownMaxMs = 7 * day
+const exposureCooldownMaxMs = 3 * day
 
 /**
  * Rest time before a word may be auto-replaced again. The first few exposures are

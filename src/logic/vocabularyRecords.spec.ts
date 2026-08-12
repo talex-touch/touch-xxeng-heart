@@ -182,11 +182,11 @@ describe('exposure fatigue and archive', () => {
     expect(manual.nextReviewAt).toBe(5000 + 2 * day)
   })
 
-  it('grants free exposures, then lengthens the cooldown up to seven days', () => {
-    expect(getReplacementCooldownMs({ seenCount: 4, learnedLevel: 0 })).toBe(0)
-    expect(getReplacementCooldownMs({ seenCount: 5, learnedLevel: 0 })).toBe(12 * hour)
-    expect(getReplacementCooldownMs({ seenCount: 5, learnedLevel: 2 })).toBe(60 * hour)
-    expect(getReplacementCooldownMs({ seenCount: 999, learnedLevel: 8 })).toBe(7 * day)
+  it('grants free exposures, then lengthens the cooldown up to three days', () => {
+    expect(getReplacementCooldownMs({ seenCount: 6, learnedLevel: 0 })).toBe(0)
+    expect(getReplacementCooldownMs({ seenCount: 7, learnedLevel: 0 })).toBe(12 * hour)
+    expect(getReplacementCooldownMs({ seenCount: 7, learnedLevel: 2 })).toBe(60 * hour)
+    expect(getReplacementCooldownMs({ seenCount: 999, learnedLevel: 8 })).toBe(3 * day)
   })
 
   it('suppresses replacement while cooling down or archived', () => {

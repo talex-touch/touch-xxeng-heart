@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.9 - 2026-08-12
+
+Changes since v0.2.8.
+
+### Features
+- archive known words from the hover card and taper exposure (04a6336)
+
 ## v0.2.8 - 2026-08-12
 
 Changes since v0.2.7.
@@ -120,6 +127,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

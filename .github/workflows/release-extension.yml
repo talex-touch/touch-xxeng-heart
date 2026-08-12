@@ -105,3 +105,25 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           files: ${{ steps.asset.outputs.asset_name }}
           generate_release_notes: true
+
+      # Runs last so a Web Store outage or a rejected package never blocks the
+      # GitHub Release. The store only accepts the zip and signs it itself; the
+      # local extension.crx is signed with our own key.pem and is for
+      # self-hosted installs, so it is deliberately not uploaded here.
+      - name: Publish to Chrome Web Store
+        shell: bash
+        env:
+          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+          PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+          EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+          ASSET_NAME: ${{ steps.asset.outputs.asset_name }}
+        run: |
+          for name in CLIENT_ID CLIENT_SECRET REFRESH_TOKEN PUBLISHER_ID EXTENSION_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing repository secret CWS_${name}." >&2
+              exit 1
+            fi
+          done
+          pnpm dlx chrome-webstore-upload-cli@4.0.1 --source "$ASSET_NAME"

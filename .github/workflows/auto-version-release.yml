@@ -1,11 +1,20 @@
 name: Auto Version Release
 
+# Manual only. Pushing to main used to cut a tag on every commit, which now
+# would submit a Chrome Web Store review each time. Releases are deliberate:
+# either run this workflow, or tag vMAJOR.MINOR.PATCH locally and push it.
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump for this release
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -15,10 +24,12 @@ concurrency:
   group: auto-version-release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  RELEASE_BUMP: ${{ inputs.bump }}
+
 jobs:
   prepare-release:
     name: Bump version and changelog
-    if: github.event_name == 'workflow_dispatch' || (github.actor != 'github-actions[bot]' && !startsWith(github.event.head_commit.message, 'chore(release):'))
     runs-on: ubuntu-latest
 
     steps:

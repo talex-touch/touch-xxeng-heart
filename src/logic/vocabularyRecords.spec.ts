@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { programmerVocabulary } from './vocabularyBank'
-import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, isProductVocabularyCandidate, normalizeImportedRecord, reviewVocabularyRecord, upsertVocabularyRecord } from './vocabularyRecords'
+import { getDueRecords, getProgressDifficulty, getReplacementCooldownMs, getTodayRecommendations, getTodayReviewCount, isProductVocabularyCandidate, isReplacementSuppressed, normalizeImportedRecord, reviewVocabularyRecord, setVocabularyArchived, upsertVocabularyRecord } from './vocabularyRecords'
 
 describe('vocabulary records', () => {
   it('creates and updates records by original and replacement', () => {
@@ -155,5 +155,63 @@ describe('vocabulary review', () => {
     const records = [reviewableRecord(0)]
 
     expect(reviewVocabularyRecord(records, 'missing:id', 'remembered', now)).toBe(records)
+  })
+})
+
+describe('exposure fatigue and archive', () => {
+  const hour = 60 * 60 * 1000
+  const day = 24 * hour
+  const now = 10 * day
+
+  function seenRecord(seenCount: number, learnedLevel = 0) {
+    const record = upsertVocabularyRecord([], {
+      candidate: programmerVocabulary[0],
+      source: 'auto',
+    }, now)[0]
+
+    return { ...record, seenCount, learnedLevel }
+  }
+
+  it('keeps passive exposure from rescheduling reviews while manual learning still does', () => {
+    const created = upsertVocabularyRecord([], { candidate: programmerVocabulary[0], source: 'auto' }, 100)
+    const reseen = upsertVocabularyRecord(created, { candidate: programmerVocabulary[0], source: 'auto' }, 5000)[0]
+    const manual = upsertVocabularyRecord(created, { candidate: programmerVocabulary[0], source: 'manual' }, 5000)[0]
+
+    expect(reseen.seenCount).toBe(2)
+    expect(reseen.nextReviewAt).toBe(created[0].nextReviewAt)
+    expect(manual.nextReviewAt).toBe(5000 + 2 * day)
+  })
+
+  it('grants free exposures, then lengthens the cooldown up to seven days', () => {
+    expect(getReplacementCooldownMs({ seenCount: 4, learnedLevel: 0 })).toBe(0)
+    expect(getReplacementCooldownMs({ seenCount: 5, learnedLevel: 0 })).toBe(12 * hour)
+    expect(getReplacementCooldownMs({ seenCount: 5, learnedLevel: 2 })).toBe(60 * hour)
+    expect(getReplacementCooldownMs({ seenCount: 999, learnedLevel: 8 })).toBe(7 * day)
+  })
+
+  it('suppresses replacement while cooling down or archived', () => {
+    expect(isReplacementSuppressed(seenRecord(3), now + 1)).toBe(false)
+    expect(isReplacementSuppressed(seenRecord(8), now + hour)).toBe(true)
+    expect(isReplacementSuppressed(seenRecord(8), now + 3 * day)).toBe(false)
+    expect(isReplacementSuppressed({ ...seenRecord(0), archivedAt: now }, now + 400 * day)).toBe(true)
+  })
+
+  it('archives a record, drops it from reviews, and revives it on manual re-selection', () => {
+    const record = seenRecord(2)
+    const archived = setVocabularyArchived([record], record.id, true, now + 1)
+
+    expect(archived[0].archivedAt).toBe(now + 1)
+    expect(getDueRecords(archived, now + 400 * day)).toEqual([])
+
+    const revived = upsertVocabularyRecord(archived, { candidate: programmerVocabulary[0], source: 'manual' }, now + 2)[0]
+    expect(revived.archivedAt).toBeUndefined()
+
+    const unarchived = setVocabularyArchived(archived, record.id, false, now + 3)
+    expect(unarchived[0].archivedAt).toBeUndefined()
+  })
+
+  it('imports archivedAt timestamps', () => {
+    const record = normalizeImportedRecord({ original: '上下文', replacement: 'context', archivedAt: 1234 }, 5000)
+    expect(record?.archivedAt).toBe(1234)
   })
 })

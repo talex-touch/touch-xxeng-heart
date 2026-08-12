@@ -25,7 +25,7 @@ import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/s
 import type { SiteDetectionHints } from '~/logic/siteRules'
 import { pageTranslationActivationsStorageKey, pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
-import { getVocabularyId, isProductVocabularyCandidate, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
+import { getVocabularyId, isProductVocabularyCandidate, isReplacementSuppressed, setVocabularyArchived, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
 import type { LexiSettings, PageTranslationActivation, PageTranslationBlock, PageTranslationCache, PageTranslationMemory, PageTranslationScope, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
 interface EnhancerEvents {
@@ -281,11 +281,23 @@ function getCandidateRecord(index: ReplacementRecordIndex, candidate: Vocabulary
   return index.byId.get(id) ?? index.byOriginal.get(candidate.original)
 }
 
-function createReplacementCandidatePool(settings: LexiSettings, records: VocabularyRecord[], conservative = false) {
+function createReplacementCandidatePool(
+  settings: LexiSettings,
+  records: VocabularyRecord[],
+  recordIndex: ReplacementRecordIndex,
+  conservative = false,
+) {
   const { min, max: maxDifficulty } = getDifficultyWindow(settings.replacement.level)
   // Conservative sites skip the easiest tier when the level still leaves room for it.
   const minDifficulty = conservative ? Math.min(Math.max(min, 2), maxDifficulty) : min
+  const now = Date.now()
   const filterCandidate = (candidate: VocabularyCandidate) => {
+    // Eligibility, not just ranking: archived or over-exposed words leave the pool
+    // entirely, so pages replace less as the user actually learns.
+    const record = getCandidateRecord(recordIndex, candidate)
+    if (record && isReplacementSuppressed(record, now))
+      return false
+
     if (isProductVocabularyCandidate(candidate))
       return true
 
@@ -501,7 +513,7 @@ function normalizeSelectionDetail(value: unknown): SelectionDetailView {
 function formatSelectionDetail(detail: SelectionDetailView) {
   const lines = [
     detail.explanation,
-    ...detail.terms.map(item => `名词：${item.term} - ${item.explanation}`),
+    ...detail.terms.map(item => `术语：${item.term} - ${item.explanation}`),
     detail.context ? `语境：${detail.context}` : '',
     detail.translationReview ? `译文优化：${detail.translationReview}` : '',
     detail.advice ? `建议：${detail.advice}` : '',
@@ -526,6 +538,7 @@ function createToken(candidate: VocabularyCandidate) {
   const token = document.createElement('span')
   const isProduct = isProductVocabularyCandidate(candidate)
   token.dataset.lexiToken = 'true'
+  token.dataset.lexiId = getVocabularyId(candidate.original, candidate.replacement)
   token.dataset.original = candidate.original
   token.dataset.replacement = candidate.replacement
   token.dataset.meaning = formatCandidateMeaning(candidate)
@@ -540,42 +553,201 @@ function createToken(candidate: VocabularyCandidate) {
 
 function getPageStyleContent(customCss = '') {
   return `
+    /* Shared design tokens, mirrored from the official site (apps/site main.css):
+       near-neutral surfaces, one blue accent, purple only for product entities. */
+    .lexi-token,
+    .lexi-token-tooltip,
+    .lexi-toast,
+    .lexi-selection-translation,
+    .lexi-page-translation,
+    .lexi-media-highlight,
+    .lexi-media-toolbar,
+    .lexi-dialog {
+      --lexi-ink: #0d0d0d;
+      --lexi-ink-2: #5c5c66;
+      --lexi-ink-3: #8e8e9a;
+      --lexi-line: #e6e6ea;
+      --lexi-line-strong: #d8d8de;
+      --lexi-bg: #ffffff;
+      --lexi-bg-subtle: #f7f7f8;
+      --lexi-accent: #1976ff;
+      --lexi-accent-ink: #0b57c7;
+      --lexi-accent-soft: #edf3ff;
+      --lexi-tech-soft: #e8f0fe;
+      --lexi-prod: #7c5cff;
+      --lexi-prod-soft: #f0ecff;
+      --lexi-glass-bg: rgba(255, 255, 255, 0.76);
+      --lexi-glass-blur: blur(26px) saturate(180%);
+      --lexi-glass-shadow: 0 16px 40px -8px rgba(13, 13, 13, 0.17);
+      --lexi-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      --lexi-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    /* Replaced word: soft tint, no underline — the official .term treatment. */
     .lexi-token {
-      border-bottom: 1px dashed #0ea5e9;
-      color: #0ea5e9;
+      border-radius: 5px;
+      background: var(--lexi-tech-soft);
+      padding: 1px 4px;
+      color: var(--lexi-ink);
+      font-weight: 600;
       cursor: help;
       text-decoration: none;
+      transition: background-color 0.15s ease;
     }
 
     .lexi-token:hover {
-      background: rgba(14, 165, 233, 0.14);
+      background: #d9e7fd;
     }
 
+    /* Product entity: text untouched, one small domain dot after it (.ent). */
     .lexi-token-product {
-      border-bottom-color: #9333ea;
+      background: transparent;
+      padding: 1px 2px;
       color: inherit;
+      font-weight: inherit;
+      border-radius: 4px;
+    }
+
+    .lexi-token-product::after {
+      content: "";
+      display: inline-block;
+      width: 4.5px;
+      height: 4.5px;
+      margin-left: 3px;
+      border-radius: 50%;
+      background: var(--lexi-prod);
+      vertical-align: 0.18em;
     }
 
     .lexi-token-product:hover {
-      background: rgba(147, 51, 234, 0.08);
+      background: var(--lexi-prod-soft);
+      color: var(--lexi-ink);
     }
 
+    /* Hover card: the frosted definition card from the official hero mock. */
     .lexi-token-tooltip {
+      all: initial;
       box-sizing: border-box;
       position: fixed;
       z-index: 2147483647;
-      max-width: min(360px, calc(100vw - 32px));
-      white-space: pre-wrap;
-      border: 1px solid rgba(203, 213, 225, 0.82);
-      border-radius: 12px;
-      background: rgba(255, 255, 255, 0.82);
-      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
-      backdrop-filter: blur(14px) saturate(1.12);
-      -webkit-backdrop-filter: blur(14px) saturate(1.12);
-      color: #1f2937;
-      padding: 10px 12px;
-      font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      pointer-events: none;
+      display: grid;
+      gap: 10px;
+      width: min(360px, calc(100vw - 32px));
+      border: 1px solid var(--lexi-line);
+      border-radius: 14px;
+      background: var(--lexi-glass-bg);
+      -webkit-backdrop-filter: var(--lexi-glass-blur);
+      backdrop-filter: var(--lexi-glass-blur);
+      box-shadow: var(--lexi-glass-shadow);
+      color: var(--lexi-ink);
+      padding: 14px 16px;
+      font: 13px/1.6 var(--lexi-font-sans);
+      animation: lexi-card-enter 160ms ease-out both;
+    }
+
+    @supports not (backdrop-filter: blur(4px)) {
+      .lexi-token-tooltip {
+        background: rgba(255, 255, 255, 0.97);
+      }
+    }
+
+    .lexi-token-tooltip * {
+      box-sizing: border-box;
+      font-family: var(--lexi-font-sans);
+    }
+
+    .lexi-hover-card__head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .lexi-hover-card__word {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--lexi-ink);
+    }
+
+    .lexi-hover-card__original {
+      color: var(--lexi-ink-3);
+      font-size: 12px;
+    }
+
+    .lexi-hover-card__tag {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: var(--lexi-tech-soft);
+      padding: 3px 9px;
+      color: var(--lexi-accent);
+      font-size: 10.5px;
+      font-weight: 600;
+      line-height: 1.5;
+      white-space: nowrap;
+    }
+
+    .lexi-hover-card__tag--product {
+      background: var(--lexi-prod-soft);
+      color: var(--lexi-prod);
+    }
+
+    .lexi-hover-card__phonetic {
+      color: var(--lexi-ink-3);
+      font-size: 12px;
+      font-family: var(--lexi-font-mono);
+    }
+
+    .lexi-hover-card__def {
+      margin: 0;
+      color: var(--lexi-ink-2);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    .lexi-hover-card__example {
+      margin: 0;
+      color: var(--lexi-ink-3);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .lexi-hover-card__divider {
+      margin: 0;
+      border: 0;
+      border-top: 1px solid var(--lexi-line);
+    }
+
+    .lexi-hover-card__foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .lexi-hover-card__action {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: var(--lexi-accent);
+      cursor: pointer;
+      font-size: 12.5px;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .lexi-hover-card__action:hover {
+      color: var(--lexi-accent-ink);
+    }
+
+    .lexi-hover-card__tags {
+      overflow: hidden;
+      color: var(--lexi-ink-3);
+      font-size: 11px;
+      font-family: var(--lexi-font-mono);
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .lexi-toast {
@@ -586,13 +758,12 @@ function getPageStyleContent(customCss = '') {
       bottom: 28px;
       z-index: 2147483647;
       max-width: min(420px, calc(100vw - 32px));
-      border: 1px solid rgba(203, 213, 225, 0.82);
-      border-radius: 12px;
-      background: rgba(17, 24, 39, 0.92);
-      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.22);
-      color: #fff;
-      padding: 10px 13px;
-      font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      border-radius: 10px;
+      background: rgba(13, 13, 13, 0.92);
+      box-shadow: 0 16px 40px -8px rgba(13, 13, 13, 0.3);
+      color: #ffffff;
+      padding: 10px 14px;
+      font: 13px/1.5 var(--lexi-font-sans);
       pointer-events: none;
       transform: translateX(-50%) translateY(10px);
       opacity: 0;
@@ -606,16 +777,15 @@ function getPageStyleContent(customCss = '') {
       position: relative;
       max-width: min(100%, 64rem);
       margin: 0.85em 0;
-      border: 1px solid rgba(215, 227, 248, 0.86);
-      border-left: 4px solid #2563eb;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.82);
-      box-shadow: 0 14px 36px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.48) inset;
-      backdrop-filter: blur(14px) saturate(1.12);
-      -webkit-backdrop-filter: blur(14px) saturate(1.12);
+      border: 1px solid var(--lexi-line);
+      border-radius: 12px;
+      background: var(--lexi-glass-bg);
+      box-shadow: 0 16px 40px -12px rgba(13, 13, 13, 0.14);
+      backdrop-filter: var(--lexi-glass-blur);
+      -webkit-backdrop-filter: var(--lexi-glass-blur);
       padding: 0.7em 0.85em;
-      color: #111827;
-      font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--lexi-ink);
+      font: 14px/1.65 var(--lexi-font-sans);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       opacity: 1;
@@ -624,19 +794,25 @@ function getPageStyleContent(customCss = '') {
       transform-origin: top left;
     }
 
+    @supports not (backdrop-filter: blur(4px)) {
+      .lexi-selection-translation {
+        background: rgba(255, 255, 255, 0.97);
+      }
+    }
+
     .lexi-selection-translation[data-lexi-collapsed="true"] {
       display: inline-flex;
       width: fit-content;
       max-width: min(100%, 22rem);
-      border: 1px solid rgba(191, 219, 254, 0.88);
+      border: 1px solid var(--lexi-line);
       border-radius: 999px;
-      background: rgba(239, 246, 255, 0.82);
+      background: var(--lexi-accent-soft);
       padding: 0;
-      color: #1e3a8a;
+      color: var(--lexi-accent-ink);
     }
 
     .lexi-selection-translation[data-lexi-loading="true"] {
-      background: linear-gradient(100deg, rgba(255, 255, 255, 0.86) 0%, rgba(241, 247, 255, 0.84) 48%, rgba(255, 255, 255, 0.86) 100%);
+      background: linear-gradient(100deg, rgba(255, 255, 255, 0.86) 0%, rgba(237, 243, 255, 0.84) 48%, rgba(255, 255, 255, 0.86) 100%);
       background-size: 220% 100%;
       animation: lexi-card-enter 180ms ease-out both, lexi-shimmer-surface 1000ms ease-in-out infinite;
     }
@@ -645,7 +821,7 @@ function getPageStyleContent(customCss = '') {
       content: "";
       position: absolute;
       inset: 0;
-      background: linear-gradient(105deg, transparent 0%, rgba(37, 99, 235, 0.08) 46%, transparent 78%);
+      background: linear-gradient(105deg, transparent 0%, rgba(25, 118, 255, 0.08) 46%, transparent 78%);
       transform: translateX(-120%);
       animation: lexi-shimmer-sweep 1000ms ease-in-out infinite;
       pointer-events: none;
@@ -671,12 +847,12 @@ function getPageStyleContent(customCss = '') {
       display: inline-block;
       box-sizing: border-box;
       margin: 0;
-      background: #0ea5e9;
-      color: #fff;
-      font-weight: 600;
-      font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      padding: 0.15em 0.55em;
-      border-radius: 3px;
+      background: var(--lexi-accent-soft);
+      color: var(--lexi-accent-ink);
+      font: 600 11px/1.5 var(--lexi-font-sans);
+      padding: 3px 9px;
+      border-radius: 999px;
+      white-space: nowrap;
     }
 
     .lexi-selection-translation__actions {
@@ -696,17 +872,17 @@ function getPageStyleContent(customCss = '') {
       width: 1.65em;
       height: 1.65em;
       border: 1px solid transparent;
-      border-radius: 4px;
-      color: #475569;
+      border-radius: 6px;
+      color: var(--lexi-ink-3);
       cursor: pointer;
-      font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 13px/1 var(--lexi-font-sans);
       user-select: none;
     }
 
     .lexi-selection-translation__icon-button:hover {
-      border-color: #bfdbfe;
-      background: #eff6ff;
-      color: #1d4ed8;
+      border-color: var(--lexi-line);
+      background: var(--lexi-accent-soft);
+      color: var(--lexi-accent-ink);
     }
 
     .lexi-selection-translation__body {
@@ -718,8 +894,8 @@ function getPageStyleContent(customCss = '') {
     .lexi-selection-translation__text {
       all: initial;
       display: inline;
-      color: #111827;
-      font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--lexi-ink);
+      font: 14px/1.65 var(--lexi-font-sans);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       opacity: 1;
@@ -743,7 +919,7 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-selection-translation__text[data-lexi-loading="true"] {
       display: inline;
-      color: #1d4ed8;
+      color: var(--lexi-accent-ink);
       opacity: 0.62;
     }
 
@@ -751,8 +927,8 @@ function getPageStyleContent(customCss = '') {
       all: initial;
       display: block;
       margin-top: 0.45em;
-      color: rgba(17, 24, 39, 0.68);
-      font: 12px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--lexi-ink-2);
+      font: 12px/1.55 var(--lexi-font-sans);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
     }
@@ -765,9 +941,9 @@ function getPageStyleContent(customCss = '') {
       gap: 0.4em;
       max-width: 100%;
       padding: 0.24em 0.65em;
-      color: #1e3a8a;
+      color: var(--lexi-accent-ink);
       cursor: pointer;
-      font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 12px/1.45 var(--lexi-font-sans);
       user-select: none;
     }
 
@@ -778,16 +954,16 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-selection-translation__collapsed-icon {
       all: initial;
-      color: #0ea5e9;
-      font: 13px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--lexi-accent);
+      font: 13px/1 var(--lexi-font-sans);
     }
 
     .lexi-selection-translation__collapsed-text {
       all: initial;
       min-width: 0;
       overflow: hidden;
-      color: #1e3a8a;
-      font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--lexi-accent-ink);
+      font: 12px/1.45 var(--lexi-font-sans);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -881,14 +1057,13 @@ function getPageStyleContent(customCss = '') {
       display: block;
       position: relative;
       margin: 0.55em 0;
-      border: 1px solid rgba(14, 165, 233, 0.22);
-      border-left: 3px solid #0ea5e9;
-      border-radius: 9px;
-      background: rgba(14, 165, 233, 0.08);
-      box-shadow: 0 10px 26px rgba(14, 165, 233, 0.08);
+      border: 1px solid var(--lexi-line);
+      border-left: 3px solid var(--lexi-accent);
+      border-radius: 10px;
+      background: var(--lexi-accent-soft);
       padding: 0.55em 0.7em;
-      color: #0f172a;
-      font: 13px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--lexi-ink);
+      font: 13px/1.55 var(--lexi-font-sans);
       white-space: pre-wrap;
       overflow: hidden;
       overflow-wrap: anywhere;
@@ -899,9 +1074,9 @@ function getPageStyleContent(customCss = '') {
       border-color: transparent;
       background:
         linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)) padding-box,
-        linear-gradient(110deg, #2563eb, #06b6d4, #a855f7, #2563eb) border-box;
+        linear-gradient(110deg, #1976ff, #6fa8ff, #1976ff) border-box;
       background-size: 100% 100%, 240% 100%;
-      color: rgba(30, 64, 175, 0.78);
+      color: rgba(11, 87, 199, 0.78);
       animation: lexi-page-translation-enter 180ms ease-out both, lexi-ai-border-flow var(--lexi-page-translation-speed, 1100ms) linear infinite, lexi-priority-opacity var(--lexi-page-translation-pulse, 1200ms) ease-in-out infinite;
     }
 
@@ -909,7 +1084,7 @@ function getPageStyleContent(customCss = '') {
       content: "";
       position: absolute;
       inset: 0;
-      background: linear-gradient(105deg, transparent 8%, rgba(59, 130, 246, 0.12) 45%, transparent 72%);
+      background: linear-gradient(105deg, transparent 8%, rgba(25, 118, 255, 0.12) 45%, transparent 72%);
       transform: translateX(-120%);
       animation: lexi-page-translation-sweep var(--lexi-page-translation-speed, 1100ms) ease-in-out infinite;
       pointer-events: none;
@@ -918,13 +1093,13 @@ function getPageStyleContent(customCss = '') {
     .lexi-page-translation[data-lexi-priority="viewport"] {
       --lexi-page-translation-speed: 520ms;
       --lexi-page-translation-pulse: 760ms;
-      border-left-color: #2563eb;
+      border-left-color: var(--lexi-accent);
     }
 
     .lexi-page-translation[data-lexi-priority="near"] {
       --lexi-page-translation-speed: 860ms;
       --lexi-page-translation-pulse: 1040ms;
-      border-left-color: #0891b2;
+      border-left-color: var(--lexi-accent-ink);
     }
 
     .lexi-page-translation[data-lexi-priority="prefetch"] {
@@ -965,45 +1140,11 @@ function getPageStyleContent(customCss = '') {
       position: fixed;
       z-index: 2147483646;
       overflow: visible;
-      border: 2px solid rgba(37, 99, 235, 0.92);
+      border: 2px solid rgba(25, 118, 255, 0.9);
       border-radius: var(--lexi-media-radius, 16px);
-      box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.72), 0 0 24px rgba(99, 102, 241, 0.36), 0 0 42px rgba(14, 165, 233, 0.22);
+      box-shadow: 0 0 0 4px rgba(25, 118, 255, 0.14), 0 16px 40px -8px rgba(13, 13, 13, 0.2);
       pointer-events: none;
-      transform: translateY(0);
-      animation: lexi-media-float 2.2s ease-in-out infinite, lexi-media-border-pulse 1.25s ease-in-out infinite;
-    }
-
-    .lexi-media-highlight::before {
-      content: "";
-      position: absolute;
-      inset: -7px;
-      border: 2px solid rgba(168, 85, 247, 0.78);
-      border-radius: calc(var(--lexi-media-radius, 16px) + 7px);
-      box-shadow: 0 0 22px rgba(168, 85, 247, 0.36), 0 0 34px rgba(14, 165, 233, 0.24);
-      opacity: 0.85;
-      animation: lexi-media-glow-pulse 1.45s ease-in-out infinite;
-    }
-
-    .lexi-media-highlight__shine {
-      position: absolute;
-      inset: 0;
-      overflow: hidden;
-      border-radius: inherit;
-      opacity: 0.38;
-      mix-blend-mode: screen;
-    }
-
-    .lexi-media-highlight__shine::before {
-      content: "";
-      position: absolute;
-      left: -42%;
-      top: 0;
-      width: 28%;
-      height: 100%;
-      border-radius: inherit;
-      background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, 0.16) 48%, rgba(125, 211, 252, 0.08) 58%, transparent 100%);
-      transform: translateX(0) skewX(-12deg);
-      animation: lexi-media-shimmer 1.35s ease-in-out infinite;
+      animation: lexi-card-enter 160ms ease-out both;
     }
 
     .lexi-media-highlight::after {
@@ -1012,39 +1153,17 @@ function getPageStyleContent(customCss = '') {
       right: 8px;
       top: 8px;
       z-index: 1;
-      border: 1px solid rgba(255, 255, 255, 0.5);
       border-radius: 999px;
-      background: linear-gradient(135deg, rgba(17, 24, 39, 0.92), rgba(67, 56, 202, 0.88), rgba(2, 132, 199, 0.88));
-      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+      background: rgba(13, 13, 13, 0.92);
+      box-shadow: 0 8px 20px rgba(13, 13, 13, 0.22);
       color: #fff;
-      font: 700 11px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 700 11px/1 var(--lexi-font-sans);
       letter-spacing: .02em;
-      padding: 5px 7px;
-    }
-
-    @keyframes lexi-media-border-pulse {
-      0%, 100% { border-color: rgba(37, 99, 235, 0.92); box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.72), 0 0 24px rgba(99, 102, 241, 0.36), 0 0 42px rgba(14, 165, 233, 0.22); }
-      50% { border-color: rgba(236, 72, 153, 0.92); box-shadow: 0 0 0 1px rgba(216, 180, 254, 0.76), 0 0 28px rgba(236, 72, 153, 0.32), 0 0 46px rgba(99, 102, 241, 0.24); }
-    }
-
-    @keyframes lexi-media-glow-pulse {
-      0%, 100% { opacity: 0.72; transform: scale(1); }
-      50% { opacity: 1; transform: scale(1.006); }
-    }
-
-    @keyframes lexi-media-shimmer {
-      to { transform: translateX(470%) skewX(-12deg); }
-    }
-
-    @keyframes lexi-media-float {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-3px); }
+      padding: 5px 8px;
     }
 
     @media (prefers-reduced-motion: reduce) {
-      .lexi-media-highlight,
-      .lexi-media-highlight::before,
-      .lexi-media-highlight__shine::before {
+      .lexi-media-highlight {
         animation: none;
       }
     }
@@ -1057,24 +1176,27 @@ function getPageStyleContent(customCss = '') {
       display: grid;
       gap: 10px;
       width: min(420px, calc(100vw - 24px));
-      border: 1px solid rgba(226, 232, 240, 0.58);
-      border-radius: 18px;
-      background:
-        linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(241, 245, 249, 0.46)),
-        radial-gradient(circle at 0% 0%, rgba(129, 140, 248, 0.16), transparent 36%),
-        radial-gradient(circle at 100% 12%, rgba(14, 165, 233, 0.12), transparent 34%);
-      box-shadow: 0 22px 60px rgba(15, 23, 42, 0.22), 0 0 0 1px rgba(255, 255, 255, 0.62) inset;
-      backdrop-filter: blur(22px) saturate(1.18);
-      -webkit-backdrop-filter: blur(22px) saturate(1.18);
-      color: #111827;
+      border: 1px solid var(--lexi-line);
+      border-radius: 16px;
+      background: var(--lexi-glass-bg);
+      box-shadow: var(--lexi-glass-shadow);
+      backdrop-filter: var(--lexi-glass-blur);
+      -webkit-backdrop-filter: var(--lexi-glass-blur);
+      color: var(--lexi-ink);
       padding: 12px;
-      font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 13px/1.45 var(--lexi-font-sans);
       animation: lexi-card-enter 160ms ease-out both;
+    }
+
+    @supports not (backdrop-filter: blur(4px)) {
+      .lexi-media-toolbar {
+        background: rgba(255, 255, 255, 0.97);
+      }
     }
 
     .lexi-media-toolbar * {
       box-sizing: border-box;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: var(--lexi-font-sans);
     }
 
     .lexi-media-toolbar__head {
@@ -1087,7 +1209,7 @@ function getPageStyleContent(customCss = '') {
     .lexi-media-toolbar__title {
       min-width: 0;
       overflow: hidden;
-      color: #111827;
+      color: var(--lexi-ink);
       font-size: 13px;
       font-weight: 700;
       text-overflow: ellipsis;
@@ -1097,7 +1219,7 @@ function getPageStyleContent(customCss = '') {
     .lexi-media-toolbar__close {
       border: 0;
       background: transparent;
-      color: #64748b;
+      color: var(--lexi-ink-3);
       cursor: pointer;
       font-size: 18px;
       line-height: 1;
@@ -1106,7 +1228,7 @@ function getPageStyleContent(customCss = '') {
 
     .lexi-media-toolbar__meta {
       overflow: hidden;
-      color: #64748b;
+      color: var(--lexi-ink-3);
       font-size: 12px;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1119,31 +1241,38 @@ function getPageStyleContent(customCss = '') {
     }
 
     .lexi-media-toolbar__button {
-      border: 1px solid rgba(203, 213, 225, 0.88);
+      border: 1px solid var(--lexi-line-strong);
       border-radius: 999px;
-      background: #fff;
-      color: #111827;
+      background: var(--lexi-bg);
+      color: var(--lexi-ink);
       cursor: pointer;
       font-size: 12px;
       font-weight: 600;
-      padding: 7px 10px;
+      padding: 7px 12px;
+    }
+
+    .lexi-media-toolbar__button:hover {
+      border-color: var(--lexi-ink-3);
     }
 
     .lexi-media-toolbar__button:first-child {
-      border-color: #312e81;
-      background: linear-gradient(135deg, #111827, #4338ca 58%, #0284c7);
-      color: #fff;
+      border-color: transparent;
+      background: var(--lexi-ink);
+      color: #ffffff;
+    }
+
+    .lexi-media-toolbar__button:first-child:hover {
+      background: #2b2b2b;
     }
 
     .lexi-media-toolbar__answer {
       max-height: 260px;
       overflow: auto;
-      border: 1px solid rgba(226, 232, 240, 0.68);
-      border-radius: 14px;
-      background: rgba(255, 255, 255, 0.5);
-      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.65) inset;
+      border: 1px solid var(--lexi-line);
+      border-radius: 12px;
+      background: var(--lexi-bg-subtle);
       padding: 11px 12px;
-      color: #243244;
+      color: var(--lexi-ink-2);
       font-size: 12px;
       line-height: 1.68;
       white-space: pre-wrap;
@@ -1161,7 +1290,7 @@ function getPageStyleContent(customCss = '') {
       --ld-bubble: #f4f4f4;
       --ld-code-bg: #f9f9f9;
       --ld-code-border: rgba(13, 13, 13, 0.08);
-      --ld-link: #2964aa;
+      --ld-link: #1976ff;
       --ld-composer-bg: #ffffff;
       --ld-composer-border: rgba(13, 13, 13, 0.16);
       --ld-composer-focus: rgba(13, 13, 13, 0.42);
@@ -1535,7 +1664,7 @@ function getPageStyleContent(customCss = '') {
         --ld-bubble: #303030;
         --ld-code-bg: #171717;
         --ld-code-border: rgba(255, 255, 255, 0.08);
-        --ld-link: #7ab7ff;
+        --ld-link: #6fa8ff;
         --ld-composer-bg: #2f2f2f;
         --ld-composer-border: rgba(255, 255, 255, 0.12);
         --ld-composer-focus: rgba(255, 255, 255, 0.36);
@@ -1603,12 +1732,108 @@ function showLexiToast(message: string, customCss = '') {
   window.setTimeout(() => toast.remove(), 3200)
 }
 
-function moveTooltip(tooltip: HTMLElement, event: MouseEvent) {
-  const offset = 14
-  const maxLeft = window.innerWidth - tooltip.offsetWidth - 12
-  const maxTop = window.innerHeight - tooltip.offsetHeight - 12
-  tooltip.style.left = `${Math.max(12, Math.min(event.clientX + offset, maxLeft))}px`
-  tooltip.style.top = `${Math.max(12, Math.min(event.clientY + offset, maxTop))}px`
+function positionHoverCard(tooltip: HTMLElement, token: HTMLElement) {
+  const margin = 12
+  const gap = 8
+  const rect = token.getBoundingClientRect()
+
+  // Measure while invisible so the first paint already lands anchored to the token.
+  tooltip.style.visibility = 'hidden'
+  tooltip.hidden = false
+  const { offsetWidth: width, offsetHeight: height } = tooltip
+
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - width - margin))
+  const below = rect.bottom + gap
+  const fitsBelow = below + height <= window.innerHeight - margin
+  const top = !fitsBelow && rect.top - gap - height >= margin
+    ? rect.top - gap - height
+    : below
+
+  tooltip.style.left = `${left}px`
+  tooltip.style.top = `${Math.max(margin, top)}px`
+  tooltip.style.visibility = ''
+}
+
+function restoreReplacedTokens(original: string) {
+  document.querySelectorAll<HTMLElement>('[data-lexi-token]').forEach((token) => {
+    if (token.dataset.original === original)
+      token.replaceWith(document.createTextNode(original))
+  })
+}
+
+function renderHoverCard(tooltip: HTMLElement, token: HTMLElement, onArchive: (token: HTMLElement) => void) {
+  const isProduct = token.dataset.lexiProduct === 'true'
+  tooltip.replaceChildren()
+
+  const head = document.createElement('div')
+  head.className = 'lexi-hover-card__head'
+
+  const word = document.createElement('b')
+  word.className = 'lexi-hover-card__word'
+  word.textContent = (isProduct ? token.dataset.original : token.dataset.replacement) ?? ''
+  head.append(word)
+
+  if (!isProduct && token.dataset.original) {
+    const original = document.createElement('span')
+    original.className = 'lexi-hover-card__original'
+    original.textContent = token.dataset.original
+    head.append(original)
+  }
+
+  const tag = document.createElement('span')
+  tag.className = `lexi-hover-card__tag${isProduct ? ' lexi-hover-card__tag--product' : ''}`
+  tag.textContent = isProduct ? '产品 / 工具' : '技术'
+  head.append(tag)
+
+  if (token.dataset.pronunciation) {
+    const phonetic = document.createElement('span')
+    phonetic.className = 'lexi-hover-card__phonetic'
+    phonetic.textContent = token.dataset.pronunciation
+    head.append(phonetic)
+  }
+
+  const def = document.createElement('p')
+  def.className = 'lexi-hover-card__def'
+  def.textContent = token.dataset.meaning ?? ''
+  tooltip.append(head, def)
+
+  if (token.dataset.example) {
+    const example = document.createElement('p')
+    example.className = 'lexi-hover-card__example'
+    example.textContent = token.dataset.example
+    tooltip.append(example)
+  }
+
+  const divider = document.createElement('hr')
+  divider.className = 'lexi-hover-card__divider'
+
+  const foot = document.createElement('div')
+  foot.className = 'lexi-hover-card__foot'
+
+  const action = document.createElement('button')
+  action.type = 'button'
+  action.className = 'lexi-hover-card__action'
+  action.textContent = isProduct ? '✓ 知道了，不再标注' : '✓ 认识了，不再替换'
+  action.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    onArchive(token)
+  })
+  foot.append(action)
+
+  if (token.dataset.tags) {
+    const tags = document.createElement('span')
+    tags.className = 'lexi-hover-card__tags'
+    tags.textContent = token.dataset.tags
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(Boolean)
+      .slice(0, 2)
+      .join(' · ')
+    foot.append(tags)
+  }
+
+  tooltip.append(divider, foot)
 }
 
 function replaceTextNode(node: Text, matches: ReplacementMatch[]) {
@@ -3111,6 +3336,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const stopVideoSpeedControl = startVideoSpeedControl()
   let disposed = false
   let tooltip: HTMLElement | undefined
+  let activeTooltipToken: HTMLElement | undefined
+  let tooltipHideTimer: number | undefined
   let dynamicObserver: MutationObserver | undefined
   let dynamicTimer: number | undefined
   let selectionTimer: number | undefined
@@ -3210,7 +3437,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     let nextRecords = records
     const aiReplacementSeeds: ReplacementSeed[] = []
     const recordIndex = createReplacementRecordIndex(records)
-    const candidatePool = createReplacementCandidatePool(settings, records, budget.conservative)
+    const candidatePool = createReplacementCandidatePool(settings, records, recordIndex, budget.conservative)
     const replacementPlans: ReplacementNodePlan[] = []
 
     for (const node of textNodes) {
@@ -3818,7 +4045,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     highlight.dataset.lexiMediaHighlight = 'true'
     highlight.className = 'lexi-media-highlight'
-    highlight.append(Object.assign(document.createElement('span'), { className: 'lexi-media-highlight__shine' }))
     toolbar.dataset.lexiMediaToolbar = 'true'
     toolbar.className = 'lexi-media-toolbar'
     head.className = 'lexi-media-toolbar__head'
@@ -3913,7 +4139,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     }
     catch {
       if (isLikelyTechnicalSelectionTerm(selected)) {
-        detailText = '技术名词：已加入本地词库。'
+        detailText = '技术术语：已加入本地词库。'
         updateTranslation(translation, detailText)
       }
     }
@@ -4176,6 +4402,24 @@ export function startPageEnhancer(events: EnhancerEvents) {
       .catch(error => console.warn('[Lexi] dialog failed', error))
   }
 
+  const hideTooltip = () => {
+    window.clearTimeout(tooltipHideTimer)
+    tooltipHideTimer = undefined
+    activeTooltipToken = undefined
+    if (tooltip)
+      tooltip.hidden = true
+  }
+
+  const cancelTooltipHide = () => {
+    window.clearTimeout(tooltipHideTimer)
+    tooltipHideTimer = undefined
+  }
+
+  const scheduleTooltipHide = () => {
+    cancelTooltipHide()
+    tooltipHideTimer = window.setTimeout(hideTooltip, 200)
+  }
+
   const onEscape = (event: KeyboardEvent) => {
     if (event.key !== 'Escape')
       return
@@ -4185,6 +4429,48 @@ export function startPageEnhancer(events: EnhancerEvents) {
       closeLexiDialog(currentDialog)
     if (mediaToolbarState)
       closeMediaToolbar()
+    hideTooltip()
+  }
+
+  const archiveHoveredToken = (token: HTMLElement) => {
+    void (async () => {
+      const id = token.dataset.lexiId
+      const original = token.dataset.original ?? ''
+      if (!id || !original)
+        return
+
+      const { settings, records } = await getStoredState()
+      const known = settings.history.enabled && records.some(record => record.id === id)
+      if (known)
+        await saveRecords(setVocabularyArchived(records, id, true))
+
+      restoreReplacedTokens(original)
+      hideTooltip()
+      showLexiToast(
+        known
+          ? `已归档「${original}」，之后不再自动替换。`
+          : `已还原本页「${original}」。开启学习记录后可永久归档。`,
+        settings.ui.customCss,
+      )
+    })().catch(error => console.warn('[Lexi] archive word failed', error))
+  }
+
+  // The hover card stays open while the pointer is inside the token or the card,
+  // so the archive action is reachable; leaving both hides it after a short grace.
+  const ensureTooltip = () => {
+    if (tooltip)
+      return tooltip
+
+    tooltip = createTooltip()
+    tooltip.addEventListener('pointerenter', cancelTooltipHide)
+    tooltip.addEventListener('pointerleave', (event) => {
+      const related = event.relatedTarget
+      if (related instanceof Node && activeTooltipToken?.contains(related))
+        return
+
+      scheduleTooltipHide()
+    })
+    return tooltip
   }
 
   const onPointerOver = (event: MouseEvent | PointerEvent) => {
@@ -4192,37 +4478,33 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!token)
       return
 
-    if (!tooltip)
-      tooltip = createTooltip()
+    cancelTooltipHide()
+    if (activeTooltipToken === token && tooltip && !tooltip.hidden)
+      return
 
-    const productPrefix = token.dataset.lexiProduct === 'true' ? '产品 / 工具 · ' : ''
-    const replacementLine = token.dataset.lexiProduct === 'true'
-      ? `${token.dataset.original} · ${productPrefix}${token.dataset.meaning}`
-      : `${token.dataset.original} → ${token.dataset.replacement} · ${token.dataset.meaning}`
-    const tagsLine = token.dataset.tags ? `\n标签：${token.dataset.tags}` : ''
-    tooltip.textContent = `${replacementLine}\n${token.dataset.example}${tagsLine}`
-    tooltip.hidden = false
-    moveTooltip(tooltip, event)
-  }
-
-  const onPointerMove = (event: MouseEvent | PointerEvent) => {
-    if (tooltip && !tooltip.hidden)
-      moveTooltip(tooltip, event)
+    const card = ensureTooltip()
+    activeTooltipToken = token
+    renderHoverCard(card, token, archiveHoveredToken)
+    positionHoverCard(card, token)
   }
 
   const onPointerOut = (event: MouseEvent | PointerEvent) => {
     const token = getTokenFromEvent(event)
-    if (!token || !tooltip)
+    if (!token || !tooltip || tooltip.hidden)
       return
 
     const related = event.relatedTarget
-    if (related instanceof Node && token.contains(related))
+    if (related instanceof Node && (token.contains(related) || tooltip.contains(related)))
       return
 
-    tooltip.hidden = true
+    scheduleTooltipHide()
   }
 
   function onPageScroll() {
+    // A fixed-position card drifts off its token as soon as the page scrolls.
+    if (tooltip && !tooltip.hidden)
+      hideTooltip()
+
     if (mediaToolbarState)
       positionMediaUi(mediaToolbarState)
 
@@ -4323,6 +4605,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.clearTimeout(dynamicTimer)
     window.clearTimeout(selectionTimer)
     window.clearTimeout(pageTranslationTimer)
+    window.clearTimeout(tooltipHideTimer)
     pageTranslationEnabled = false
     pageTranslationScanPending = false
     pageTranslationInFlight.clear()
@@ -4406,9 +4689,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     listeners.add(document, 'selectionchange', onSelectionChange)
     listeners.add(document, 'keydown', onKeyDown, true)
     // Only the pointer variants: browsers emit pointer *and* mouse events for a mouse,
-    // so binding both ran the tooltip handler twice on every single mousemove.
+    // so binding both ran the hover-card handler twice on every single crossing.
     listeners.add(document, pointerEventName('over'), onPointerOver, true)
-    listeners.add(document, pointerEventName('move'), onPointerMove, true)
     listeners.add(document, pointerEventName('out'), onPointerOut, true)
     browser.storage.onChanged.addListener(onStorageChanged)
 

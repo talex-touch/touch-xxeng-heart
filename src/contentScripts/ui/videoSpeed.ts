@@ -27,11 +27,11 @@ function ensureVideoSpeedStyles() {
       margin: 0;
       gap: 10px;
       width: min(300px, calc(100vw - 24px));
-      border: 1px solid #334155;
+      border: 1px solid #272c36;
       border-radius: 12px;
-      background: #111827;
-      box-shadow: 0 16px 40px rgba(15, 23, 42, 0.34);
-      color: #f8fafc;
+      background: #0d0f14;
+      box-shadow: 0 16px 40px -8px rgba(0, 0, 0, 0.4);
+      color: #ffffff;
       padding: 12px;
       font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -40,15 +40,15 @@ function ensureVideoSpeedStyles() {
     .lexi-video-speed-menu * { box-sizing: border-box; font-family: inherit; }
     .lexi-video-speed-menu__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
     .lexi-video-speed-menu__title { font-weight: 750; letter-spacing: 0; }
-    .lexi-video-speed-menu__hint { color: #bfdbfe; font-size: 11px; }
+    .lexi-video-speed-menu__hint { color: #a6adbb; font-size: 11px; }
     .lexi-video-speed-menu__rates { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
     .lexi-video-speed-menu__rate {
       min-width: 36px;
       min-height: 36px;
-      border: 1px solid #475569;
+      border: 1px solid #272c36;
       border-radius: 8px;
-      background: #1e293b;
-      color: #cbd5e1;
+      background: #161a21;
+      color: #a6adbb;
       cursor: pointer;
       font-size: 12px;
       font-weight: 700;
@@ -59,9 +59,9 @@ function ensureVideoSpeedStyles() {
     .lexi-video-speed-menu__rate:hover,
     .lexi-video-speed-menu__rate:focus-visible,
     .lexi-video-speed-menu__rate--active {
-      border-color: #38bdf8;
+      border-color: #6fa8ff;
       outline: 2px solid transparent;
-      background: #0369a1;
+      background: #1976ff;
       color: #fff;
     }
     @media (prefers-reduced-motion: reduce) {

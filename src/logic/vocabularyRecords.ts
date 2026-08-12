@@ -64,23 +64,63 @@ export function upsertVocabularyRecord(
     if (record.id !== id)
       return record
 
-    const selectedCount = record.selectedCount + (request.source === 'manual' ? 1 : 0)
+    const manual = request.source === 'manual'
+    const selectedCount = record.selectedCount + (manual ? 1 : 0)
     const seenCount = record.seenCount + (request.source === 'auto' ? 1 : 0)
-    const learnedLevel = Math.min(8, record.learnedLevel + (request.source === 'manual' ? 1 : 0))
+    const learnedLevel = Math.min(8, record.learnedLevel + (manual ? 1 : 0))
 
     return {
       ...record,
       ...request.candidate,
-      source: request.source === 'manual' ? 'manual' : record.source,
+      source: manual ? 'manual' : record.source,
       pageUrl: request.pageUrl ?? record.pageUrl,
       pageTitle: request.pageTitle ?? record.pageTitle,
       context: request.context ?? record.context,
       selectedCount,
       seenCount,
       learnedLevel,
+      // Re-selecting an archived word is an explicit "I want to learn this again".
+      archivedAt: manual ? undefined : record.archivedAt,
       updatedAt: now,
-      nextReviewAt: now + Math.max(1, learnedLevel + 1) * day,
+      // Passive auto exposure must not push reviews out; only manual learning reschedules.
+      nextReviewAt: manual ? now + Math.max(1, learnedLevel + 1) * day : record.nextReviewAt,
     }
+  })
+}
+
+const exposureGraceCount = 4
+const exposureCooldownStepMs = 12 * 60 * 60 * 1000
+const exposureCooldownMaxMs = 7 * day
+
+/**
+ * Rest time before a word may be auto-replaced again. The first few exposures are
+ * free; after that every extra exposure (and every review level) lengthens the
+ * cooldown, so well-seen words gradually fade from pages instead of repeating.
+ */
+export function getReplacementCooldownMs(record: Pick<VocabularyRecord, 'seenCount' | 'learnedLevel'>) {
+  const over = record.seenCount - exposureGraceCount + record.learnedLevel * 2
+  if (over <= 0)
+    return 0
+
+  return Math.min(exposureCooldownMaxMs, over * exposureCooldownStepMs)
+}
+
+export function isReplacementSuppressed(
+  record: Pick<VocabularyRecord, 'seenCount' | 'learnedLevel' | 'updatedAt' | 'archivedAt'>,
+  now = Date.now(),
+) {
+  if (record.archivedAt)
+    return true
+
+  return now - record.updatedAt < getReplacementCooldownMs(record)
+}
+
+export function setVocabularyArchived(records: VocabularyRecord[], id: string, archived: boolean, now = Date.now()) {
+  return records.map((record) => {
+    if (record.id !== id || Boolean(record.archivedAt) === archived)
+      return record
+
+    return { ...record, archivedAt: archived ? now : undefined, updatedAt: now }
   })
 }
 
@@ -116,6 +156,7 @@ export function normalizeImportedRecord(value: unknown, now = Date.now()): Vocab
     learnedLevel: clampInteger(value.learnedLevel, 0, 8, 0),
     reviewCount: clampInteger(value.reviewCount, 0, 9999, 0),
     lastReviewedAt: sanitizeOptionalTimestamp(value.lastReviewedAt),
+    archivedAt: sanitizeOptionalTimestamp(value.archivedAt),
     createdAt,
     updatedAt,
     nextReviewAt: sanitizeTimestamp(value.nextReviewAt, updatedAt + day),
@@ -180,7 +221,7 @@ export function getProgressDifficulty(records: VocabularyRecord[], baseDifficult
 
 export function getDueRecords(records: VocabularyRecord[], now = Date.now()) {
   return records
-    .filter(record => record.nextReviewAt <= now)
+    .filter(record => !record.archivedAt && record.nextReviewAt <= now)
     .sort((a, b) => a.nextReviewAt - b.nextReviewAt)
 }
 

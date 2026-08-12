@@ -386,6 +386,8 @@ export interface VocabularyRecord extends VocabularyCandidate {
   learnedLevel: number
   reviewCount?: number
   lastReviewedAt?: number
+  /** Set when the user marks the word as known; archived words leave the auto-replacement pool. */
+  archivedAt?: number
   createdAt: number
   updatedAt: number
   nextReviewAt: number

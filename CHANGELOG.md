@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.8 - 2026-08-12
+
+Changes since v0.2.7.
+
+### Features
+- run AI in the extension worker and rework page reading (04c6895)
+
 ## v0.2.7 - 2026-08-06
 
 Changes since v0.2.6.
@@ -113,6 +120,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

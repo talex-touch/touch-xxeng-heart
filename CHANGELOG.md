@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.10 - 2026-08-12
+
+Changes since v0.2.9.
+
+### Features
+- follow scroll, page-theme dark material, quieter marks, general vocabulary (cc6c189)
+
 ## v0.2.9 - 2026-08-12
 
 Changes since v0.2.8.
@@ -127,6 +134,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

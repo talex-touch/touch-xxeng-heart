@@ -10,9 +10,24 @@ function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+export type AnalyticsSink = (payload: AnalyticsLogPayload) => Promise<unknown>
+
+let sink: AnalyticsSink = payload => sendRuntimeMessage('lexi-record-analytics', payload)
+
+/**
+ * Lets the worker persist its own logs.
+ *
+ * `runtime.sendMessage` is never delivered back to the context that sent it, so the AI
+ * runner — which now executes in the worker — would drop every call log through the
+ * default sink.
+ */
+export function setAnalyticsSink(next: AnalyticsSink) {
+  sink = next
+}
+
 async function sendAnalyticsLog(payload: AnalyticsLogPayload) {
   try {
-    await sendRuntimeMessage('lexi-record-analytics', payload)
+    await sink(payload)
   }
   catch (error) {
     console.warn('[Lexi] analytics log write failed', error)

@@ -1,14 +1,15 @@
 import browser from 'webextension-polyfill'
 import { onMessage } from 'webext-bridge/background'
+import { startAiService } from './aiService'
+import { isAnalyticsLogPayload, persistAnalyticsLog } from './analyticsStore'
 import { startSettingsSync } from './settingsSync'
+import { setAnalyticsSink } from '~/logic/analytics'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
-import { appendBoundedLog } from '~/logic/analyticsQueue'
 import { createSerializedTaskQueue } from '~/logic/asyncQueue'
 import { mergeDigestCacheEntry, pruneDigestCacheBySize } from '~/logic/digestCache'
-import { readJsonValue, toStoredJson } from '~/logic/storageJson'
-import { aiCallLogsStorageKey, contentDigestLeaseStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationsStorageKey, pageVisitLogsStorageKey } from '~/logic/storageKeys'
+import { readJsonValue } from '~/logic/storageJson'
+import { contentDigestLeaseStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationsStorageKey } from '~/logic/storageKeys'
 import type { PageTranslationCache } from '~/logic/types'
-import type { AnalyticsLogPayload } from '~/logic/analytics'
 
 // only on dev mode
 if (import.meta.hot) {
@@ -28,6 +29,11 @@ if (!__FIREFOX__) {
 
 // Registered at the top level so a storage change can wake the service worker.
 startSettingsSync()
+
+// Every AI call runs here: credentials and endpoints never enter a page's world, and a
+// worker request is exempt from the CORS check that blocks content scripts.
+setAnalyticsSink(persistAnalyticsLog)
+startAiService()
 
 browser.runtime.onInstalled.addListener((): void => {
   // `onInstalled` also fires on update/reload, where the menu id already exists and
@@ -76,49 +82,14 @@ listenRuntimeMessage<{ url?: unknown, filename?: unknown } | undefined>('lexi-do
 
 type DigestCache = Record<string, { sourceHash: string, updatedAt: number }>
 
-const maxAnalyticsLogs = 80
-const analyticsWrite = createSerializedTaskQueue()
 const pageTranslationCacheWrite = createSerializedTaskQueue()
 
-function isAnalyticsLogPayload(value: unknown): value is AnalyticsLogPayload {
-  if (!value || typeof value !== 'object' || !('kind' in value) || !('item' in value))
-    return false
-
-  const payload = value as { kind?: unknown, item?: unknown }
-  if (payload.kind !== 'ai' && payload.kind !== 'page')
-    return false
-  if (!payload.item || typeof payload.item !== 'object')
-    return false
-
-  const item = payload.item as { id?: unknown, createdAt?: unknown, scene?: unknown, url?: unknown }
-  if (typeof item.id !== 'string' || item.id.length > 160 || !Number.isFinite(item.createdAt))
-    return false
-  if (payload.kind === 'ai' && typeof item.scene !== 'string')
-    return false
-  if (payload.kind === 'page' && typeof item.url !== 'string')
-    return false
-
-  try {
-    return JSON.stringify(payload.item).length <= 32 * 1024
-  }
-  catch {
-    return false
-  }
-}
-
-listenRuntimeMessage<unknown>('lexi-record-analytics', (payload) => {
+listenRuntimeMessage<unknown>('lexi-record-analytics', async (payload) => {
   if (!isAnalyticsLogPayload(payload))
     return { ok: false, error: '日志参数无效' }
 
-  return analyticsWrite(async () => {
-    const storageKey = payload.kind === 'ai' ? aiCallLogsStorageKey : pageVisitLogsStorageKey
-    const stored = await browser.storage.local.get(storageKey)
-    const current = readJsonValue<unknown[]>(stored[storageKey], [])
-    await browser.storage.local.set({
-      [storageKey]: toStoredJson(appendBoundedLog(current, payload.item, maxAnalyticsLogs)),
-    })
-    return { ok: true }
-  })
+  await persistAnalyticsLog(payload)
+  return { ok: true }
 })
 
 listenRuntimeMessage<{ key?: unknown, cache?: unknown }>('lexi-write-page-translation-cache', (payload) => {

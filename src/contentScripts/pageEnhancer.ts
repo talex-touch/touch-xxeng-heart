@@ -1203,7 +1203,45 @@ function getPageStyleContent(customCss = '') {
       gap: 8px;
       border-bottom: 1px solid var(--ld-border);
       padding: 10px 14px;
+      cursor: grab;
+      /* The header is the drag handle, so a drag must not select the title text. */
+      user-select: none;
+      touch-action: none;
     }
+
+    .lexi-dialog__head button { cursor: pointer; }
+
+    .lexi-dialog[data-lexi-dialog-dragging="true"] .lexi-dialog__head { cursor: grabbing; }
+
+    .lexi-dialog[data-lexi-dialog-dragging="true"],
+    .lexi-dialog[data-lexi-dialog-resizing="true"] {
+      user-select: none;
+      animation: none;
+    }
+
+    .lexi-dialog__resizer {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      width: 18px;
+      height: 18px;
+      cursor: nwse-resize;
+      touch-action: none;
+    }
+
+    .lexi-dialog__resizer::after {
+      content: "";
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid var(--ld-faint);
+      border-bottom: 1.5px solid var(--ld-faint);
+      border-bottom-right-radius: 2px;
+    }
+
+    .lexi-dialog[data-lexi-collapsed="true"] > .lexi-dialog__resizer { display: none; }
 
     .lexi-dialog__title {
       flex: none;
@@ -1374,6 +1412,30 @@ function getPageStyleContent(customCss = '') {
     .lexi-dialog__source-chip span { overflow: hidden; max-width: 200px; text-overflow: ellipsis; white-space: nowrap; }
 
     .lexi-dialog__composer { flex: none; padding: 8px 14px 12px; }
+
+    .lexi-dialog__suggestions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 0 2px 8px;
+    }
+
+    .lexi-dialog__suggestion {
+      border: 1px solid var(--ld-chip-border);
+      border-radius: 999px;
+      background: var(--ld-chip-bg);
+      color: var(--ld-muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.4;
+      padding: 5px 11px;
+    }
+
+    .lexi-dialog__suggestion:hover {
+      background: var(--ld-hover);
+      color: var(--ld-text);
+    }
 
     .lexi-dialog__context {
       overflow: hidden;
@@ -2457,7 +2519,46 @@ function getCurrentDialogAnchor() {
   return getDialogAnchorFromRange(range)
 }
 
+/** Set once the user drags or resizes: from then on the geometry is theirs, not ours. */
+const dialogPlacedAttribute = 'data-lexi-dialog-placed'
+const dialogMinWidth = 300
+const dialogMinHeight = 220
+const dialogEdgeMargin = 8
+
+/**
+ * Where the panel sits in layout, which is not where it is drawn.
+ *
+ * The enter and collapse morphs animate width, height and opacity, so a measured rect is
+ * transiently wrong; feeding that back into `left`/`top` makes the panel creep on every
+ * scroll event. Inline styles and offset sizes are the state the animation is playing over.
+ */
+function readDialogFrame(dialog: HTMLElement) {
+  const rect = dialog.getBoundingClientRect()
+  return {
+    left: Number.parseFloat(dialog.style.left) || rect.left,
+    top: Number.parseFloat(dialog.style.top) || rect.top,
+    width: dialog.offsetWidth || rect.width,
+    height: dialog.offsetHeight || rect.height,
+  }
+}
+
+/** Keeps a manually placed panel reachable after the window changes size. */
+function clampLexiDialog(dialog: HTMLElement) {
+  const frame = readDialogFrame(dialog)
+  const maxLeft = Math.max(dialogEdgeMargin, window.innerWidth - frame.width - dialogEdgeMargin)
+  const maxTop = Math.max(dialogEdgeMargin, window.innerHeight - frame.height - dialogEdgeMargin)
+  dialog.style.left = `${Math.min(Math.max(dialogEdgeMargin, frame.left), maxLeft)}px`
+  dialog.style.top = `${Math.min(Math.max(dialogEdgeMargin, frame.top), maxTop)}px`
+}
+
 function positionLexiDialog(dialog: HTMLElement, anchor?: DialogAnchor) {
+  // Scroll and resize both call this; re-anchoring a panel the user has moved would yank
+  // it out from under them, so only keep it on screen.
+  if (dialog.getAttribute(dialogPlacedAttribute) === 'true') {
+    clampLexiDialog(dialog)
+    return
+  }
+
   const margin = 16
   const collapsed = dialog.getAttribute('data-lexi-collapsed') === 'true'
   // Collapsed the panel is a pill and must size to its content, not the full width.
@@ -2485,6 +2586,118 @@ function positionLexiDialog(dialog: HTMLElement, anchor?: DialogAnchor) {
 function closeLexiDialog(dialog: HTMLElement) {
   dialog.dispatchEvent(new CustomEvent('lexi-dialog-close'))
   dialog.remove()
+}
+
+interface DialogGeometryHandle {
+  /** Corner grip; the caller appends it so it stays a sibling of the panel parts. */
+  resizer: HTMLElement
+  /** Inline size is dropped while collapsed so the pill can shrink to its own width. */
+  setCollapsed: (collapsed: boolean) => void
+  destroy: () => void
+}
+
+/**
+ * Makes the dialog draggable by its header and resizable from the bottom-right corner.
+ *
+ * Both gestures pin the panel: a floating surface that snaps back to the selection on the
+ * next scroll event is worse than one that never moved. Pointer capture keeps the drag
+ * alive over iframes and fast pointer movement, which plain mousemove on the panel loses.
+ */
+function attachDialogGeometry(dialog: HTMLElement, head: HTMLElement): DialogGeometryHandle {
+  const listeners = createListenerGroup()
+  const resizer = document.createElement('div')
+  resizer.className = 'lexi-dialog__resizer'
+  resizer.setAttribute('aria-hidden', 'true')
+
+  let size: { width: number, height: number } | undefined
+
+  const applySize = () => {
+    if (!size)
+      return
+
+    dialog.style.width = `${size.width}px`
+    dialog.style.height = `${size.height}px`
+    dialog.style.maxHeight = 'none'
+  }
+
+  const clearSize = () => {
+    dialog.style.width = ''
+    dialog.style.height = ''
+    dialog.style.maxHeight = ''
+  }
+
+  /** Runs a pointer gesture to completion, whatever it ends on. */
+  const track = (
+    target: HTMLElement,
+    event: PointerEvent,
+    state: string,
+    onMove: (moveEvent: PointerEvent) => void,
+  ) => {
+    event.preventDefault()
+    dialog.setAttribute(dialogPlacedAttribute, 'true')
+    dialog.setAttribute(state, 'true')
+    target.setPointerCapture(event.pointerId)
+
+    const disposers: Array<() => void> = []
+    const finish = () => {
+      for (const dispose of disposers.splice(0))
+        dispose()
+
+      dialog.removeAttribute(state)
+      if (target.hasPointerCapture(event.pointerId))
+        target.releasePointerCapture(event.pointerId)
+    }
+
+    disposers.push(
+      listeners.add<PointerEvent>(target, 'pointermove', onMove),
+      listeners.add(target, 'pointerup', finish),
+      listeners.add(target, 'pointercancel', finish),
+    )
+  }
+
+  listeners.add<PointerEvent>(head, 'pointerdown', (event) => {
+    if (event.button !== 0 || (event.target instanceof Element && event.target.closest('button')))
+      return
+
+    const frame = readDialogFrame(dialog)
+    const grabX = event.clientX - frame.left
+    const grabY = event.clientY - frame.top
+
+    track(head, event, 'data-lexi-dialog-dragging', (moveEvent) => {
+      const maxLeft = Math.max(dialogEdgeMargin, window.innerWidth - dialog.offsetWidth - dialogEdgeMargin)
+      // The header must stay grabbable, so the bottom bound is the viewport, not the panel.
+      const maxTop = Math.max(dialogEdgeMargin, window.innerHeight - 44)
+      dialog.style.left = `${Math.min(Math.max(dialogEdgeMargin, moveEvent.clientX - grabX), maxLeft)}px`
+      dialog.style.top = `${Math.min(Math.max(dialogEdgeMargin, moveEvent.clientY - grabY), maxTop)}px`
+    })
+  })
+
+  listeners.add<PointerEvent>(resizer, 'pointerdown', (event) => {
+    if (event.button !== 0)
+      return
+
+    const frame = readDialogFrame(dialog)
+
+    track(resizer, event, 'data-lexi-dialog-resizing', (moveEvent) => {
+      size = {
+        width: Math.max(dialogMinWidth, Math.min(moveEvent.clientX - frame.left, window.innerWidth - frame.left - dialogEdgeMargin)),
+        height: Math.max(dialogMinHeight, Math.min(moveEvent.clientY - frame.top, window.innerHeight - frame.top - dialogEdgeMargin)),
+      }
+      applySize()
+    })
+  })
+
+  return {
+    resizer,
+    setCollapsed(collapsed: boolean) {
+      // The collapsed pill sizes itself from a class rule, which an inline width would win.
+      if (collapsed)
+        clearSize()
+      else
+        applySize()
+    },
+    destroy: () => listeners.removeAll(),
+  }
 }
 
 const dialogSendIcon = '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 4.5l6.5 6.5-1.42 1.42L13 8.34V19.5h-2V8.34l-4.08 4.08L5.5 11z" fill="currentColor"/></svg>'
@@ -2575,6 +2788,38 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
     input.style.height = `${Math.min(input.scrollHeight, 160)}px`
   }
 
+  /**
+   * Openers for the first turn.
+   *
+   * An empty composer over someone else's page is a blank-page problem: the panel knows
+   * whether there is a selection and whether the body was indexed, so it can offer the
+   * three questions worth asking instead of making the user invent one.
+   */
+  const suggestions = document.createElement('div')
+  suggestions.className = 'lexi-dialog__suggestions'
+  const suggestionLabels = context.selection?.text
+    ? ['解释这段', '翻译并说明', '它和上下文的关系']
+    : context.page.segments.length
+      ? ['总结这个页面', '列出关键要点', '有哪些术语要了解']
+      : ['这个页面讲了什么']
+
+  for (const label of suggestionLabels) {
+    const chip = document.createElement('button')
+    chip.type = 'button'
+    chip.className = 'lexi-dialog__suggestion'
+    chip.textContent = label
+    chip.addEventListener('click', () => {
+      if (inFlight())
+        return
+
+      input.value = label
+      autosize()
+      setSendState()
+      form.requestSubmit()
+    })
+    suggestions.append(chip)
+  }
+
   input.addEventListener('input', () => {
     autosize()
     setSendState()
@@ -2606,11 +2851,15 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
 
   const panelListeners = createListenerGroup()
   const reposition = () => positionLexiDialog(dialog, anchor)
+  const geometry = attachDialogGeometry(dialog, head)
   const collapsible = createCollapsible(dialog, {
     block: 'lexi-dialog',
     label: 'Lexi 对话',
     summary: context.page.title || '当前页面',
-    onToggle: reposition,
+    onToggle: (collapsed) => {
+      geometry.setCollapsed(collapsed)
+      reposition()
+    },
   })
 
   form.addEventListener('submit', (event) => {
@@ -2619,6 +2868,8 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
     if (!question || inFlight())
       return
 
+    // The openers are for the blank transcript only; the composer takes over after that.
+    suggestions.remove()
     appendDialogMessage(messages, 'user', question)
     input.value = ''
     autosize()
@@ -2647,7 +2898,10 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
     requestLexiDialogAnswer(
       settings,
       { question, history: [...history], page, selection: context.selection },
-      text => updateDialogMessage(assistantBubble, text, true),
+      {
+        onText: text => updateDialogMessage(assistantBubble, text, true),
+        onSearch: query => updateDialogMessage(assistantBubble, `正在检索页面：${query}…`, true),
+      },
       dialogAbortController.signal,
     )
       .then((answer) => {
@@ -2674,9 +2928,9 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
 
   head.append(title, subtitle, collapsible.toggle, close)
   form.append(input, send)
-  composer.append(contextLine, form, hint)
+  composer.append(suggestions, contextLine, form, hint)
   body.append(messages, composer)
-  dialog.append(collapsible.pill, head, body)
+  dialog.append(collapsible.pill, head, body, geometry.resizer)
   document.documentElement.appendChild(dialog)
   setSendState()
   positionLexiDialog(dialog, anchor)
@@ -2685,6 +2939,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   dialog.addEventListener('lexi-dialog-close', () => {
     dialogAbortController?.abort()
     collapsible.destroy()
+    geometry.destroy()
     panelListeners.removeAll()
   }, { once: true })
   input.focus()

@@ -1,23 +1,22 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
-import { recordAiCall } from './analytics'
-import { promptDefaults } from './defaults'
+import { normalizeMarkdownAnswerText, normalizeTranslationText, parseJsonContent } from './aiText'
+import { requestProviderModels, runAiScene, testAiConnection } from './aiTransport'
 import { buildDialogMessages } from './dialogHarness'
-import { assertEndpointAllowed } from './endpointPolicy'
-import { createSseParser, getProtocolAdapter, normalizeApiKey, resolveProtocol } from './providers'
 import type { DialogHarnessInput, DialogHarnessResult } from './dialogHarness'
-import type { AiChatMessage, ChatMessageContent, ProtocolAdapter, ProtocolUsage, ProviderModel, ResolvedAiProtocol } from './providers'
-import type { AiProviderConfig, AiTestResult, ContentDigestResult, ContentDocument, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+import type { AiChatMessage, ChatMessageContent } from './providers'
+import type { AiProviderConfig, ContentDigestResult, ContentDocument, FeatureScene, ForumDigestInfo, ForumDigestResult, GitHubDigestResult, LexiSettings, SelectionTranslation, TranslationDirection, VocabularyCandidate } from './types'
+
+/**
+ * Scene layer: builds the prompt, reads the answer.
+ *
+ * Provider selection, credentials and the network live in the extension worker behind
+ * `aiTransport`, so nothing below ever sees an endpoint or a key.
+ */
 
 export type { AiChatMessage }
 
 interface AiReplacementResponse {
   items?: VocabularyCandidate[]
-}
-
-interface AiTranslationResponse {
-  translation?: string
-  explanation?: string
-  candidate?: VocabularyCandidate
 }
 
 interface AiSelectionDetailResponse {
@@ -58,395 +57,44 @@ interface MediaAnalysisInput {
   context?: string
 }
 
-interface AiRequestContext {
-  providerId: string
-  providerLabel: string
-  priority: number
-  delayMs: number
-  protocol: ResolvedAiProtocol
-  adapter: ProtocolAdapter
-  /** Configured base URL; the adapter derives the real route from it. */
-  endpointBase: string
-  /** Resolved route, used for logs and diagnostics. */
-  endpoint: string
-  apiKey: string
-  startedAt: number
-  model: string
-  prompt: string
+/** One turn whose answer is expected to be JSON matching the schema in the instruction. */
+async function postAiJson<T>(
+  scene: FeatureScene,
+  payload: Record<string, unknown>,
+  system?: string,
+  signal?: AbortSignal,
+): Promise<T | undefined> {
+  const result = await runAiScene({
+    scene,
+    system,
+    messages: [{ role: 'user', content: JSON.stringify({ scene, ...payload }) }],
+  }, undefined, signal)
+
+  return result ? parseJsonContent<T>(result.text) : undefined
 }
 
-interface ResolvedAiConfig {
-  providerId: string
-  providerLabel: string
-  protocol: ResolvedAiProtocol
-  endpoint: string
-  apiKey: string
-  model: string
-  priority: number
-  delayMs: number
-  prompt: string
-}
+/** One turn whose answer is prose. `onText` sees each partial, already normalized. */
+async function postAiText(
+  scene: FeatureScene,
+  messages: AiChatMessage[],
+  onText?: (text: string) => void,
+  signal?: AbortSignal,
+  normalizeText = normalizeTranslationText,
+): Promise<string | undefined> {
+  const result = await runAiScene({ scene, messages }, (partial) => {
+    const visible = normalizeText(partial)
+    if (visible)
+      onText?.(visible)
+  }, signal)
 
-function toResolvedConfig(provider: AiProviderConfig, index: number, prompt: string): ResolvedAiConfig | undefined {
-  const endpoint = provider.endpoint?.trim() ?? ''
-  if (!endpoint)
+  if (!result)
     return undefined
 
-  const model = provider.model?.trim() ?? ''
+  const text = normalizeText(result.text)
+  if (!text)
+    throw new Error('AI response text is empty')
 
-  return {
-    providerId: provider.id || `provider-${index + 1}`,
-    providerLabel: provider.label || `Provider ${index + 1}`,
-    protocol: resolveProtocol(provider.protocol, endpoint, model),
-    endpoint,
-    apiKey: provider.apiKey?.trim() ?? '',
-    model,
-    priority: Number.isFinite(provider.priority) ? provider.priority : index + 1,
-    delayMs: Math.max(0, Number.isFinite(provider.delayMs) ? provider.delayMs : index * 450),
-    prompt,
-  }
-}
-
-function getAiConfigs(settings: LexiSettings, scene: FeatureScene) {
-  const config = settings.ai[scene]
-  if (!config.enabled)
-    return undefined
-
-  const enabledProviders = (settings.ai.providers ?? []).filter(provider => provider.enabled)
-  const selectedProviderIds = new Set(config.providerIds ?? [])
-  const providers = selectedProviderIds.size
-    ? enabledProviders.filter(provider => selectedProviderIds.has(provider.id))
-    : enabledProviders
-
-  const resolved = providers
-    .map((provider, index) => toResolvedConfig(provider, index, config.prompt))
-    .filter((item): item is ResolvedAiConfig => item != null)
-    .sort((a, b) => a.priority - b.priority || a.delayMs - b.delayMs)
-
-  for (const item of resolved)
-    assertEndpointAllowed(item.endpoint, settings.ai.approvedHttpEndpoints ?? [])
-
-  return resolved.length ? resolved : undefined
-}
-
-function getKeyHint(apiKey: string) {
-  const normalized = normalizeApiKey(apiKey)
-  return normalized ? `...${normalized.slice(-4)}` : undefined
-}
-
-function createRequestContextFromConfig(config: ResolvedAiConfig): AiRequestContext {
-  const adapter = getProtocolAdapter(config.protocol)
-
-  return {
-    providerId: config.providerId,
-    providerLabel: config.providerLabel,
-    priority: config.priority,
-    delayMs: config.delayMs,
-    protocol: config.protocol,
-    adapter,
-    endpointBase: config.endpoint,
-    endpoint: adapter.resolveChatUrl(config.endpoint, { model: config.model }),
-    apiKey: normalizeApiKey(config.apiKey),
-    startedAt: performance.now(),
-    model: config.model,
-    prompt: config.prompt,
-  }
-}
-
-function createAiRequestContext(settings: LexiSettings, scene: FeatureScene): AiRequestContext | undefined {
-  const config = getAiConfigs(settings, scene)?.[0]
-  return config ? createRequestContextFromConfig(config) : undefined
-}
-
-function createAiRequestContexts(settings: LexiSettings, scene: FeatureScene): AiRequestContext[] {
-  return getAiConfigs(settings, scene)?.map(createRequestContextFromConfig) ?? []
-}
-
-function createProviderErrorPrefix(request: AiRequestContext) {
-  return request.providerLabel ? `${request.providerLabel}: ` : ''
-}
-
-const reasoningModelPattern = /(?:^|[\W_])(?:o1|o3|o4|r1|reasoner|reasoning|thinking)(?:$|[\W_])/i
-
-function modelPrefersNonStreaming(model: string) {
-  return reasoningModelPattern.test(model)
-}
-
-function modelAcceptsTemperature(model: string) {
-  return !modelPrefersNonStreaming(model)
-}
-
-function getTemperature(model: string) {
-  return modelAcceptsTemperature(model) ? 0.2 : undefined
-}
-
-function buildChatPlan(request: AiRequestContext, messages: AiChatMessage[], stream: boolean) {
-  return request.adapter.buildChatRequest({
-    endpoint: request.endpointBase,
-    apiKey: request.apiKey,
-    model: request.model,
-    messages,
-    stream,
-    temperature: getTemperature(request.model),
-  })
-}
-
-/** Scene prompts stay the default system message unless the caller supplied its own. */
-function withSystemMessage(messages: AiChatMessage[], system: string): AiChatMessage[] {
-  return messages[0]?.role === 'system' ? messages : [{ role: 'system', content: system }, ...messages]
-}
-
-function getPromptText(messages: AiChatMessage[]) {
-  return messages
-    .map(message => (typeof message.content === 'string' ? message.content : JSON.stringify(message.content)))
-    .join('\n')
-}
-
-function estimateTokens(value: string) {
-  return Math.max(1, Math.ceil(value.length / 4))
-}
-
-function getUsageLog(usage: ProtocolUsage | undefined, promptText: string, completionText = '') {
-  if (usage?.totalTokens) {
-    return {
-      promptTokens: usage.promptTokens,
-      completionTokens: usage.completionTokens,
-      totalTokens: usage.totalTokens,
-      tokenEstimate: false,
-    }
-  }
-
-  const promptTokens = estimateTokens(promptText)
-  const completionTokens = completionText ? estimateTokens(completionText) : undefined
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + (completionTokens ?? 0),
-    tokenEstimate: true,
-  }
-}
-
-function parseJsonContent<T>(content: string): T {
-  const cleaned = stripThinkingText(content)
-  const fenceStart = cleaned.indexOf('```')
-  const fenceEnd = fenceStart >= 0 ? cleaned.indexOf('```', fenceStart + 3) : -1
-  const fenced = fenceStart >= 0 && fenceEnd > fenceStart
-    ? cleaned.slice(fenceStart + 3, fenceEnd).replace(/^json\s*/i, '')
-    : cleaned
-
-  try {
-    return JSON.parse(fenced.trim()) as T
-  }
-  catch {
-    const start = fenced.indexOf('{')
-    const end = fenced.lastIndexOf('}')
-    if (start >= 0 && end > start)
-      return JSON.parse(fenced.slice(start, end + 1).trim()) as T
-
-    throw new Error('AI response JSON parse failed')
-  }
-}
-
-function extractJsonObject<T>(adapter: ProtocolAdapter, value: unknown): T {
-  if (typeof value !== 'object' || value == null)
-    throw new Error('AI response is not an object')
-
-  const direct = value as T
-  const content = adapter.readText(value)
-  return content ? parseJsonContent<T>(content) : direct
-}
-
-/**
- * Streams the response body, handing every SSE event to the protocol adapter.
- *
- * `onContent` sees the accumulated text after each event so callers can render partial
- * output without re-implementing the delta bookkeeping.
- */
-async function readStreamedText(
-  response: Response,
-  adapter: ProtocolAdapter,
-  onContent?: (content: string) => void,
-) {
-  const reader = response.body?.getReader()
-  if (!reader)
-    throw new Error('AI stream is empty')
-
-  const decoder = new TextDecoder()
-  let content = ''
-  const parser = createSseParser((event) => {
-    const delta = adapter.readStreamDelta(event)
-    if (!delta)
-      return
-
-    content += delta
-    onContent?.(content)
-  })
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (value)
-      parser.push(decoder.decode(value, { stream: !done }))
-
-    if (done) {
-      parser.push(decoder.decode())
-      parser.end()
-      break
-    }
-  }
-
-  if (!content.trim())
-    throw new Error('AI stream response is empty')
-
-  return content
-}
-
-async function readErrorText(response: Response) {
-  const text = await response.text()
-  if (!text.trim())
-    return response.statusText || `HTTP ${response.status}`
-
-  try {
-    return JSON.stringify(JSON.parse(text)).slice(0, 240)
-  }
-  catch {
-    return text.trim().slice(0, 240)
-  }
-}
-
-async function readAiResponseJson<T>(response: Response, adapter: ProtocolAdapter): Promise<{ data: T, streamed: boolean, usage?: ProtocolUsage }> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('text/event-stream')) {
-    const content = await readStreamedText(response, adapter)
-    return {
-      data: parseJsonContent<T>(content),
-      streamed: true,
-    }
-  }
-
-  const payload = await response.json()
-  return {
-    data: extractJsonObject<T>(adapter, payload),
-    streamed: false,
-    usage: adapter.readUsage(payload),
-  }
-}
-
-function stripThinkingText(value: string) {
-  return value
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
-    .replace(/<think>[\s\S]*$/gi, '')
-    .replace(/<thinking>[\s\S]*$/gi, '')
-    .trim()
-}
-
-function stripMarkdownFence(value: string) {
-  const trimmed = value.trim()
-  const fenceStart = trimmed.indexOf('```')
-  const fenceEnd = fenceStart >= 0 ? trimmed.indexOf('```', fenceStart + 3) : -1
-  if (fenceStart === 0 && fenceEnd > fenceStart)
-    return trimmed.slice(fenceStart + 3, fenceEnd).replace(/^[a-z]+\s*/i, '').trim()
-
-  return trimmed
-}
-
-function normalizeTranslationText(value: string) {
-  const content = stripMarkdownFence(stripThinkingText(value))
-  if (!content)
-    return ''
-
-  const partialJsonTranslation = content.match(/"translation"\s*:\s*"((?:\\.|[^"\\])*)/)
-  if (partialJsonTranslation) {
-    try {
-      return JSON.parse(`"${partialJsonTranslation[1]}"`).trim()
-    }
-    catch {
-      return partialJsonTranslation[1].trim()
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(content) as AiTranslationResponse
-    if (parsed?.translation)
-      return parsed.translation.trim()
-  }
-  catch {}
-
-  return content.replace(/^(译文|翻译|translation)\s*[:：]\s*/i, '').trim()
-}
-
-function normalizeMarkdownAnswerText(value: string) {
-  const content = stripThinkingText(value).trim()
-  if (!content)
-    return ''
-
-  try {
-    const parsed = JSON.parse(content) as { answer?: unknown, content?: unknown, text?: unknown }
-    const answer = [parsed.answer, parsed.content, parsed.text].find(item => typeof item === 'string')
-    if (typeof answer === 'string')
-      return answer.trim()
-  }
-  catch {}
-
-  return content.replace(/^(回答|answer)\s*[:：]\s*/i, '').trim()
-}
-
-async function fetchChatCompletion(request: AiRequestContext, messages: AiChatMessage[], stream: boolean, signal?: AbortSignal) {
-  const plan = buildChatPlan(request, messages, stream)
-  return fetch(plan.url, {
-    method: plan.method,
-    headers: plan.headers,
-    redirect: 'error',
-    signal,
-    body: plan.body,
-  })
-}
-
-function shouldRetryWithoutStream(status: number, error: string) {
-  return status === 400 && /stream|temperature|unsupported|not support|does not support|invalid parameter/i.test(error)
-}
-
-function normalizeAiErrorMessage(status: number | undefined, error: string) {
-  if (/insufficient[_\s-]*(?:user[_\s-]*)?quota|quota|余额不足|额度不足|剩余额度|balance/i.test(error))
-    return `AI 额度不足，请充值或更换 API Key。${error}`
-
-  if (status === 401 || /unauthorized|invalid[_\s-]*api[_\s-]*key|incorrect[_\s-]*api[_\s-]*key|认证|鉴权|api key/i.test(error))
-    return `AI API Key 无效或未授权，请检查配置。${error}`
-
-  if (status === 429 || /rate[_\s-]*limit|too many requests|请求过多/i.test(error))
-    return `AI 请求过于频繁，请稍后重试。${error}`
-
-  return error
-}
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error)
-}
-
-function isAbortError(error: unknown) {
-  return (error instanceof DOMException && error.name === 'AbortError')
-    || (error instanceof Error && error.name === 'AbortError')
-}
-
-function getRawAiText(adapter: ProtocolAdapter, value: unknown) {
-  try {
-    return normalizeTranslationText(extractTextContent(adapter, value))
-  }
-  catch {
-    return JSON.stringify(value)
-  }
-}
-
-function parseRawAiText(adapter: ProtocolAdapter, value: string) {
-  if (!value.trim())
-    return ''
-
-  try {
-    return getRawAiText(adapter, JSON.parse(value))
-  }
-  catch {
-    return normalizeTranslationText(value)
-  }
+  return text
 }
 
 function getTranslationDirectionInstruction(direction: TranslationDirection) {
@@ -459,418 +107,6 @@ function getTranslationDirectionInstruction(direction: TranslationDirection) {
   return 'Auto-detect direction: if the selected text is mostly Chinese, translate it into natural English; otherwise translate it into Simplified Chinese. For English, mixed-language, code comments, UI text or any non-Chinese text, the final answer MUST be Simplified Chinese only.'
 }
 
-async function readStreamText(response: Response, adapter: ProtocolAdapter, onText?: (text: string) => void, normalizeText = normalizeTranslationText) {
-  const content = await readStreamedText(response, adapter, (partial) => {
-    const visible = normalizeText(partial)
-    if (visible)
-      onText?.(visible)
-  })
-
-  const text = normalizeText(content)
-  if (!text)
-    throw new Error('AI stream response is empty')
-
-  return text
-}
-
-function extractTextContent(adapter: ProtocolAdapter, value: unknown) {
-  if (typeof value === 'string')
-    return value
-
-  if (typeof value !== 'object' || value == null)
-    throw new Error('AI response is not an object')
-
-  return adapter.readText(value) || JSON.stringify(value)
-}
-
-async function readAiResponseTextWithUsage(response: Response, adapter: ProtocolAdapter, promptText: string, onText?: (text: string) => void, normalizeText = normalizeTranslationText): Promise<{ text: string, streamed: boolean, usageLog: ReturnType<typeof getUsageLog> }> {
-  const contentType = response.headers.get('content-type') ?? ''
-  if (contentType.includes('text/event-stream')) {
-    const text = await readStreamText(response, adapter, onText, normalizeText)
-    return {
-      text,
-      streamed: true,
-      usageLog: getUsageLog(undefined, promptText, text),
-    }
-  }
-
-  const json = await response.json()
-  const text = normalizeText(extractTextContent(adapter, json))
-  if (!text)
-    throw new Error('AI response text is empty')
-
-  onText?.(text)
-  return {
-    text,
-    streamed: false,
-    usageLog: getUsageLog(adapter.readUsage(json), promptText, text),
-  }
-}
-
-async function delayProviderStart(delayMs: number, signal: AbortSignal) {
-  if (delayMs <= 0)
-    return
-
-  await new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(resolve, delayMs)
-    signal.addEventListener('abort', () => {
-      window.clearTimeout(timer)
-      reject(new DOMException('Provider race aborted', 'AbortError'))
-    }, { once: true })
-  })
-}
-
-async function runProviderRace<T>(
-  requests: AiRequestContext[],
-  runner: (request: AiRequestContext, signal: AbortSignal, index: number) => Promise<T>,
-): Promise<T | undefined> {
-  if (!requests.length)
-    return undefined
-
-  if (requests.length === 1) {
-    const controller = new AbortController()
-    return runner(requests[0], controller.signal, 0)
-  }
-
-  return new Promise<T>((resolve, reject) => {
-    const controllers = requests.map(() => new AbortController())
-    const errors: string[] = []
-    let failed = 0
-    let settled = false
-
-    requests.forEach((request, index) => {
-      const controller = controllers[index]
-      const startedAt = performance.now()
-      delayProviderStart(request.delayMs, controller.signal)
-        .then(() => {
-          request.startedAt = performance.now()
-          return runner(request, controller.signal, index)
-        })
-        .then((result) => {
-          if (settled)
-            return
-
-          settled = true
-          controllers.forEach((item, itemIndex) => {
-            if (itemIndex !== index)
-              item.abort()
-          })
-          resolve(result)
-        })
-        .catch((error) => {
-          if (settled || isAbortError(error))
-            return
-
-          failed += 1
-          const elapsed = Math.round(performance.now() - startedAt)
-          errors.push(`${createProviderErrorPrefix(request)}${getErrorMessage(error)} (${elapsed}ms)`)
-          if (failed >= requests.length) {
-            settled = true
-            reject(new Error(errors.join('；') || '所有 AI Provider 均不可用'))
-          }
-        })
-    })
-  })
-}
-
-async function postAiJsonWithRequest<T>(
-  request: AiRequestContext,
-  scene: FeatureScene,
-  payload: Record<string, unknown>,
-  promptOverride: string | undefined,
-  signal: AbortSignal,
-): Promise<T> {
-  let failureLogged = false
-
-  try {
-    const user = JSON.stringify({ scene, ...payload })
-    const system = promptOverride ?? request.prompt
-    const messages: AiChatMessage[] = [{ role: 'system', content: system }, { role: 'user', content: user }]
-    const stream = !modelPrefersNonStreaming(request.model)
-    let response = await fetchChatCompletion(request, messages, stream, signal)
-    let retryError: string | undefined
-    let firstError: string | undefined
-
-    if (!response.ok) {
-      firstError = await readErrorText(response)
-      if (stream && shouldRetryWithoutStream(response.status, firstError)) {
-        retryError = firstError
-        firstError = undefined
-        response = await fetchChatCompletion(request, messages, false, signal)
-      }
-    }
-
-    if (!response.ok) {
-      const rawError = firstError ?? await readErrorText(response)
-      const error = normalizeAiErrorMessage(response.status, rawError)
-      failureLogged = true
-      await recordAiCall({
-        scene,
-        endpoint: request.endpoint,
-        model: request.model,
-        authSent: Boolean(request.apiKey),
-        keyHint: getKeyHint(request.apiKey),
-        streamed: false,
-        ok: false,
-        status: response.status,
-        error: retryError ? `${retryError}; retry: ${error}` : error,
-        durationMs: Math.round(performance.now() - request.startedAt),
-      })
-      throw new Error(error)
-    }
-
-    let data: T
-    let streamed = false
-    let usage: ProtocolUsage | undefined
-    try {
-      const result = await readAiResponseJson<T>(response, request.adapter)
-      data = result.data
-      streamed = result.streamed
-      usage = result.usage
-    }
-    catch (error) {
-      if (!stream)
-        throw error
-
-      retryError = getErrorMessage(error)
-      response = await fetchChatCompletion(request, messages, false, signal)
-      if (!response.ok) {
-        const responseError = await readErrorText(response)
-        throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
-      }
-
-      const result = await readAiResponseJson<T>(response, request.adapter)
-      data = result.data
-      streamed = result.streamed
-      usage = result.usage
-    }
-    const usageLog = getUsageLog(usage, `${system}\n${user}`, JSON.stringify(data))
-
-    await recordAiCall({
-      scene,
-      endpoint: request.endpoint,
-      model: request.model,
-      authSent: Boolean(request.apiKey),
-      keyHint: getKeyHint(request.apiKey),
-      streamed,
-      ok: true,
-      status: response.status,
-      ...usageLog,
-      durationMs: Math.round(performance.now() - request.startedAt),
-    })
-
-    return data
-  }
-  catch (error) {
-    if (isAbortError(error))
-      throw error
-
-    if (!failureLogged && error instanceof Error) {
-      await recordAiCall({
-        scene,
-        endpoint: request.endpoint,
-        model: request.model,
-        authSent: Boolean(request.apiKey),
-        keyHint: getKeyHint(request.apiKey),
-        streamed: false,
-        ok: false,
-        error: error.message,
-        durationMs: Math.round(performance.now() - request.startedAt),
-      })
-    }
-
-    throw error
-  }
-}
-
-async function postAiJson<T>(
-  settings: LexiSettings,
-  scene: FeatureScene,
-  payload: Record<string, unknown>,
-  promptOverride?: string,
-  signal?: AbortSignal,
-): Promise<T | undefined> {
-  const requests = createAiRequestContexts(settings, scene)
-  const run = runProviderRace(requests, (request, providerSignal) => {
-    if (!signal)
-      return postAiJsonWithRequest<T>(request, scene, payload, promptOverride, providerSignal)
-
-    const controller = new AbortController()
-    const abort = () => controller.abort()
-    signal.addEventListener('abort', abort, { once: true })
-    providerSignal.addEventListener('abort', abort, { once: true })
-    if (signal.aborted || providerSignal.aborted)
-      controller.abort()
-
-    return postAiJsonWithRequest<T>(request, scene, payload, promptOverride, controller.signal)
-      .finally(() => {
-        signal.removeEventListener('abort', abort)
-        providerSignal.removeEventListener('abort', abort)
-      })
-  })
-
-  if (!signal)
-    return run
-
-  return Promise.race([
-    run,
-    new Promise<undefined>((_, reject) => {
-      if (signal.aborted) {
-        reject(new DOMException('AI request aborted', 'AbortError'))
-        return
-      }
-
-      signal.addEventListener('abort', () => reject(new DOMException('AI request aborted', 'AbortError')), { once: true })
-    }),
-  ])
-}
-
-async function postAiTextWithRequest(
-  request: AiRequestContext,
-  scene: FeatureScene,
-  inputMessages: AiChatMessage[],
-  onText: ((text: string) => void) | undefined,
-  signal: AbortSignal,
-  normalizeText = normalizeTranslationText,
-) {
-  let failureLogged = false
-
-  try {
-    const messages = withSystemMessage(inputMessages, request.prompt)
-    const promptText = getPromptText(messages)
-    const stream = !modelPrefersNonStreaming(request.model)
-    let response = await fetchChatCompletion(request, messages, stream, signal)
-    let retryError: string | undefined
-    let firstError: string | undefined
-
-    if (!response.ok) {
-      firstError = await readErrorText(response)
-      if (stream && shouldRetryWithoutStream(response.status, firstError)) {
-        retryError = firstError
-        firstError = undefined
-        response = await fetchChatCompletion(request, messages, false, signal)
-      }
-    }
-
-    if (!response.ok) {
-      const rawError = firstError ?? await readErrorText(response)
-      const error = normalizeAiErrorMessage(response.status, rawError)
-      failureLogged = true
-      await recordAiCall({
-        scene,
-        endpoint: request.endpoint,
-        model: request.model,
-        authSent: Boolean(request.apiKey),
-        keyHint: getKeyHint(request.apiKey),
-        streamed: false,
-        ok: false,
-        status: response.status,
-        error: retryError ? `${retryError}; retry: ${error}` : error,
-        durationMs: Math.round(performance.now() - request.startedAt),
-      })
-      throw new Error(error)
-    }
-
-    let translated: string
-    let streamed = false
-    let usageLog: ReturnType<typeof getUsageLog>
-    try {
-      const result = await readAiResponseTextWithUsage(response, request.adapter, promptText, onText, normalizeText)
-      translated = result.text
-      streamed = result.streamed
-      usageLog = result.usageLog
-    }
-    catch (error) {
-      if (!stream)
-        throw error
-
-      retryError = getErrorMessage(error)
-      response = await fetchChatCompletion(request, messages, false, signal)
-      if (!response.ok) {
-        const responseError = await readErrorText(response)
-        throw new Error(normalizeAiErrorMessage(response.status, `${retryError}; retry: ${responseError}`))
-      }
-
-      const result = await readAiResponseTextWithUsage(response, request.adapter, promptText, onText, normalizeText)
-      translated = result.text
-      streamed = result.streamed
-      usageLog = result.usageLog
-    }
-    await recordAiCall({
-      scene,
-      endpoint: request.endpoint,
-      model: request.model,
-      authSent: Boolean(request.apiKey),
-      keyHint: getKeyHint(request.apiKey),
-      streamed,
-      ok: true,
-      status: response.status,
-      ...usageLog,
-      durationMs: Math.round(performance.now() - request.startedAt),
-    })
-
-    return translated
-  }
-  catch (error) {
-    if (isAbortError(error))
-      throw error
-
-    if (!failureLogged && error instanceof Error) {
-      await recordAiCall({
-        scene,
-        endpoint: request.endpoint,
-        model: request.model,
-        authSent: Boolean(request.apiKey),
-        keyHint: getKeyHint(request.apiKey),
-        streamed: false,
-        ok: false,
-        error: error.message,
-        durationMs: Math.round(performance.now() - request.startedAt),
-      })
-    }
-
-    throw error
-  }
-}
-
-async function postAiText(
-  settings: LexiSettings,
-  scene: FeatureScene,
-  messages: AiChatMessage[],
-  onText?: (text: string) => void,
-  signal?: AbortSignal,
-  normalizeText = normalizeTranslationText,
-): Promise<string | undefined> {
-  const requests = createAiRequestContexts(settings, scene)
-  const run = runProviderRace(requests, (request, providerSignal, index) => {
-    if (!signal)
-      return postAiTextWithRequest(request, scene, messages, index === 0 ? onText : undefined, providerSignal, normalizeText)
-
-    const controller = new AbortController()
-    const abort = () => controller.abort()
-    signal.addEventListener('abort', abort, { once: true })
-    providerSignal.addEventListener('abort', abort, { once: true })
-    return postAiTextWithRequest(request, scene, messages, index === 0 ? onText : undefined, controller.signal, normalizeText)
-      .finally(() => {
-        signal.removeEventListener('abort', abort)
-        providerSignal.removeEventListener('abort', abort)
-      })
-  })
-
-  if (!signal)
-    return run
-
-  return Promise.race([
-    run,
-    new Promise<undefined>((_, reject) => {
-      if (signal.aborted)
-        reject(new DOMException('Request aborted', 'AbortError'))
-      else
-        signal.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')), { once: true })
-    }),
-  ])
-}
-
 export interface LexiDialogAnswer {
   text: string
   /** Segment ids attached to this turn; store them so the next turn can skip resending. */
@@ -880,28 +116,79 @@ export interface LexiDialogAnswer {
   promptTokens: number
 }
 
+export interface DialogAnswerHandlers {
+  onText?: (text: string) => void
+  /** The model asked for more of the page; lets the UI say what is being looked up. */
+  onSearch?: (query: string) => void
+}
+
+const searchRequestPattern = /<search>([^<>]{1,120})<\/search>/i
+
+/**
+ * Reads a search request, but only when the whole turn *is* one.
+ *
+ * A model that mentions the tag inside a real answer is answering, not calling; requiring
+ * the rest of the turn to be empty keeps that from being swallowed as a tool call.
+ */
+function readSearchRequest(text: string) {
+  const match = searchRequestPattern.exec(text)
+  if (!match)
+    return undefined
+
+  return text.replace(searchRequestPattern, '').trim().length <= 24 ? match[1].trim() : undefined
+}
+
+function looksLikeSearchRequest(partial: string) {
+  return /^<\s*search/i.test(partial.trimStart())
+}
+
 /**
  * Answers a dialog question by *retrieving* the relevant page excerpts rather than
  * injecting the page wholesale, and sends a real multi-turn message array so the
  * transcript prefix stays stable (and cacheable) across turns.
+ *
+ * The model gets one chance to ask for a different slice of the page before answering:
+ * the question's own wording is often not the wording the page uses, and one extra round
+ * trip beats telling the user to go select the right paragraph themselves.
  */
 export async function requestLexiDialogAnswer(
   settings: LexiSettings,
   input: DialogHarnessInput,
-  onText?: (text: string) => void,
+  handlers: DialogAnswerHandlers = {},
   signal?: AbortSignal,
 ): Promise<LexiDialogAnswer | undefined> {
-  const harness = buildDialogMessages(input)
-  const text = await postAiText(
-    settings,
-    'selection',
-    harness.messages,
-    onText,
-    signal,
-    normalizeMarkdownAnswerText,
-  )
+  let harness = buildDialogMessages(input)
+  let searchable = true
+  let text: string | undefined
 
-  if (typeof text !== 'string' || !text)
+  for (let round = 0; round < 2; round += 1) {
+    let suppressed = false
+    text = await postAiText(
+      'selection',
+      harness.messages,
+      (partial) => {
+        // A tool call is machinery, not an answer: never paint it into the transcript.
+        if (searchable && (suppressed || looksLikeSearchRequest(partial))) {
+          suppressed = true
+          return
+        }
+
+        handlers.onText?.(partial)
+      },
+      signal,
+      normalizeMarkdownAnswerText,
+    )
+
+    const query = searchable && text ? readSearchRequest(text) : undefined
+    if (!query)
+      break
+
+    searchable = false
+    handlers.onSearch?.(query)
+    harness = buildDialogMessages({ ...input, retrievalQuery: query })
+  }
+
+  if (typeof text !== 'string' || !text || readSearchRequest(text))
     return undefined
 
   return {
@@ -918,7 +205,7 @@ export async function requestReplacementCandidates(
   text: string,
   context: string,
 ) {
-  const data = await postAiJson<AiReplacementResponse>(settings, 'replacement', {
+  const data = await postAiJson<AiReplacementResponse>('replacement', {
     text,
     context,
     instruction: [
@@ -948,7 +235,6 @@ export async function requestSelectionTranslation(
   onTranslation?: (translation: SelectionTranslation) => void,
 ): Promise<SelectionTranslation | undefined> {
   const translated = await postAiText(
-    settings,
     'selection',
     [{
       role: 'user',
@@ -995,7 +281,7 @@ export async function requestPageTranslationBatch(
   if (!items.length)
     return []
 
-  const data = await postAiJson<AiPageTranslationBatchResponse>(settings, 'selection', {
+  const data = await postAiJson<AiPageTranslationBatchResponse>('selection', {
     items: items.map(item => ({ id: item.id, text: item.text.slice(0, 900) })),
     context: context.slice(0, 900),
     direction: settings.selection.translationDirection,
@@ -1022,7 +308,7 @@ export async function requestSelectionDetail(
   translation: string,
   context: string,
 ) {
-  const data = await postAiJson<AiSelectionDetailResponse>(settings, 'selection', {
+  return postAiJson<AiSelectionDetailResponse>('selection', {
     text,
     translation,
     context: context.slice(0, 240),
@@ -1042,8 +328,6 @@ export async function requestSelectionDetail(
     'Use plain Chinese. Keep comments short, specific and useful.',
     'Do not include markdown or hidden reasoning.',
   ].join(' '))
-
-  return data
 }
 
 function getDigestScene(settings: LexiSettings): FeatureScene {
@@ -1094,7 +378,7 @@ export async function requestContentDigest(
     '返回 JSON：{"oneLine":"","summary":[""],"keyPoints":[""],"viewpoints":[""],"actions":[""],"terms":[""]}。',
     '只返回 JSON，不要 Markdown、解释或隐藏推理。',
   ].filter(Boolean).join(' ')
-  const data = await postAiJson<Partial<ContentDigestResult>>(settings, scene, {
+  const data = await postAiJson<Partial<ContentDigestResult>>(scene, {
     task: 'content-digest',
     content: {
       platform: document.platform,
@@ -1141,7 +425,7 @@ export async function requestGitHubDigest(
   },
 ) {
   const isDetail = context.mode === 'detail'
-  const data = await postAiJson<Partial<GitHubDigestResult>>(settings, getDigestScene(settings), {
+  const data = await postAiJson<Partial<GitHubDigestResult>>(getDigestScene(settings), {
     scene: isDetail ? 'github-digest-detail' : 'github-digest-quick',
     ...context,
     readme: context.readme.slice(0, isDetail ? 5200 : 2200),
@@ -1181,7 +465,7 @@ export async function requestForumDigest(
   settings: LexiSettings,
   info: ForumDigestInfo,
 ) {
-  const data = await postAiJson<Partial<ForumDigestResult>>(settings, getDigestScene(settings), {
+  const data = await postAiJson<Partial<ForumDigestResult>>(getDigestScene(settings), {
     scene: 'forum-digest',
     host: info.host,
     title: info.title,
@@ -1265,7 +549,7 @@ export async function requestMediaAnalysis(
         metadata,
       ].join('\n\n')
 
-  return postAiText(settings, 'omni', [{ role: 'user', content }], onText)
+  return postAiText('omni', [{ role: 'user', content }], onText)
 }
 
 function createSceneTestMessage(settings: LexiSettings, scene: FeatureScene): ChatMessageContent {
@@ -1299,128 +583,18 @@ function createSceneTestMessage(settings: LexiSettings, scene: FeatureScene): Ch
   })
 }
 
-async function runAiTest(request: AiRequestContext, scene: FeatureScene, user: ChatMessageContent): Promise<AiTestResult> {
-  const requestUser = typeof user === 'string' ? user : JSON.stringify(user)
-  const messages: AiChatMessage[] = [{ role: 'system', content: request.prompt }, { role: 'user', content: user }]
-  const plan = buildChatPlan(request, messages, false)
-  const describeRequest = () => ({
-    endpoint: plan.url,
-    protocol: request.protocol,
-    model: request.model,
-    system: request.prompt,
-    user: requestUser,
-    stream: false,
-    authSent: Boolean(request.apiKey),
-    keyHint: getKeyHint(request.apiKey),
-  })
-
-  try {
-    const response = await fetch(plan.url, {
-      method: plan.method,
-      headers: plan.headers,
-      redirect: 'error',
-      body: plan.body,
-    })
-
-    const durationMs = Math.round(performance.now() - request.startedAt)
-    const rawResponse = await response.text()
-    const responseText = parseRawAiText(request.adapter, rawResponse)
-    const usageLog = getUsageLog(undefined, `${request.prompt}\n${requestUser}`, responseText)
-
-    await recordAiCall({
-      scene,
-      endpoint: plan.url,
-      model: request.model,
-      authSent: Boolean(request.apiKey),
-      keyHint: getKeyHint(request.apiKey),
-      streamed: false,
-      ok: response.ok,
-      status: response.status,
-      ...usageLog,
-      error: response.ok ? undefined : responseText.slice(0, 240),
-      durationMs,
-    })
-
-    return {
-      ok: response.ok,
-      request: describeRequest(),
-      response: responseText,
-      status: response.status,
-      durationMs,
-    }
-  }
-  catch (error) {
-    if (!(error instanceof Error))
-      throw error
-
-    const durationMs = Math.round(performance.now() - request.startedAt)
-    await recordAiCall({
-      scene,
-      endpoint: plan.url,
-      model: request.model,
-      authSent: Boolean(request.apiKey),
-      keyHint: getKeyHint(request.apiKey),
-      streamed: false,
-      ok: false,
-      error: error.message,
-      durationMs,
-    })
-
-    return {
-      ok: false,
-      request: describeRequest(),
-      response: error.message,
-      durationMs,
-    }
-  }
-}
-
-export async function testAiScene(settings: LexiSettings, scene: FeatureScene) {
-  const request = createAiRequestContext(settings, scene)
-  if (!request)
-    throw new Error('AI 场景未启用，或绑定的 Provider 没有填写 Endpoint')
-
-  return runAiTest(request, scene, createSceneTestMessage(settings, scene))
+/** Checks the provider a scene is actually bound to, resolved worker-side. */
+export function testAiScene(settings: LexiSettings, scene: FeatureScene) {
+  return testAiConnection(undefined, scene, createSceneTestMessage(settings, scene))
 }
 
 /** Provider-level check for the AI settings table; independent of scene bindings. */
-export async function testAiProvider(settings: LexiSettings, provider: AiProviderConfig, scene: FeatureScene = 'selection') {
-  const config = toResolvedConfig(provider, 0, settings.ai[scene].prompt || promptDefaults[scene])
-  if (!config)
-    throw new Error('请先填写 Endpoint')
-
-  if (!config.model)
-    throw new Error('请先填写或选择模型')
-
-  assertEndpointAllowed(config.endpoint, settings.ai.approvedHttpEndpoints ?? [])
-
-  return runAiTest(createRequestContextFromConfig(config), scene, createSceneTestMessage(settings, scene))
+export function testAiProvider(settings: LexiSettings, provider: AiProviderConfig, scene: FeatureScene = 'selection') {
+  return testAiConnection(provider, scene, createSceneTestMessage(settings, scene))
 }
 
-/** Model catalogue for the provider editor; throws with a readable reason on failure. */
-export async function fetchProviderModels(settings: LexiSettings, provider: AiProviderConfig): Promise<ProviderModel[]> {
-  const endpoint = provider.endpoint?.trim() ?? ''
-  if (!endpoint)
-    throw new Error('请先填写 Endpoint')
-
-  assertEndpointAllowed(endpoint, settings.ai.approvedHttpEndpoints ?? [])
-
-  const adapter = getProtocolAdapter(resolveProtocol(provider.protocol, endpoint, provider.model ?? ''))
-  const plan = adapter.buildModelsRequest({ endpoint, apiKey: provider.apiKey ?? '' })
-  const response = await fetch(plan.url, {
-    method: plan.method,
-    headers: plan.headers,
-    redirect: 'error',
-  })
-
-  if (!response.ok)
-    throw new Error(normalizeAiErrorMessage(response.status, await readErrorText(response)))
-
-  const models = adapter.readModels(await response.json())
-  if (!models.length)
-    throw new Error('该 Endpoint 没有返回可用模型列表，请手动填写模型名。')
-
-  return models.sort((a, b) => a.id.localeCompare(b.id))
+export function fetchProviderModels(provider: AiProviderConfig) {
+  return requestProviderModels(provider)
 }
 
 export function localTranslateSelection(text: string): SelectionTranslation {

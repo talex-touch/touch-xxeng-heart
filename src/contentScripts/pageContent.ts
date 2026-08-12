@@ -51,6 +51,15 @@ const maxSegments = 260
 const maxSegmentChars = 1600
 /** A 20-character Chinese sentence is real content, so keep this floor low. */
 const minSegmentChars = 16
+/**
+ * Below this much prose the semantic pass is assumed to have missed the article.
+ *
+ * A page that renders paragraphs as bare `<div>`s yields headings and nothing else, and
+ * the dialog then has to answer "I only have the outline" — which is not a model problem.
+ */
+const proseFloorChars = 600
+/** Generic boxes, only accepted when they are the innermost one holding the text. */
+const looseBlockSelector = 'div,section,article'
 
 function normalize(value: string) {
   return value.replace(/\s+/g, ' ').trim()
@@ -153,29 +162,50 @@ function formatHeadingTrail(trail: Array<{ level: number, text: string }>) {
  */
 let segmentElements = new Map<string, WeakRef<HTMLElement>>()
 
-export function capturePageDocument(): PageDocument {
-  const root = pickContentRoot()
+interface CaptureResult {
+  segments: PageSegment[]
+  outline: string[]
+  elements: Map<string, WeakRef<HTMLElement>>
+  charCount: number
+  proseChars: number
+}
+
+/**
+ * Walks the root once in document order.
+ *
+ * `loose` widens the sweep to generic boxes, which keeps the heading breadcrumbs and the
+ * segment order intact — appending a second pass afterwards would file every recovered
+ * paragraph under the page's last heading.
+ */
+function collectSegments(root: HTMLElement, loose: boolean): CaptureResult {
   const segments: PageSegment[] = []
   const outline: string[] = []
   const trail: Array<{ level: number, text: string }> = []
   const seen = new Set<string>()
   const elements = new Map<string, WeakRef<HTMLElement>>()
+  const selector = loose ? `${blockSelector},${looseBlockSelector}` : blockSelector
   let charCount = 0
+  let proseChars = 0
   let order = 0
 
-  for (const element of Array.from(root.querySelectorAll<HTMLElement>(blockSelector))) {
+  for (const element of Array.from(root.querySelectorAll<HTMLElement>(selector))) {
     if (segments.length >= maxSegments)
       break
 
     if (element.closest(excludedSelector) || !isRendered(element))
       continue
 
-    // A <li> wrapping paragraphs would duplicate them; let the inner blocks win.
+    const semantic = element.matches(blockSelector)
+
+    // A <li> wrapping paragraphs would duplicate them; let the inner blocks win. A generic
+    // box has to be the innermost one too, or the whole article gets emitted as one blob.
     if (element.querySelector(blockSelector))
+      continue
+    if (!semantic && element.querySelector(looseBlockSelector))
       continue
 
     const text = readOriginalText(element)
-    const kind = getSegmentKind(element)
+    const kind = semantic ? getSegmentKind(element) : 'paragraph'
     if (!text || (kind !== 'heading' && text.length < minSegmentChars))
       continue
 
@@ -199,6 +229,9 @@ export function capturePageDocument(): PageDocument {
 
     const clipped = text.slice(0, maxSegmentChars)
     charCount += clipped.length
+    if (kind !== 'heading')
+      proseChars += clipped.length
+
     const id = `s${order}`
     elements.set(id, new WeakRef(element))
     segments.push({
@@ -212,13 +245,23 @@ export function capturePageDocument(): PageDocument {
     order += 1
   }
 
-  segmentElements = elements
+  return { segments, outline, elements, charCount, proseChars }
+}
+
+export function capturePageDocument(): PageDocument {
+  const root = pickContentRoot()
+  const semantic = collectSegments(root, false)
+  // The wider sweep is a rescue, not an upgrade: keep whichever pass found more prose.
+  const loose = semantic.proseChars >= proseFloorChars ? undefined : collectSegments(root, true)
+  const result = loose && loose.proseChars > semantic.proseChars ? loose : semantic
+
+  segmentElements = result.elements
   return {
     title: normalize(document.title),
     url: location.href,
-    segments,
-    outline: outline.slice(0, 60),
-    charCount,
+    segments: result.segments,
+    outline: result.outline.slice(0, 60),
+    charCount: result.charCount,
   }
 }
 
@@ -280,6 +323,16 @@ export function findAnchorSegmentId(document_: PageDocument, selectedText: strin
 
 let cached: { key: string, document: PageDocument, capturedAt: number } | undefined
 const captureTtlMs = 15000
+/**
+ * A capture with no prose is usually a page whose body has not rendered yet, so it is held
+ * only long enough to keep a burst of calls cheap — not for the full TTL, which would pin
+ * an empty index across the user's first few questions.
+ */
+const emptyCaptureTtlMs = 1500
+
+function hasProse(document_: PageDocument) {
+  return document_.segments.some(segment => segment.kind !== 'heading')
+}
 
 /**
  * Capturing walks the DOM, so reuse a recent capture for the same URL. The dialog
@@ -287,9 +340,10 @@ const captureTtlMs = 15000
  */
 export function getPageDocument(options: { force?: boolean } = {}): PageDocument {
   const key = location.href
+  const ttl = cached && hasProse(cached.document) ? captureTtlMs : emptyCaptureTtlMs
   const fresh = cached
     && cached.key === key
-    && Date.now() - cached.capturedAt < captureTtlMs
+    && Date.now() - cached.capturedAt < ttl
 
   if (fresh && !options.force)
     return cached!.document

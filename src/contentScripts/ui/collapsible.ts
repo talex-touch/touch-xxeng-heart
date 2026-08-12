@@ -96,6 +96,10 @@ export function createCollapsible(panel: HTMLElement, options: CollapsibleOption
     pill.setAttribute('aria-expanded', String(!collapsed))
     toggle.setAttribute('aria-expanded', String(!collapsed))
 
+    // The owner lays out first: a panel that restores a user-set size on expand would
+    // otherwise be measured at its collapsed width and morph toward the wrong geometry.
+    options.onToggle?.(collapsed)
+
     if (from && !prefersReducedMotion() && canAnimate(panel)) {
       const to = panel.getBoundingClientRect()
       if (from.height && to.height) {
@@ -105,8 +109,6 @@ export function createCollapsible(panel: HTMLElement, options: CollapsibleOption
         ], { duration: 220, easing: 'cubic-bezier(0.2, 0.9, 0.2, 1)' })
       }
     }
-
-    options.onToggle?.(collapsed)
   }
 
   const onPillClick = () => apply(false, true)

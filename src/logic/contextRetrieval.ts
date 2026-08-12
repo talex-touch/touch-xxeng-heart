@@ -267,3 +267,64 @@ export function selectSegments(scored: ScoredSegment[], options: SelectSegmentsO
   picked.sort((left, right) => left.order - right.order)
   return { segments: picked, droppedForBudget, usedTokens }
 }
+
+export interface CoverageOptions {
+  maxTokens: number
+  maxSegments?: number
+  deliveredIds?: Iterable<string>
+}
+
+export interface CoverageResult extends SelectSegmentsResult {
+  /** Body segments that existed, before sampling and the budget cut it down. */
+  available: number
+  /** True when every available segment made it in, so the model saw the whole body. */
+  complete: boolean
+}
+
+/**
+ * Even coverage of the body instead of the best matches.
+ *
+ * "Summarise this page" shares no vocabulary with the page, so BM25 scores every segment
+ * zero and relevance selection returns nothing at all — the model then correctly reports
+ * that it was only given an outline. A whole-page question needs whole-page material, so
+ * this walks the document at a stride wide enough to span it rather than ranking anything.
+ *
+ * Headings are skipped: they are already in the always-sent outline.
+ */
+export function selectForCoverage(segments: PageSegment[], options: CoverageOptions): CoverageResult {
+  const delivered = new Set(options.deliveredIds ?? [])
+  const maxSegments = options.maxSegments ?? 14
+  const body = segments.filter(segment => segment.kind !== 'heading' && !delivered.has(segment.id))
+  if (!body.length)
+    return { segments: [], droppedForBudget: 0, usedTokens: 0, available: 0, complete: true }
+
+  // Sample only when the whole body cannot fit; otherwise send it in reading order.
+  const total = body.reduce((sum, segment) => sum + estimateTokens(segment.text), 0)
+  const stride = total <= options.maxTokens && body.length <= maxSegments
+    ? 1
+    : Math.max(1, Math.ceil(body.length / maxSegments))
+
+  const picked: PageSegment[] = []
+  let usedTokens = 0
+  let droppedForBudget = 0
+
+  for (let index = 0; index < body.length && picked.length < maxSegments; index += stride) {
+    const segment = body[index]
+    const cost = estimateTokens(segment.text)
+    if (usedTokens + cost > options.maxTokens) {
+      droppedForBudget += 1
+      continue
+    }
+
+    picked.push(segment)
+    usedTokens += cost
+  }
+
+  return {
+    segments: picked,
+    droppedForBudget,
+    usedTokens,
+    available: body.length,
+    complete: picked.length === body.length,
+  }
+}

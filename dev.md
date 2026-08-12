@@ -37,6 +37,20 @@ pnpm pack:zip
 
 不要使用 `pnpm pack` 作为扩展打包入口；它是 pnpm 自带的 npm tarball 命令。
 
+## E2E 里的 AI 请求
+
+**不要用 `context.route` 拦截 AI 请求。** AI 调用由扩展 Worker 发出，Playwright 的页面级路由看不到 Worker 的网络，这样打桩的用例会静默地测不到真实链路（或者直接超时失败）。
+
+请改用 `e2e/mockAiServer.ts`：它是一个真实的本地 HTTP 网关，由 `aiServer` fixture 按用例启停。
+
+- 四种线协议都实现了，按路径分发；流式与非流式由请求体或 Gemini 的路由方法决定。
+- 它**从不返回任何 `Access-Control-*` 头**，预检一律 403。这是刻意的：用例能跑通就证明请求确实来自 Worker 而不是页面。
+- 流式响应按**字节**切片下发，会把多字节字符劈开，用来守住跨块解码。
+- 监听在 `127.0.0.1` 随机端口，属于 HTTP 地址，因此用例需要通过 `configureDigestProvider` 的 `approvals` 预先确认该 Endpoint。
+- `server.requests` 记录了每次请求的路由、方法、请求头和请求体，可直接断言。
+
+`e2e/ai-proxy.spec.ts` 覆盖四种协议 × 流式/非流式，外加页面直连被 CORS 拦下、未确认 HTTP 地址被拒、以及页面世界无法指定地址或凭据这三条边界。
+
 ## 升级版本
 
 项目提供版本升级脚本，会更新 `package.json` 中的 `version`。

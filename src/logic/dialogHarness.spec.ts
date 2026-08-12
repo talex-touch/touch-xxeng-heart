@@ -196,3 +196,62 @@ describe('buildDialogMessages', () => {
     expect(result.trace.find(stage => stage.name === 'retrieve')?.note).toBe('无页面上下文')
   })
 })
+
+/**
+ * A whole-page question shares no vocabulary with the page, so relevance ranking scores
+ * every segment zero. Without coverage the prompt degrades to an outline and the model
+ * answers, correctly, that it was never given any body text.
+ */
+describe('whole-page questions', () => {
+  const lastMessage = (result: ReturnType<typeof buildDialogMessages>) =>
+    result.messages[result.messages.length - 1].content
+
+  it('sends body excerpts for a summary request', () => {
+    const result = buildDialogMessages({ question: 'summarise', page: samplePage })
+
+    expect(result.attachedSegmentIds.length).toBeGreaterThan(0)
+    expect(lastMessage(result)).toContain('MIT')
+  })
+
+  it('recognises the same intent in Chinese', () => {
+    const result = buildDialogMessages({ question: '总结一下这个页面', page: samplePage })
+    expect(result.attachedSegmentIds.length).toBeGreaterThan(0)
+  })
+
+  it('falls back to coverage when the question matched nothing', () => {
+    const result = buildDialogMessages({ question: 'zzzz qqqq wwww', page: samplePage })
+
+    expect(result.attachedSegmentIds.length).toBeGreaterThan(0)
+    expect(result.trace.find(stage => stage.name === 'retrieve')?.note).toContain('全文覆盖')
+  })
+
+  it('tells the model how much of the body the batch represents', () => {
+    expect(lastMessage(buildDialogMessages({ question: 'summarise', page: samplePage })))
+      .toContain('覆盖本页全部正文')
+
+    const long = createPage(Array.from({ length: 60 }, (_, index) =>
+      createSegment(`s${index}`, `第 ${index} 段正文，内容足够长以便占用检索预算并触发采样行为。`)))
+    const sampled = lastMessage(buildDialogMessages({ question: 'summarise', page: long }))
+    expect(sampled).toContain('均匀取自本页正文')
+    expect(sampled).not.toContain('覆盖本页全部正文')
+  })
+
+  it('keeps a targeted question on relevance instead of coverage', () => {
+    const result = buildDialogMessages({ question: '端口被占用怎么改', page: samplePage })
+
+    expect(result.trace.find(stage => stage.name === 'retrieve')?.note).toContain('按问题检索')
+    expect(lastMessage(result)).toContain('PORT')
+    expect(lastMessage(result)).not.toContain('MIT')
+  })
+
+  it('retrieves on the terms the model asked for, not the original question', () => {
+    const result = buildDialogMessages({
+      question: '总结一下这个页面',
+      page: samplePage,
+      retrievalQuery: '许可证',
+    })
+
+    expect(lastMessage(result)).toContain('MIT')
+    expect(result.trace.find(stage => stage.name === 'retrieve')?.note).toContain('按问题检索')
+  })
+})

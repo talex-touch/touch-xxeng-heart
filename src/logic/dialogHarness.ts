@@ -1,4 +1,4 @@
-import { rankSegments, selectSegments } from './contextRetrieval'
+import { rankSegments, selectForCoverage, selectSegments } from './contextRetrieval'
 import { clampToTokens, createTokenBudget, estimateTokens } from './tokenBudget'
 import type { PageDocument, PageSegment } from './contextRetrieval'
 
@@ -48,6 +48,13 @@ export interface DialogHarnessInput {
   page?: PageDocument
   selection?: DialogSelectionContext
   budget?: Partial<DialogBudget>
+  /**
+   * Terms the model asked for after seeing the first batch.
+   *
+   * Retrieval runs on these instead of the question — the point of the search tool is that
+   * the question's own wording already failed to find what the answer needs.
+   */
+  retrievalQuery?: string
 }
 
 export interface DialogHarnessStageTrace {
@@ -70,10 +77,35 @@ export const dialogSystemPrompt = [
   '你是 Lexi 的网页阅读助手。',
   '你只能看到 <page> 给出的页面目录，以及每轮 <excerpt> 提供的正文片段——这不是整篇页面。',
   '优先依据 <excerpt> 与 <selection> 回答；引用具体内容时可以带上片段所属的小节名。',
-  '如果给到的片段不足以回答，直接说明缺少哪部分，并建议用户选中对应段落再问，不要凭空推测页面内容。',
+  '<excerpt> 前的说明会写清这批片段覆盖了多少正文，按它给出的范围作答，不要否认手上已有的片段。',
+  '如果需要页面上尚未给到的内容，就只输出一行 `<search>关键词</search>`（最多三个关键词，空格分隔），不要附带任何其他文字；系统会检索并把结果发回给你，然后你再正式作答。',
+  '只有在检索结果依然不足时，才说明缺少哪部分并建议用户选中对应段落，不要凭空推测页面内容。',
   '回答简洁、直接、中文优先；涉及术语时给出一句短解释。',
   '可以使用简洁 Markdown（列表、行内代码、代码块、引用）。不要输出 JSON 或思考过程。',
 ].join(' ')
+
+/**
+ * Questions about the page as a whole rather than something in it.
+ *
+ * These share no vocabulary with the body, so relevance ranking returns nothing and the
+ * answer degrades to "I only have the outline". They are routed to coverage instead.
+ */
+const wholePageQuestionPattern = /总结|概括|摘要|大意|主旨|讲了什么|说了什么|讲的什么|写了什么|全文|整体|通篇|要点|重点|梗概|介绍一下|是什么内容|tl;?dr|summar|overview|gist|key\s?points?|main\s?(?:idea|point)|what.{1,16}\babout\b/i
+
+export function isWholePageQuestion(question: string) {
+  return wholePageQuestionPattern.test(question)
+}
+
+/** Tells the model how much of the body this batch represents, so it answers in scope. */
+function renderCoverageNote(attached: number, available: number, complete: boolean) {
+  if (!attached)
+    return ''
+
+  if (complete)
+    return `以下片段覆盖本页全部正文（共 ${attached} 段），可据此完整作答。`
+
+  return `以下片段按文档顺序均匀取自本页正文（${attached}/${available} 段），足以概括全文脉络；可以据此总结，但不要声称逐句读过。`
+}
 
 function renderSelectionBlock(selection: DialogSelectionContext, budget: ReturnType<typeof createTokenBudget>, cap: number) {
   const text = selection.text ? budget.take(selection.text, Math.round(cap * 0.6)) : ''
@@ -194,25 +226,37 @@ export function buildDialogMessages(input: DialogHarnessInput): DialogHarnessRes
   mark = pool.spent
   const deliveredIds = new Set(history.turns.flatMap(turn => turn.segmentIds ?? []))
   const lastQuestion = [...history.turns].reverse().find(turn => turn.role === 'user')?.content
-  const retrieval = input.page
+  const retrieveTokens = Math.min(budget.retrieved, pool.remaining)
+  const searchQuery = input.retrievalQuery?.trim()
+  const relevance = input.page && (searchQuery || !isWholePageQuestion(question))
     ? selectSegments(
-      rankSegments(question, input.page.segments, {
-        contextQuery: lastQuestion,
+      rankSegments(searchQuery || question, input.page.segments, {
+        contextQuery: searchQuery ? question : lastQuestion,
         anchorSegmentId: input.selection?.anchorSegmentId,
       }),
-      {
-        maxTokens: Math.min(budget.retrieved, pool.remaining),
-        deliveredIds,
-      },
+      { maxTokens: retrieveTokens, deliveredIds },
     )
-    : { segments: [], droppedForBudget: 0, usedTokens: 0 }
+    : undefined
+
+  // Coverage catches both the whole-page question and the query that matched nothing;
+  // either way, falling through to an outline-only prompt is never the useful answer.
+  const coverage = input.page && !relevance?.segments.length
+    ? selectForCoverage(input.page.segments, { maxTokens: retrieveTokens, deliveredIds })
+    : undefined
+  const retrieval = coverage ?? relevance ?? { segments: [], droppedForBudget: 0, usedTokens: 0 }
   const excerpts = renderExcerptBlock(retrieval.segments, budget.segment, pool)
+  const coverageNote = coverage
+    ? renderCoverageNote(excerpts.attached.length, coverage.available, coverage.complete && excerpts.attached.length === coverage.segments.length)
+    : ''
+  if (coverageNote)
+    pool.reserve(estimateTokens(coverageNote))
+
   const droppedSegments = retrieval.droppedForBudget + (retrieval.segments.length - excerpts.attached.length)
   trace.push({
     name: 'retrieve',
     tokens: pool.spent - mark,
     note: input.page
-      ? `命中 ${excerpts.attached.length}/${input.page.segments.length} 片段${droppedSegments ? `，预算内丢弃 ${droppedSegments}` : ''}${deliveredIds.size ? `，跳过 ${deliveredIds.size} 个已发送` : ''}`
+      ? `${coverage ? '全文覆盖' : '按问题检索'} ${excerpts.attached.length}/${input.page.segments.length} 片段${droppedSegments ? `，预算内丢弃 ${droppedSegments}` : ''}${deliveredIds.size ? `，跳过 ${deliveredIds.size} 个已发送` : ''}`
       : '无页面上下文',
   })
 
@@ -237,7 +281,7 @@ export function buildDialogMessages(input: DialogHarnessInput): DialogHarnessRes
 
   messages.push({
     role: 'user',
-    content: [selectionBlock, excerpts.text, `问题：${question}`].filter(Boolean).join('\n\n'),
+    content: [selectionBlock, coverageNote, excerpts.text, `问题：${question}`].filter(Boolean).join('\n\n'),
   })
   trace.push({ name: 'assemble', tokens: pool.spent - mark, note: `${messages.length} 条消息` })
 

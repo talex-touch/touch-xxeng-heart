@@ -109,6 +109,39 @@ describe('capturePageDocument', () => {
     const captured = capturePageDocument()
     expect(captured.segments).toHaveLength(1)
   })
+
+  it('recovers prose from a page that renders paragraphs as bare divs', () => {
+    // The shape that made the dialog answer "只有页面目录，没有正文片段": headings are
+    // semantic, the body is not, so the tag-driven pass returned an outline and nothing else.
+    document.body.innerHTML = `
+      <main><article>
+        <h1>下载政策更新</h1>
+        <div class="rt">我们将在下个月调整下载额度，免费账户每月可以下载的曲目数量会从无限制改为一百首，付费账户完全不受影响。</div>
+        <h2>为什么要限制下载</h2>
+        <div class="rt">过去半年里，少数账户通过脚本批量下载，占用了超过六成的带宽成本，这让我们无法把资源继续投入到模型训练上面。</div>
+        <div class="rt">新的额度可以让绝大多数创作者按原来的方式继续使用，同时把滥用行为挡在门外，不会影响正常的创作流程和导出。</div>
+      </article></main>
+    `
+    const captured = capturePageDocument()
+    const prose = captured.segments.filter(segment => segment.kind !== 'heading')
+
+    expect(prose.map(segment => segment.text).join(' ')).toContain('带宽成本')
+    // Captured in document order, so the recovered body still sits under its own heading.
+    expect(prose.find(segment => segment.text.includes('带宽成本'))?.heading).toBe('下载政策更新 › 为什么要限制下载')
+  })
+
+  it('keeps the outer container out when falling back to generic boxes', () => {
+    document.body.innerHTML = `
+      <main><article>
+        <h2>公告</h2>
+        <div class="outer"><div class="inner">这段正文被两层 div 包着，只应该以最内层的身份出现一次，不能连外层容器一起抽取。</div></div>
+      </article></main>
+    `
+    const captured = capturePageDocument()
+
+    expect(captured.segments.filter(segment => segment.text.includes('两层 div'))).toHaveLength(1)
+    expect(captured.segments).toHaveLength(2)
+  })
 })
 
 describe('retrieval over a captured page', () => {

@@ -291,7 +291,7 @@ async function loadProviderModels() {
   loadingProviderModels.value = true
   providerModelsError.value = ''
   try {
-    providerModels.value = await fetchProviderModels(lexiSettings.value, draft)
+    providerModels.value = await fetchProviderModels(draft)
   }
   catch (error) {
     providerModels.value = []

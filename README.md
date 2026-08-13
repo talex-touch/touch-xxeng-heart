@@ -1,5 +1,11 @@
 # Lexi
 
+<p align="center">
+  <a href="https://linux.do">
+    <img src="https://ld.xh.do/ld-badge.svg" alt="认可 linux.do" width="480">
+  </a>
+</p>
+
 ![Lexi icon](./extension/assets/icon-128.png)
 
 Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变成轻量英语学习环境：在正文中替换少量中文技术词为英文，保留 hover 释义；划词时显示翻译说明，并把自动命中和手动划选的词汇记录到本地学习进度。

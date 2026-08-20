@@ -102,6 +102,8 @@ export function isSceneEnabled(settings: LexiSettings, scene: FeatureScene, url 
   if (profile && scene === 'selection' && !profile.selection)
     return false
 
+  if (scene === 'vocabulary')
+    return true
   const rule = findSceneRule(settings.siteRules.sceneRules, url)
   return rule ? rule[scene] ?? true : true
 }

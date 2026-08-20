@@ -1,7 +1,40 @@
 import type { AiProtocol } from './providers'
 
-export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni'
+export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni' | 'vocabulary'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
+export type TranslationEngineKind = 'microsoft' | 'google-web'
+
+export interface TranslationEngineConfig {
+  id: string
+  label: string
+  kind: TranslationEngineKind
+  enabled: boolean
+  priority: number
+  apiKey: string
+  region: string
+  /** Google Translate Web is not an official API and must be explicitly acknowledged. */
+  acceptedRisk: boolean
+  updatedAt: number
+  /** Per-channel daily request cap; 0 means unlimited. */
+  dailyLimit: number
+}
+
+export interface TranslationRateLimitSettings {
+  /** 0 means unlimited. Counts every admitted translation request to protect paid channels. */
+  dailyLimit: number
+  /** 0 disables the rolling window. */
+  rollingWindowHours: number
+  /** 0 means unlimited when a rolling window is enabled. */
+  rollingWindowLimit: number
+  scheduleEnabled: boolean
+  allowedStartHour: number
+  allowedEndHour: number
+}
+
+export interface TranslationSettings {
+  engines: TranslationEngineConfig[]
+  rateLimit: TranslationRateLimitSettings
+}
 
 export type { AiProtocol }
 
@@ -92,6 +125,10 @@ export interface PageTranslationSettings {
   prefetchBlocks: number
   batchSize: number
   cacheDays: number
+  /** Automatically translate predominantly English pages into Chinese learning text. */
+  autoTranslateEnglishPages: boolean
+  /** Only a completed user configuration may restore or auto-start page translation. */
+  autoTranslationConfigured: boolean
 }
 
 export interface PageTranslationActivation {
@@ -163,8 +200,11 @@ export interface SpecialSiteProfile {
   density?: number
 }
 
+export type ReplacementDisplayMode = 'english' | 'chinese' | 'bilingual'
+
 export interface ReplacementSettings {
   enabled: boolean
+  displayMode: ReplacementDisplayMode
   /** Configured density before the per-level taper, 0.01 - 0.35. */
   density: number
   minTextLength: number
@@ -355,6 +395,7 @@ export interface LexiSettings {
   siteRules: SiteRules
   replacement: ReplacementSettings
   selection: SelectionSettings
+  translation: TranslationSettings
   study: StudySettings
   history: HistorySettings
   ui: UiSettings
@@ -397,7 +438,7 @@ export interface SelectionTranslation {
   original: string
   translation: string
   explanation: string
-  source: 'local' | 'ai'
+  source: 'local' | 'ai' | 'engine'
   candidate?: VocabularyCandidate
 }
 

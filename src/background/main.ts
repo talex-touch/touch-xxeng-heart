@@ -5,11 +5,14 @@ import { isAnalyticsLogPayload, persistAnalyticsLog } from './analyticsStore'
 import { startSettingsSync } from './settingsSync'
 import { setAnalyticsSink } from '~/logic/analytics'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
-import { createSerializedTaskQueue } from '~/logic/asyncQueue'
+import { createConcurrentTaskQueue, createSerializedTaskQueue } from '~/logic/asyncQueue'
+import { readLocalSettings } from '~/logic/settingsSync'
+import { normalizeTranslationEngines, translateWithEngines } from '~/logic/translationEngines'
+import { reserveTranslationQuota } from '~/logic/translationQuota'
+import type { PageTranslationCache, TranslationDirection, TranslationEngineConfig } from '~/logic/types'
 import { mergeDigestCacheEntry, pruneDigestCacheBySize } from '~/logic/digestCache'
 import { readJsonValue } from '~/logic/storageJson'
 import { contentDigestLeaseStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationsStorageKey } from '~/logic/storageKeys'
-import type { PageTranslationCache } from '~/logic/types'
 
 // only on dev mode
 if (import.meta.hot) {
@@ -34,6 +37,43 @@ startSettingsSync()
 // worker request is exempt from the CORS check that blocks content scripts.
 setAnalyticsSink(persistAnalyticsLog)
 startAiService()
+
+const enqueueTranslationRequest = createConcurrentTaskQueue(3)
+
+function isTranslationDirection(value: unknown): value is TranslationDirection {
+  return value === 'auto' || value === 'zh-to-en' || value === 'en-to-zh'
+}
+
+function isTranslationEngineConfig(value: unknown): value is TranslationEngineConfig {
+  return Boolean(value && typeof value === 'object' && 'id' in value && 'kind' in value)
+}
+
+listenRuntimeMessage<{ text?: unknown, direction?: unknown }>('lexi-translate-text', async (payload) => {
+  const text = typeof payload?.text === 'string' ? payload.text.trim() : ''
+  const direction = payload?.direction
+  if (!text || !isTranslationDirection(direction))
+    throw new Error('翻译参数无效。')
+
+  return enqueueTranslationRequest(async () => {
+    const settings = await readLocalSettings()
+    return translateWithEngines(
+      settings.translation.engines,
+      { text, direction },
+      fetch,
+      engine => reserveTranslationQuota(settings.translation.rateLimit, engine),
+    )
+  })
+})
+
+listenRuntimeMessage<unknown>('lexi-test-translation-engine', async (payload) => {
+  if (!isTranslationEngineConfig(payload))
+    throw new Error('翻译引擎参数无效。')
+
+  return enqueueTranslationRequest(() => translateWithEngines(
+    normalizeTranslationEngines([payload]),
+    { text: 'Translation connection test.', direction: 'en-to-zh' },
+  ))
+})
 
 browser.runtime.onInstalled.addListener((): void => {
   // `onInstalled` also fires on update/reload, where the menu id already exists and

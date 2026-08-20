@@ -135,4 +135,19 @@ describe('settings compatibility', () => {
 
     expect(settings.ui.dialogShortcut).toBe(defaultSettings.ui.dialogShortcut)
   })
+
+  it('uses English when a legacy replacement setting has no display mode and preserves saved modes', () => {
+    const legacySettings = mergeSettings({
+      replacement: {} as LexiSettings['replacement'],
+    })
+    expect(legacySettings.replacement.displayMode).toBe('english')
+
+    for (const displayMode of ['chinese', 'bilingual'] as const) {
+      const settings = mergeSettings({
+        replacement: { displayMode } as unknown as LexiSettings['replacement'],
+      })
+
+      expect(settings.replacement.displayMode).toBe(displayMode)
+    }
+  })
 })

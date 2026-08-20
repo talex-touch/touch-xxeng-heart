@@ -10,6 +10,8 @@ export type LexiRuntimeMessageType =
   | 'lexi-page-translate-stop'
   | 'lexi-record-analytics'
   | 'lexi-release-digest-lease'
+  | 'lexi-test-translation-engine'
+  | 'lexi-translate-text'
   | 'lexi-write-page-translation-cache'
 
 interface LexiRuntimeMessage<T = unknown> {

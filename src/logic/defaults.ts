@@ -1,5 +1,6 @@
 import { clampReplacementDensity, clampReplacementLevel, defaultReplacementLevel, densityTiers, levelFromLegacyDifficulty } from './replacementLevels'
-import type { AiConnectionConfig, AiProviderConfig, AiSceneConfig, AiSettings, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings } from './types'
+import type { AiConnectionConfig, AiProviderConfig, AiSceneConfig, AiSettings, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings, TranslationSettings } from './types'
+import { normalizeTranslationEngines } from './translationEngines'
 
 /** Settings written before the 1-9 learner level replaced the 1-5 difficulty ceiling. */
 type StoredReplacementSettings = Partial<ReplacementSettings> & { difficulty?: number }
@@ -12,7 +13,7 @@ type LegacyAiSettings = Partial<Record<FeatureScene, LegacySceneConfig>> & {
   approvedHttpEndpoints?: string[]
 }
 
-export const featureScenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'digest', 'omni']
+export const featureScenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'digest', 'omni', 'vocabulary']
 
 const emptyAiConnection = {
   endpoint: '',
@@ -55,6 +56,12 @@ export const promptDefaults: Record<FeatureScene, string> = {
     '如果是视频或音频，基于当前帧、封面、alt/title、URL、文件名和页面上下文输出媒体画面还原 prompt，并明确只描述可见/可推断的视觉信息。',
     '只输出 prompt 正文。不要输出解释、标题、JSON、Markdown、代码块、项目符号或思考过程。',
   ].join(' '),
+  vocabulary: [
+    '你是 Lexi 本地词库的语义检索助手。',
+    '只从用户提供的词库候选中找出与问题最相关的条目，按相关度输出不超过 8 条。',
+    '每条使用“原词 — 翻译：简短理由”的格式；没有匹配时明确说明。',
+    '不要编造候选中不存在的词条。',
+  ].join(' '),
 }
 
 function createAiSceneConfig(scene: FeatureScene): AiSceneConfig {
@@ -86,6 +93,47 @@ const defaultPageTranslationSettings: PageTranslationSettings = {
   prefetchBlocks: 10,
   batchSize: 3,
   cacheDays: 14,
+  autoTranslateEnglishPages: false,
+  autoTranslationConfigured: false,
+}
+
+const defaultTranslationRateLimitSettings = {
+  dailyLimit: 0,
+  rollingWindowHours: 0,
+  rollingWindowLimit: 0,
+  scheduleEnabled: false,
+  allowedStartHour: 0,
+  allowedEndHour: 0,
+}
+
+const defaultTranslationSettings: TranslationSettings = {
+  engines: [
+    {
+      id: 'microsoft-translator',
+      label: 'Microsoft Translator',
+      kind: 'microsoft',
+      enabled: false,
+      priority: 1,
+      apiKey: '',
+      region: '',
+      acceptedRisk: true,
+      updatedAt: 0,
+      dailyLimit: 0,
+    },
+    {
+      id: 'google-translate-web',
+      label: 'Google Translate Web',
+      kind: 'google-web',
+      enabled: false,
+      priority: 2,
+      apiKey: '',
+      region: '',
+      acceptedRisk: false,
+      updatedAt: 0,
+      dailyLimit: 0,
+    },
+  ],
+  rateLimit: defaultTranslationRateLimitSettings,
 }
 
 export const featureLabels: Record<FeatureScene, string> = {
@@ -94,6 +142,7 @@ export const featureLabels: Record<FeatureScene, string> = {
   daily: '每日推荐',
   digest: '内容速读',
   omni: 'AI Omni 多模态',
+  vocabulary: 'AI 词库搜索',
 }
 
 export const defaultSettings: LexiSettings = {
@@ -163,6 +212,7 @@ export const defaultSettings: LexiSettings = {
   },
   replacement: {
     enabled: true,
+    displayMode: 'english',
     density: densityTiers[2].value,
     minTextLength: 18,
     maxPerPage: 18,
@@ -175,6 +225,7 @@ export const defaultSettings: LexiSettings = {
     translationDirection: 'auto',
     pageTranslation: defaultPageTranslationSettings,
   },
+  translation: defaultTranslationSettings,
   study: {
     dailyGoal: 8,
     programmerMode: true,
@@ -217,6 +268,7 @@ export const defaultSettings: LexiSettings = {
     daily: createAiSceneConfig('daily'),
     digest: createAiSceneConfig('digest'),
     omni: createAiSceneConfig('omni'),
+    vocabulary: createAiSceneConfig('vocabulary'),
   },
   sync: {
     enabled: false,
@@ -364,6 +416,15 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
         ...defaultSettings.selection.pageTranslation,
         ...value?.selection?.pageTranslation,
       },
+    },
+    translation: {
+      ...defaultTranslationSettings,
+      ...value?.translation,
+      rateLimit: {
+        ...defaultTranslationRateLimitSettings,
+        ...value?.translation?.rateLimit,
+      },
+      engines: normalizeTranslationEngines(value?.translation?.engines ?? defaultTranslationSettings.engines),
     },
     study: {
       ...defaultSettings.study,

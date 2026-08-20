@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
-import { computed, ref, watchEffect } from 'vue'
+import { computed, defineAsyncComponent, ref, watchEffect } from 'vue'
 import { defaultSettings, featureLabels, maxVocabularyLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
 import { fetchProviderModels, testAiProvider, testAiScene } from '~/logic/aiClient'
+import { runAiScene } from '~/logic/aiTransport'
 import { getProtocolLabel, protocolOptions } from '~/logic/providers'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, contentDigestCache, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
@@ -13,20 +14,37 @@ import { approveHttpEndpoint, assertEndpointAllowed, isHttpEndpoint, normalizeEn
 import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, replacementLevels, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
 import { getSyncQuota, pullSettingsFromSync, pushSettingsToSync } from '~/logic/settingsSync'
 import { exportVocabularyRecords, importVocabularyRecords } from '~/logic/vocabularyTransfer'
+import { testConfiguredTranslationEngine } from '~/logic/translationClient'
 import type { DensityTierId } from '~/logic/replacementLevels'
 import type { ProviderModel } from '~/logic/providers'
-import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection } from '~/logic/types'
+import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection, TranslationEngineConfig, TranslationEngineKind } from '~/logic/types'
 
-type OptionsTab = 'settings' | 'special' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
+type OptionsTab = 'settings' | 'customization' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
+type VocabularyTab = 'overview' | 'settings'
+type SettingsSection = 'learning' | 'sites' | 'translation' | 'digest' | 'sync'
+type AiSection = 'special' | 'translation' | 'providers'
 
-const scenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'digest', 'omni']
+const scenes: Exclude<FeatureScene, 'vocabulary'>[] = ['replacement', 'selection', 'daily', 'digest', 'omni']
+const aiScenes: FeatureScene[] = [...scenes, 'vocabulary']
 const tabs: Array<{ id: OptionsTab, label: string, icon: string, description: string }> = [
   { id: 'settings', label: '基础设置', icon: 'i-lucide-sliders-horizontal', description: '控制 Lexi 在哪些网页生效、替换多少词，以及划词与翻译的行为。' },
-  { id: 'special', label: '特殊场景', icon: 'i-lucide-globe-2', description: '为信息流、论坛与学习网站配置更稳妥的独立规则。' },
+  { id: 'customization', label: '自定义', icon: 'i-lucide-palette', description: '调整页面控件、快捷键、翻译卡样式与自定义 CSS。' },
+  { id: 'ai', label: '供应商与功能', icon: 'i-lucide-sparkles', description: '统一管理通用 AI Provider、内置翻译服务与特殊站点功能。' },
   { id: 'vocabulary', label: '词库记录', icon: 'i-lucide-book-open', description: '查看网页替换、划词翻译与 AI 补充形成的本地词库。' },
-  { id: 'ai', label: 'AI 场景', icon: 'i-lucide-sparkles', description: '管理多个 AI Provider，并为不同使用场景配置连接与提示词。' },
   { id: 'diagnostics', label: '诊断记录', icon: 'i-lucide-activity', description: '检查最近的 AI 调用、网页访问与速读缓存状态。' },
   { id: 'about', label: '关于', icon: 'i-lucide-info', description: '查看版本、项目与开发者信息。' },
+]
+const aiSections: Array<{ id: AiSection, label: string }> = [
+  { id: 'special', label: '特殊场景' },
+  { id: 'translation', label: '内置翻译' },
+  { id: 'providers', label: 'Provider 与功能' },
+]
+const settingsSections: Array<{ id: SettingsSection, label: string }> = [
+  { id: 'learning', label: '词汇替换' },
+  { id: 'sites', label: '网页范围' },
+  { id: 'translation', label: '划词翻译' },
+  { id: 'digest', label: '内容速读' },
+  { id: 'sync', label: '同步' },
 ]
 const translationDirections: Array<{ value: TranslationDirection, label: string }> = [
   { value: 'auto', label: '自动判断' },
@@ -39,13 +57,30 @@ const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string 
   { value: 'regex', label: '自定义 Regex' },
 ]
 const densityTierOptions = densityTiers.map(tier => ({ value: tier.id, label: tier.label }))
+const replacementDisplayOptions = [
+  { value: 'english', label: '英语' },
+  { value: 'chinese', label: '中文' },
+  { value: 'bilingual', label: '中英双语' },
+]
+const translationCardStyleOptions = [
+  { value: 'calm', label: '清醒蓝' },
+  { value: 'contrast', label: '高对比' },
+  { value: 'compact', label: '紧凑' },
+]
+const vocabularyAiSearchLoading = ref(false)
+const vocabularyAiSearchResult = ref('')
+const activeVocabularyTab = ref<VocabularyTab>('overview')
 
 const appVersion = __VERSION__
 const activeTab = ref<OptionsTab>('settings')
+const activeSettingsSection = ref<SettingsSection>('learning')
+const activeAiSection = ref<AiSection>('special')
 const isCompactLayout = useMediaQuery('(max-width: 860px)')
 const activeTabMeta = computed(() => tabs.find(tab => tab.id === activeTab.value) ?? tabs[0])
 const newSceneRuleDomain = ref('')
+const translationCardStyle = ref('calm')
 const vocabularySearchQuery = ref('')
+const DevFestivalPreview = __DEV__ ? defineAsyncComponent(() => import('./DevFestivalPreview.vue')) : null
 const domainText = computed({
   get: () => formatDomainList(lexiSettings.value.siteRules.domains),
   set: value => lexiSettings.value.siteRules.domains = parseDomainList(value),
@@ -60,13 +95,25 @@ const visitTrend = computed(() => summarizeByDay(pageVisitLogs.value))
 const aiTrend = computed(() => summarizeByDay(aiCallLogs.value))
 const aiTokenTrend = computed(() => summarizeTokensByDay(aiCallLogs.value))
 const totalAiTokens = computed(() => aiCallLogs.value.reduce((sum, log) => sum + (log.totalTokens ?? 0), 0))
-const aiSceneTokenStats = computed(() => scenes.map(scene => ({
+const aiSceneTokenStats = computed(() => aiScenes.map(scene => ({
   scene,
   calls: aiCallLogs.value.filter(log => log.scene === scene).length,
   tokens: aiCallLogs.value
     .filter(log => log.scene === scene)
     .reduce((sum, log) => sum + (log.totalTokens ?? 0), 0),
 })))
+const aiSuccessRate = computed(() => {
+  if (!aiCallLogs.value.length)
+    return 0
+  return Math.round(aiCallLogs.value.filter(log => log.ok).length / aiCallLogs.value.length * 100)
+})
+const averageAiDuration = computed(() => {
+  if (!aiCallLogs.value.length)
+    return 0
+  return Math.round(aiCallLogs.value.reduce((sum, log) => sum + log.durationMs, 0) / aiCallLogs.value.length)
+})
+const enabledProviderCount = computed(() => lexiSettings.value.ai.providers.filter(provider => provider.enabled).length)
+const vocabularyCapacity = computed(() => Math.min(100, Math.round(vocabularyRecords.value.length / lexiSettings.value.history.maxRecords * 100)))
 const contentDigestEntries = computed(() => Object.entries(contentDigestCache.value)
   .map(([key, entry]) => ({ key, ...entry }))
   .sort((a, b) => b.updatedAt - a.updatedAt))
@@ -144,6 +191,10 @@ const providerPageSize = 8
 const providerSearchQuery = ref('')
 const providerPage = ref(1)
 const providerDialog = ref<HTMLDialogElement>()
+const translationEngineDialog = ref<HTMLDialogElement>()
+const translationEngineDraft = ref<TranslationEngineConfig>()
+const translationEngineDraftIsNew = ref(false)
+const translationEngineRowTests = ref<Record<string, { loading: boolean, ok: boolean, message: string }>>({})
 const providerDraft = ref<AiProviderConfig>()
 const providerDraftIsNew = ref(false)
 const providerModels = ref<ProviderModel[]>([])
@@ -197,6 +248,16 @@ function setDensityTier(id: DensityTierId) {
   const tier = densityTiers.find(item => item.id === id)
   if (tier)
     lexiSettings.value.replacement.density = tier.value
+}
+
+function applyTranslationCardStyle(style: string) {
+  translationCardStyle.value = style
+  const css = style === 'contrast'
+    ? '.lexi-selection-translation { background: #111827; color: #f9fafb; border-color: #60a5fa; }'
+    : style === 'compact'
+      ? '.lexi-selection-translation { max-width: 30rem; padding: 10px 12px; }'
+      : '.lexi-selection-translation { background: #fff; border-color: #d4d9e2; }'
+  lexiSettings.value.ui.customCss = css
 }
 
 function ensureSpecialProfiles() {
@@ -273,7 +334,7 @@ function saveProviderDraft() {
 
 function removeProvider(id: string) {
   lexiSettings.value.ai.providers = lexiSettings.value.ai.providers.filter(provider => provider.id !== id)
-  for (const scene of scenes)
+  for (const scene of aiScenes)
     lexiSettings.value.ai[scene].providerIds = lexiSettings.value.ai[scene].providerIds.filter(providerId => providerId !== id)
 }
 
@@ -281,6 +342,84 @@ function toggleProviderEnabled(id: string, enabled: boolean) {
   lexiSettings.value.ai.providers = lexiSettings.value.ai.providers.map(provider => (
     provider.id === id ? { ...provider, enabled, updatedAt: Date.now() } : provider
   ))
+}
+
+function createTranslationEngine(kind: TranslationEngineKind = 'microsoft'): TranslationEngineConfig {
+  const google = kind === 'google-web'
+  return {
+    id: `translation-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    label: google ? 'Google Translate Web' : 'Microsoft Translator',
+    kind,
+    enabled: false,
+    priority: lexiSettings.value.translation.engines.length + 1,
+    apiKey: '',
+    region: '',
+    acceptedRisk: !google,
+    updatedAt: Date.now(),
+  }
+}
+
+function openTranslationEngineEditor(engine?: TranslationEngineConfig) {
+  translationEngineDraftIsNew.value = !engine
+  translationEngineDraft.value = engine ? { ...engine } : createTranslationEngine()
+  translationEngineTestMessage.value = ''
+  translationEngineDialog.value?.showModal()
+}
+
+function closeTranslationEngineEditor() {
+  translationEngineDialog.value?.close()
+  translationEngineDraft.value = undefined
+}
+
+function saveTranslationEngineDraft() {
+  const draft = translationEngineDraft.value
+  if (!draft)
+    return
+
+  const engine: TranslationEngineConfig = {
+    ...draft,
+    label: draft.label.trim() || (draft.kind === 'microsoft' ? 'Microsoft Translator' : 'Google Translate Web'),
+    priority: Math.max(1, Number(draft.priority) || 1),
+    apiKey: draft.apiKey.trim(),
+    region: draft.region.trim(),
+    acceptedRisk: draft.kind === 'google-web' ? draft.acceptedRisk : true,
+    updatedAt: Date.now(),
+  }
+  const index = lexiSettings.value.translation.engines.findIndex(item => item.id === engine.id)
+  lexiSettings.value.translation.engines = index < 0
+    ? [...lexiSettings.value.translation.engines, engine]
+    : lexiSettings.value.translation.engines.map(item => item.id === engine.id ? engine : item)
+  closeTranslationEngineEditor()
+}
+
+function removeTranslationEngine(id: string) {
+  lexiSettings.value.translation.engines = lexiSettings.value.translation.engines.filter(engine => engine.id !== id)
+}
+
+function toggleTranslationEngineEnabled(id: string, enabled: boolean) {
+  lexiSettings.value.translation.engines = lexiSettings.value.translation.engines.map(engine => (
+    engine.id === id ? { ...engine, enabled, updatedAt: Date.now() } : engine
+  ))
+}
+
+async function testTranslationEngine(engine: TranslationEngineConfig) {
+  translationEngineRowTests.value = {
+    ...translationEngineRowTests.value,
+    [engine.id]: { loading: true, ok: false, message: '' },
+  }
+  try {
+    const result = await testConfiguredTranslationEngine(engine)
+    translationEngineRowTests.value = {
+      ...translationEngineRowTests.value,
+      [engine.id]: { loading: false, ok: true, message: `成功 · ${result.engineLabel}` },
+    }
+  }
+  catch (error) {
+    translationEngineRowTests.value = {
+      ...translationEngineRowTests.value,
+      [engine.id]: { loading: false, ok: false, message: error instanceof Error ? error.message : '测试失败' },
+    }
+  }
 }
 
 async function loadProviderModels() {
@@ -683,6 +822,34 @@ async function importVocabulary(event: Event) {
     input.value = ''
   }
 }
+async function searchVocabularyWithAi() {
+  const query = vocabularySearchQuery.value.trim()
+  if (!query || vocabularyAiSearchLoading.value)
+    return
+
+  vocabularyAiSearchLoading.value = true
+  vocabularyAiSearchResult.value = ''
+  try {
+    const candidates = filteredVocabularyRecords.value
+      .slice(0, 120)
+      .map(record => ({ original: record.original, replacement: record.replacement, meaning: record.meaning, tags: record.tags }))
+    const result = await runAiScene({
+      scene: 'vocabulary',
+      system: lexiSettings.value.ai.vocabulary.prompt,
+      messages: [{
+        role: 'user',
+        content: JSON.stringify({ query, candidates }),
+      }],
+    })
+    vocabularyAiSearchResult.value = result?.text?.trim() || '没有找到与该问题相关的词条。'
+  }
+  catch (error) {
+    vocabularyAiSearchResult.value = error instanceof Error ? error.message : 'AI 词库搜索失败。'
+  }
+  finally {
+    vocabularyAiSearchLoading.value = false
+  }
+}
 </script>
 
 <template>
@@ -800,6 +967,62 @@ async function importVocabulary(event: Event) {
     </dialog>
 
     <dialog
+      ref="translationEngineDialog"
+      class="options-dialog"
+      aria-labelledby="translation-engine-editor-title"
+      @cancel.prevent="closeTranslationEngineEditor"
+    >
+      <form v-if="translationEngineDraft" class="options-dialog__body" method="dialog" @submit.prevent="saveTranslationEngineDraft">
+        <h2 id="translation-engine-editor-title">
+          {{ translationEngineDraftIsNew ? '添加翻译引擎' : '编辑翻译引擎' }}
+        </h2>
+        <p>传统翻译引擎优先于 AI 场景。启用多个时按优先级依次回退，不会同时发送相同文本。</p>
+        <div class="provider-form">
+          <FormField label="名称" compact>
+            <BaseInput v-model="translationEngineDraft.label" size="sm" placeholder="Microsoft Translator" />
+          </FormField>
+          <FormField label="类型" compact>
+            <BaseSelect v-model="translationEngineDraft.kind" size="sm">
+              <option value="microsoft">
+                Microsoft Translator F0
+              </option>
+              <option value="google-web">
+                Google Translate Web（非官方）
+              </option>
+            </BaseSelect>
+          </FormField>
+          <FormField v-if="translationEngineDraft.kind === 'microsoft'" class="provider-form__wide" label="订阅 Key" hint="Azure Translator F0 资源的 Key，仅保存在本机或按同步设置同步。" compact>
+            <BaseInput v-model="translationEngineDraft.apiKey" type="password" size="sm" autocomplete="off" />
+          </FormField>
+          <FormField v-if="translationEngineDraft.kind === 'microsoft'" label="Region" hint="例如 eastasia。" compact>
+            <BaseInput v-model="translationEngineDraft.region" size="sm" placeholder="eastasia" />
+          </FormField>
+          <FormField label="优先级" hint="数字越小越先尝试。" compact>
+            <BaseInput v-model="translationEngineDraft.priority" type="number" size="sm" :min="1" />
+          </FormField>
+          <FormField label="渠道每日上限" hint="0 表示不限制；达到上限后会改用下一优先级渠道。" compact>
+            <BaseInput v-model.number="translationEngineDraft.dailyLimit" type="number" size="sm" :min="0" />
+          </FormField>
+        </div>
+        <div v-if="translationEngineDraft.kind === 'google-web'" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3 text-12px leading-5 text-amber-900">
+          Google Translate Web 不是官方 API，接口可能随时变化，也可能受服务条款或网络环境限制。确认后才允许启用和调度。
+          <BaseCheckbox v-model="translationEngineDraft.acceptedRisk" class="mt-3" label="我理解并接受非官方接口风险" />
+        </div>
+        <div class="mt-4">
+          <BaseCheckbox v-model="translationEngineDraft.enabled" label="启用此翻译引擎" />
+        </div>
+        <div class="options-dialog__actions">
+          <BaseButton type="button" @click="closeTranslationEngineEditor">
+            取消
+          </BaseButton>
+          <BaseButton type="submit" variant="primary">
+            保存
+          </BaseButton>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog
       ref="resetSettingsDialog"
       class="options-dialog"
       aria-labelledby="reset-settings-title"
@@ -853,7 +1076,7 @@ async function importVocabulary(event: Event) {
 
       <div class="options-sidebar__summary">
         <span>已记录词汇</span>
-        <strong>{{ vocabularyRecords.length }}</strong>
+        <strong>{{ vocabularyRecords.length }}<em>/ {{ lexiSettings.history.maxRecords }}</em></strong>
         <small>今日新增 {{ todayStudySummary.total }} · 技术词 {{ todayStudySummary.technical }}</small>
       </div>
     </aside>
@@ -877,8 +1100,21 @@ async function importVocabulary(event: Event) {
       </header>
 
       <div id="options-content" class="options-content" tabindex="-1">
-        <section v-if="activeTab === 'settings'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="options-panel settings-layout">
-          <section class="settings-card settings-card--wide">
+        <section v-if="activeTab === 'settings' || activeTab === 'customization'" id="options-panel-settings" role="tabpanel" aria-labelledby="options-tab-settings" class="options-panel settings-layout">
+          <div v-if="activeTab === 'settings'" class="settings-section-tabs" role="tablist" aria-label="基础设置分区">
+            <button
+              v-for="section in settingsSections"
+              :key="section.id"
+              type="button"
+              role="tab"
+              :aria-selected="activeSettingsSection === section.id"
+              :class="{ 'is-active': activeSettingsSection === section.id }"
+              @click="activeSettingsSection = section.id"
+            >
+              {{ section.label }}
+            </button>
+          </div>
+          <section v-show="activeTab === 'settings' && activeSettingsSection === 'learning'" class="settings-card settings-card--wide">
             <header class="settings-card__head">
               <div>
                 <h2>替换强度</h2>
@@ -935,6 +1171,19 @@ async function importVocabulary(event: Event) {
                   </p>
                 </div>
 
+                <div class="settings-field">
+                  <span class="settings-field__label">文中显示</span>
+                  <SegmentedControl
+                    v-model="lexiSettings.replacement.displayMode"
+                    :options="replacementDisplayOptions"
+                    label="文中显示语言"
+                    :disabled="!lexiSettings.replacement.enabled"
+                  />
+                  <p class="settings-field__hint">
+                    默认只显示英语；选择中英双语后，替换词会直接附带原中文，无需悬停查看。
+                  </p>
+                </div>
+
                 <FormField label="单页最多替换" hint="达到上限后停止替换，避免影响阅读。">
                   <BaseInput
                     v-model="lexiSettings.replacement.maxPerPage"
@@ -972,7 +1221,7 @@ async function importVocabulary(event: Event) {
             </CollapsibleSection>
           </section>
 
-          <section class="settings-card">
+          <section v-show="activeTab === 'settings' && activeSettingsSection === 'sites'" class="settings-card">
             <header class="settings-card__head">
               <div>
                 <h2>网页启用范围</h2>
@@ -1047,7 +1296,7 @@ async function importVocabulary(event: Event) {
             </div>
           </section>
 
-          <section class="settings-card">
+          <section v-show="activeTab === 'settings' && activeSettingsSection === 'translation'" class="settings-card">
             <header class="settings-card__head">
               <div>
                 <h2>划词与翻译</h2>
@@ -1073,6 +1322,12 @@ async function importVocabulary(event: Event) {
                   </option>
                 </BaseSelect>
               </FormField>
+              <div class="rounded-2 border border-blue-100 bg-blue-50 px-3 py-3 text-12px text-blue-950">
+                <strong>页面双语翻译需手动确认</strong>
+                <p class="mt-1 leading-5 text-blue-800">
+                  请在要翻译的网页打开 Lexi 侧边栏，选择方向后保存并开始。未完成该引导时，Lexi 不会自动翻译任何页面。
+                </p>
+              </div>
 
               <div class="settings-subcard">
                 <h3>页面自动翻译</h3>
@@ -1107,7 +1362,7 @@ async function importVocabulary(event: Event) {
             </div>
           </section>
 
-          <section class="settings-card">
+          <section v-show="activeTab === 'settings' && activeSettingsSection === 'digest'" class="settings-card">
             <header class="settings-card__head">
               <div>
                 <h2>内容速读</h2>
@@ -1185,7 +1440,7 @@ async function importVocabulary(event: Event) {
             </div>
           </section>
 
-          <section class="settings-card">
+          <section v-show="activeTab === 'settings' && activeSettingsSection === 'sync'" class="settings-card">
             <header class="settings-card__head">
               <div>
                 <h2>同步到 Google 账号</h2>
@@ -1253,7 +1508,7 @@ async function importVocabulary(event: Event) {
             </div>
           </section>
 
-          <section class="settings-card">
+          <section v-show="activeTab === 'customization'" class="settings-card">
             <header class="settings-card__head">
               <div>
                 <h2>界面与快捷键</h2>
@@ -1277,6 +1532,31 @@ async function importVocabulary(event: Event) {
                 <BaseInput v-model="lexiSettings.study.dailyGoal" type="number" :min="1" :max="30" />
               </FormField>
 
+              <div class="settings-field">
+                <span class="settings-field__label">翻译卡可视化预设</span>
+                <SegmentedControl
+                  :model-value="translationCardStyle"
+                  :options="translationCardStyleOptions"
+                  label="翻译卡样式"
+                  @update:model-value="applyTranslationCardStyle"
+                />
+                <style v-if="lexiSettings.ui.customCss">
+                  {{ lexiSettings.ui.customCss }}
+                </style>
+                <div
+                  class="lexi-selection-translation translation-card-preview mt-3 rounded-2 border p-3 text-12px"
+                  :class="`translation-card-preview--${translationCardStyle}`"
+                >
+                  <span class="lexi-token rounded-full px-2 py-1 font-600">Lexi 翻译</span>
+                  <p class="mt-2">
+                    预设和下方 CSS 会实时作用于此卡片；例如可用 <code>.lexi-token { font-size: 20px; }</code> 验证文字变化。
+                  </p>
+                  <div class="mt-2 border-t pt-2 text-11px">
+                    已完成 · 约 42 tokens · 180ms · 96 字/秒
+                  </div>
+                </div>
+              </div>
+
               <CollapsibleSection title="自定义样式 CSS" hint="仅作用于 Lexi 注入的组件">
                 <BaseTextarea
                   v-model="lexiSettings.ui.customCss"
@@ -1287,8 +1567,20 @@ async function importVocabulary(event: Event) {
             </div>
           </section>
         </section>
-
-        <section v-else-if="activeTab === 'special'" id="options-panel-special" role="tabpanel" aria-labelledby="options-tab-special" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <div v-if="activeTab === 'ai'" class="settings-section-tabs mb-5" role="tablist" aria-label="供应商与功能分区">
+          <button
+            v-for="section in aiSections"
+            :key="section.id"
+            type="button"
+            role="tab"
+            :aria-selected="activeAiSection === section.id"
+            :class="{ 'is-active': activeAiSection === section.id }"
+            @click="activeAiSection = section.id"
+          >
+            {{ section.label }}
+          </button>
+        </div>
+        <section v-if="activeTab === 'ai' && activeAiSection === 'special'" id="options-panel-special" role="region" aria-label="特殊场景" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="text-16px font-600">
@@ -1352,8 +1644,7 @@ async function importVocabulary(event: Event) {
             </article>
           </div>
         </section>
-
-        <section v-else-if="activeTab === 'vocabulary'" id="options-panel-vocabulary" role="tabpanel" aria-labelledby="options-tab-vocabulary" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <section v-if="activeTab === 'vocabulary'" id="options-panel-vocabulary" role="tabpanel" aria-labelledby="options-tab-vocabulary" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 class="text-16px font-600">
@@ -1365,21 +1656,57 @@ async function importVocabulary(event: Event) {
             </div>
             <span class="text-12px text-neutral-500">{{ filteredVocabularyRecords.length }} / {{ vocabularyRecords.length }} 条 · 产品 {{ productVocabularyCount }} · {{ formatBytes(storageStats.vocabulary) }}</span>
           </div>
-          <div class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+          <div class="settings-section-tabs mt-4" role="tablist" aria-label="词库记录分区">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="activeVocabularyTab === 'overview'"
+              :class="{ 'is-active': activeVocabularyTab === 'overview' }"
+              @click="activeVocabularyTab = 'overview'"
+            >
+              概览
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="activeVocabularyTab === 'settings'"
+              :class="{ 'is-active': activeVocabularyTab === 'settings' }"
+              @click="activeVocabularyTab = 'settings'"
+            >
+              设置
+            </button>
+          </div>
+          <div v-show="activeVocabularyTab === 'overview'" class="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
             <BaseInput
               v-model="vocabularySearchQuery"
               type="search"
               placeholder="搜索原文、翻译、解释、上下文、标签、页面标题或 URL"
             />
-            <BaseButton :disabled="!vocabularySearchQuery" @click="vocabularySearchQuery = ''">
-              <template #icon>
-                <span class="i-lucide-x" aria-hidden="true" />
-              </template>
-              清空
-            </BaseButton>
+            <div class="flex gap-2">
+              <BaseButton variant="primary" :loading="vocabularyAiSearchLoading" loading-label="AI 搜索中" :disabled="!vocabularySearchQuery" @click="searchVocabularyWithAi">
+                <template #icon>
+                  <span class="i-lucide-sparkles" aria-hidden="true" />
+                </template>
+                AI 搜索
+              </BaseButton>
+              <BaseButton :disabled="!vocabularySearchQuery" @click="vocabularySearchQuery = ''; vocabularyAiSearchResult = ''">
+                <template #icon>
+                  <span class="i-lucide-x" aria-hidden="true" />
+                </template>
+                清空
+              </BaseButton>
+            </div>
+          </div>
+          <div v-if="activeVocabularyTab === 'overview' && vocabularyAiSearchResult" class="mt-3 rounded-2 border border-blue-100 bg-blue-50 p-3 text-12px leading-5 text-blue-950">
+            <div class="font-600">
+              AI 词库搜索
+            </div>
+            <p class="mt-1 whitespace-pre-wrap">
+              {{ vocabularyAiSearchResult }}
+            </p>
           </div>
 
-          <div class="mt-4 rounded-2 border border-neutral-200 p-4">
+          <div v-show="activeVocabularyTab === 'settings'" class="mt-4 rounded-2 border border-neutral-200 p-4">
             <div class="grid gap-4 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
               <FormField label="词库上限（条）" :hint="`达到上限后按更新时间保留最新的记录，可设置 ${minVocabularyLimit} - ${maxVocabularyLimit}。`">
                 <BaseInput
@@ -1422,7 +1749,7 @@ async function importVocabulary(event: Event) {
               </div>
             </div>
           </div>
-          <div class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
+          <div v-show="activeVocabularyTab === 'overview'" class="mt-4 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <h3 class="text-14px font-600">
                 今日学习概览
@@ -1507,15 +1834,131 @@ async function importVocabulary(event: Event) {
             </p>
           </div>
         </section>
-
-        <section v-else-if="activeTab === 'ai'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <section v-if="activeTab === 'ai' && activeAiSection === 'translation'" id="options-panel-translation" role="region" aria-label="内置翻译服务" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="text-16px font-600">
-                Provider
+                内置翻译服务
+              </h2>
+              <p class="mt-1 max-w-3xl text-12px leading-5 text-neutral-500">
+                Microsoft Translator 和 Google Translate Web 只服务于划词与页面翻译；它们不是通用 Provider，不能绑定至其他功能。通用 AI Provider 可在下方“功能”中按需选择。
+              </p>
+            </div>
+            <BaseButton variant="primary" @click="openTranslationEngineEditor()">
+              <template #icon>
+                <span class="i-lucide-plus" aria-hidden="true" />
+              </template>
+              添加引擎
+            </BaseButton>
+          </div>
+
+          <section class="mt-5 rounded-2 border border-neutral-200 bg-neutral-50 p-4">
+            <h3 class="text-14px font-600">
+              请求限额
+            </h3>
+            <p class="mt-1 text-12px leading-5 text-neutral-500">
+              额度在后台入队前原子预留。0 表示不限制；限制按本机时区计算，避免恢复标签页时意外消耗渠道配额。
+            </p>
+            <div class="mt-4 settings-fields">
+              <FormField label="每日总上限" compact>
+                <BaseInput v-model.number="lexiSettings.translation.rateLimit.dailyLimit" type="number" :min="0" />
+              </FormField>
+              <FormField label="滚动窗口（小时）" compact>
+                <BaseInput v-model.number="lexiSettings.translation.rateLimit.rollingWindowHours" type="number" :min="0" :max="168" />
+              </FormField>
+              <FormField label="窗口内上限" compact>
+                <BaseInput v-model.number="lexiSettings.translation.rateLimit.rollingWindowLimit" type="number" :min="0" />
+              </FormField>
+            </div>
+            <div class="mt-4 flex flex-wrap items-end gap-4">
+              <BaseCheckbox v-model="lexiSettings.translation.rateLimit.scheduleEnabled" label="只在指定时段翻译" />
+              <template v-if="lexiSettings.translation.rateLimit.scheduleEnabled">
+                <FormField label="开始时间" compact>
+                  <BaseInput v-model.number="lexiSettings.translation.rateLimit.allowedStartHour" type="number" :min="0" :max="23" />
+                </FormField>
+                <FormField label="结束时间" compact>
+                  <BaseInput v-model.number="lexiSettings.translation.rateLimit.allowedEndHour" type="number" :min="0" :max="23" />
+                </FormField>
+              </template>
+            </div>
+          </section>
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full border-collapse text-left text-12px">
+              <thead class="bg-white text-neutral-500">
+                <tr class="border-b border-neutral-200">
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    名称
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    类型
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    凭据状态
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    额度 / 健康
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    优先级
+                  </th>
+                  <th scope="col" class="py-2 pr-3 font-500">
+                    启用
+                  </th>
+                  <th scope="col" class="py-2 pr-0 text-right font-500">
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="engine in lexiSettings.translation.engines" :key="engine.id" class="border-b border-neutral-100 align-top">
+                  <td class="max-w-56 break-words py-3 pr-3 font-600">
+                    {{ engine.label }}
+                    <span v-if="translationEngineRowTests[engine.id]?.message" class="mt-1 block text-11px font-400" :class="translationEngineRowTests[engine.id]?.ok ? 'text-emerald-600' : 'text-red-600'">{{ translationEngineRowTests[engine.id]?.message }}</span>
+                  </td>
+                  <td class="py-3 pr-3 text-neutral-500">
+                    {{ engine.kind === 'microsoft' ? 'Microsoft Translator F0' : 'Google Translate Web（非官方）' }}
+                  </td>
+                  <td class="py-3 pr-3 text-neutral-500">
+                    {{ engine.kind === 'microsoft' ? (engine.apiKey && engine.region ? 'Key + Region 已配置' : '缺少 Key 或 Region') : (engine.acceptedRisk ? '已确认风险' : '未确认风险') }}
+                  </td>
+                  <td class="py-3 pr-3 text-neutral-500">
+                    {{ engine.dailyLimit ? `每日 ${engine.dailyLimit} 次` : '未设渠道上限' }}
+                  </td>
+                  <td class="py-3 pr-3 text-neutral-500">
+                    {{ engine.priority }}
+                  </td>
+                  <td class="py-3 pr-3">
+                    <BaseCheckbox :model-value="engine.enabled" :aria-label="`启用 ${engine.label}`" compact @update:model-value="toggleTranslationEngineEnabled(engine.id, $event)" />
+                  </td>
+                  <td class="py-3 pr-0">
+                    <div class="flex justify-end gap-2">
+                      <BaseButton size="sm" :loading="translationEngineRowTests[engine.id]?.loading" loading-label="正在测试" @click="testTranslationEngine(engine)">
+                        测试
+                      </BaseButton>
+                      <BaseButton size="sm" @click="openTranslationEngineEditor(engine)">
+                        编辑
+                      </BaseButton>
+                      <BaseButton variant="danger" size="sm" @click="removeTranslationEngine(engine.id)">
+                        删除
+                      </BaseButton>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-if="!lexiSettings.translation.engines.length" class="rounded-2 bg-neutral-50 px-3 py-3 text-13px text-neutral-500">
+              暂无翻译引擎。添加 Microsoft Translator 或 Google Translate Web 后启用即可优先使用。
+            </p>
+          </div>
+        </section>
+        <section v-if="activeTab === 'ai' && activeAiSection === 'providers'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 class="text-16px font-600">
+                通用 Provider
               </h2>
               <p class="mt-1 text-12px leading-5 text-neutral-500">
-                每个 Provider 是一条独立连接：协议、Endpoint、模型和 API Key。同一场景绑定多个时按优先级和延迟竞速，先返回的结果被采用。
+                添加连接后，在下方“功能”中为每项能力勾选可用 Provider；同一功能的多个 Provider 按优先级和延迟竞速，先返回的结果被采用。
               </p>
             </div>
             <BaseButton variant="primary" @click="openProviderEditor()">
@@ -1647,14 +2090,14 @@ async function importVocabulary(event: Event) {
           </div>
 
           <h3 class="mt-6 text-14px font-600">
-            场景
+            功能
           </h3>
           <p class="mt-1 text-12px leading-5 text-neutral-500">
-            场景决定这项能力是否开启、用哪些 Provider、以及使用什么提示词。
+            每个功能独立选择通用 Provider 和提示词。内置翻译服务固定用于划词与页面翻译；“AI 词库搜索”仅在用户主动搜索时发送筛选后的本地候选词条。
           </p>
 
           <div class="mt-4 grid gap-4 lg:grid-cols-3">
-            <div v-for="scene in scenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
+            <div v-for="scene in aiScenes" :key="scene" class="max-h-[42rem] overflow-y-auto rounded-2 border border-neutral-200 p-4">
               <SettingToggle v-model="lexiSettings.ai[scene].enabled" :label="featureLabels[scene]" />
               <div class="mt-4 rounded-2 bg-neutral-50 p-3">
                 <div class="text-12px font-500 text-neutral-600">
@@ -1712,7 +2155,53 @@ async function importVocabulary(event: Event) {
           </div>
         </section>
 
-        <section v-else-if="activeTab === 'diagnostics'" id="options-panel-diagnostics" role="tabpanel" aria-labelledby="options-tab-diagnostics" class="options-panel grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <section v-if="activeTab === 'diagnostics'" id="options-panel-diagnostics" role="tabpanel" aria-labelledby="options-tab-diagnostics" class="options-panel grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div class="grid gap-3 lg:col-span-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-2 border border-neutral-200 bg-white p-4 shadow-sm">
+              <div class="text-12px text-neutral-500">
+                AI 成功率
+              </div>
+              <div class="mt-2 text-24px font-700 tabular-nums">
+                {{ aiSuccessRate }}<span class="text-13px font-500 text-neutral-500">%</span>
+              </div>
+              <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                <div class="h-full rounded-full bg-emerald-500" :style="{ width: `${aiSuccessRate}%` }" />
+              </div>
+            </div>
+            <div class="rounded-2 border border-neutral-200 bg-white p-4 shadow-sm">
+              <div class="text-12px text-neutral-500">
+                平均响应
+              </div>
+              <div class="mt-2 text-24px font-700 tabular-nums">
+                {{ averageAiDuration }}<span class="text-13px font-500 text-neutral-500"> ms</span>
+              </div>
+              <div class="mt-2 text-11px text-neutral-500">
+                基于 {{ aiCallLogs.length }} 次本地调用
+              </div>
+            </div>
+            <div class="rounded-2 border border-neutral-200 bg-white p-4 shadow-sm">
+              <div class="text-12px text-neutral-500">
+                可用 Provider
+              </div>
+              <div class="mt-2 text-24px font-700 tabular-nums">
+                {{ enabledProviderCount }}<span class="text-13px font-500 text-neutral-500"> / {{ lexiSettings.ai.providers.length }}</span>
+              </div>
+              <div class="mt-2 text-11px text-neutral-500">
+                内置翻译服务单独统计
+              </div>
+            </div>
+            <div class="rounded-2 border border-neutral-200 bg-white p-4 shadow-sm">
+              <div class="text-12px text-neutral-500">
+                词库容量
+              </div>
+              <div class="mt-2 text-24px font-700 tabular-nums">
+                {{ vocabularyCapacity }}<span class="text-13px font-500 text-neutral-500">%</span>
+              </div>
+              <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-neutral-100">
+                <div class="h-full rounded-full bg-blue-500" :style="{ width: `${vocabularyCapacity}%` }" />
+              </div>
+            </div>
+          </div>
           <div class="flex h-[44rem] min-w-0 flex-col overflow-hidden rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
             <div class="flex shrink-0 items-center justify-between gap-3">
               <h2 class="text-16px font-600">
@@ -1951,7 +2440,7 @@ async function importVocabulary(event: Event) {
           </div>
         </section>
 
-        <section v-else id="options-panel-about" role="tabpanel" aria-labelledby="options-tab-about" class="options-panel about-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+        <section v-if="activeTab === 'about'" id="options-panel-about" role="tabpanel" aria-labelledby="options-tab-about" class="options-panel about-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
           <div class="about-hero">
             <Logo class="about-hero__logo" />
             <div class="about-hero__copy">
@@ -1968,6 +2457,8 @@ async function importVocabulary(event: Event) {
               </div>
             </div>
           </div>
+
+          <DevFestivalPreview v-if="DevFestivalPreview" />
 
           <dl class="about-facts">
             <div>

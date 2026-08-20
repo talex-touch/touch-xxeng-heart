@@ -4,6 +4,7 @@ import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis,
 import { recordPageVisit } from '~/logic/analytics'
 import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
 import { defaultSettings } from '~/logic/defaults'
+import { getReplacementDisplayText } from '~/logic/replacementDisplay'
 import type { DialogSelectionContext } from '~/logic/dialogHarness'
 import { findAnchorSegmentId, getPageDocument, revealPageSegment } from '~/contentScripts/pageContent'
 import { elementToDataUrl } from '~/contentScripts/ui/canvas'
@@ -534,7 +535,7 @@ function formatCandidateMeaning(candidate: VocabularyCandidate) {
   return hasEnglishExplanation ? `中英解释：${meaning}` : meaning
 }
 
-function createToken(candidate: VocabularyCandidate) {
+function createToken(candidate: VocabularyCandidate, displayMode: LexiSettings['replacement']['displayMode']) {
   const token = document.createElement('span')
   const isProduct = isProductVocabularyCandidate(candidate)
   token.dataset.lexiToken = 'true'
@@ -547,7 +548,9 @@ function createToken(candidate: VocabularyCandidate) {
   token.dataset.pronunciation = candidate.pronunciation ?? ''
   token.dataset.lexiProduct = isProduct ? 'true' : 'false'
   token.className = isProduct ? 'lexi-token lexi-token-product' : 'lexi-token'
-  token.textContent = isProduct ? candidate.original : candidate.replacement
+  token.textContent = isProduct
+    ? candidate.original
+    : getReplacementDisplayText(candidate, displayMode)
   return token
 }
 
@@ -1020,6 +1023,34 @@ function getPageStyleContent(customCss = '') {
       font: 12px/1.55 var(--lexi-font-sans);
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+    }
+
+    .lexi-selection-translation__status {
+      all: initial;
+      display: flex;
+      box-sizing: border-box;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75em;
+      margin-top: 0.8em;
+      padding-top: 0.6em;
+      border-top: 1px solid var(--lexi-line);
+      color: var(--lexi-ink-3);
+      font: 11px/1.4 var(--lexi-font-sans);
+    }
+
+    .lexi-selection-translation__locate {
+      all: initial;
+      box-sizing: border-box;
+      color: var(--lexi-accent-ink);
+      cursor: pointer;
+      font: 600 11px/1.4 var(--lexi-font-sans);
+    }
+
+    .lexi-selection-translation__locate:hover,
+    .lexi-selection-translation__locate:focus-visible {
+      text-decoration: underline;
+      outline: none;
     }
 
     .lexi-selection-translation__collapsed {
@@ -1967,7 +1998,11 @@ function renderHoverCard(tooltip: HTMLElement, token: HTMLElement, onArchive: (t
   tooltip.append(divider, foot)
 }
 
-function replaceTextNode(node: Text, matches: ReplacementMatch[]) {
+function replaceTextNode(
+  node: Text,
+  matches: ReplacementMatch[],
+  displayMode: LexiSettings['replacement']['displayMode'],
+) {
   if (!matches.length || !node.parentNode)
     return []
 
@@ -1987,7 +2022,7 @@ function replaceTextNode(node: Text, matches: ReplacementMatch[]) {
     if (index > cursor)
       fragment.append(document.createTextNode(text.slice(cursor, index)))
 
-    fragment.append(createToken(candidate))
+    fragment.append(createToken(candidate, displayMode))
     used.add(candidate.original)
     applied.push(candidate)
     cursor = index + candidate.original.length
@@ -2022,6 +2057,13 @@ function pageFeatureEnabled(settings: LexiSettings, hints = detectSpecialSiteHin
     (settings.replacement.enabled && isSceneEnabled(settings, 'replacement', location.href, hints))
     || (settings.selection.enabled && isSceneEnabled(settings, 'selection', location.href, hints))
   )
+}
+
+function isPredominantlyEnglishDocument() {
+  const text = document.body?.textContent?.slice(0, 12000) ?? ''
+  const latin = (text.match(/[a-z]/gi) ?? []).length
+  const cjk = (text.match(/[\u3400-\u9FFF]/g) ?? []).length
+  return latin >= 240 && latin > cjk * 4
 }
 
 function detectSpecialSiteHints(): SiteDetectionHints {
@@ -2357,6 +2399,34 @@ function updatePageTranslationElement(element: HTMLElement, block: PageTranslati
   })
 }
 
+function renderPageLearningText(element: HTMLElement, text: string, settings: LexiSettings) {
+  if (!settings.selection.pageTranslation.autoTranslateEnglishPages) {
+    element.textContent = text
+    return
+  }
+
+  const { min, max } = getDifficultyWindow(settings.replacement.level)
+  const candidates = programmerVocabulary
+    .filter(candidate => candidate.original.length >= 2 && !isProductVocabularyCandidate(candidate) && candidate.difficulty >= min && candidate.difficulty <= max && text.includes(candidate.original))
+    .slice(0, Math.max(1, Math.round(settings.replacement.density * 12)))
+  if (!candidates.length) {
+    element.textContent = text
+    return
+  }
+
+  const fragment = document.createDocumentFragment()
+  let cursor = 0
+  for (const candidate of candidates.sort((a, b) => text.indexOf(a.original) - text.indexOf(b.original))) {
+    const index = text.indexOf(candidate.original, cursor)
+    if (index < cursor)
+      continue
+    fragment.append(document.createTextNode(text.slice(cursor, index)), createToken(candidate, settings.replacement.displayMode))
+    cursor = index + candidate.original.length
+  }
+  fragment.append(document.createTextNode(text.slice(cursor)))
+  element.replaceChildren(fragment)
+}
+
 function getPageTranslationElementAfter(element: HTMLElement, blockId: string) {
   return element.nextElementSibling instanceof HTMLElement
     && element.nextElementSibling.dataset.lexiPageTranslationId === blockId
@@ -2651,6 +2721,11 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   const body = document.createElement('div')
   const text = document.createElement('span')
   const detail = document.createElement('span')
+  const status = document.createElement('div')
+  const metrics = document.createElement('span')
+  const locate = document.createElement('button')
+  const selectionRange = range?.cloneRange()
+  const startedAt = performance.now()
   const collapsed = document.createElement('button')
   const collapsedIcon = document.createElement('span')
   const collapsedText = document.createElement('span')
@@ -2665,6 +2740,11 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   body.className = 'lexi-selection-translation__body'
   text.className = 'lexi-selection-translation__text'
   detail.className = 'lexi-selection-translation__detail'
+  status.className = 'lexi-selection-translation__status'
+  locate.className = 'lexi-selection-translation__locate'
+  locate.type = 'button'
+  locate.textContent = '定位原文'
+  metrics.textContent = '翻译中…'
   collapsed.className = 'lexi-selection-translation__collapsed'
   collapsed.type = 'button'
   collapsed.setAttribute('aria-label', '展开翻译卡片')
@@ -2689,6 +2769,16 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
     event.stopPropagation()
     block.remove()
   })
+  locate.addEventListener('click', () => {
+    const commonAncestor = selectionRange?.commonAncestorContainer
+    const target = commonAncestor instanceof Element ? commonAncestor : commonAncestor?.parentElement ?? anchor
+    target?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' })
+    if (!selectionRange)
+      return
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(selectionRange)
+  })
   collapsed.addEventListener('click', (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -2699,7 +2789,8 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
 
   actions.append(hide, close)
   header.append(label, actions)
-  body.append(text, detail)
+  status.append(metrics, locate)
+  body.append(text, detail, status)
   collapsed.append(collapsedIcon, collapsedText)
   block.append(header, body, collapsed)
   insertAfterSelectionAnchor(anchor, block)
@@ -2724,6 +2815,10 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
       if (detailText)
         detail.textContent = detailText
       collapsedText.textContent = createCollapsedSelectionSummary(nextText)
+      const elapsedMs = Math.max(1, Math.round(performance.now() - startedAt))
+      const estimatedTokens = Math.ceil((selected.length + nextText.length) / 4)
+      const charactersPerSecond = Math.max(1, Math.round(nextText.length / (elapsedMs / 1000)))
+      metrics.textContent = `${translation.explanation} · 约 ${estimatedTokens} tokens · ${elapsedMs}ms · ${charactersPerSecond} 字/秒`
     },
     remove() {
       block.remove()
@@ -3481,6 +3576,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let activeSelectionKey = ''
   let latestSelectionSnapshot = ''
   let selectionChangingSince = 0
+  let lastModifierTapAt = 0
   let selectionRequestId = 0
   let selectionPointerDown = false
   let selectionFinalizedAt = 0
@@ -3601,7 +3697,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       const context = getContextText(node)
       const remaining = budget.maxPerPage - stats.replacements
       const matches = selectedPlans.get(node)?.slice(0, remaining) ?? []
-      const changedCandidates = replaceTextNode(node, matches)
+      const changedCandidates = replaceTextNode(node, matches, settings.replacement.displayMode)
       if (!changedCandidates.length)
         continue
 
@@ -3735,6 +3831,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
         const element = getPageTranslationElementAfter(target.element, target.id)
           ?? insertPageTranslationElement(target.element, block, { priority: target.priority })
         updatePageTranslationElement(element, block)
+        renderPageLearningText(element, block.translation, settings)
         pageTranslationSources.set(block.id, block)
         memory[target.memoryKey] = {
           ...block,
@@ -3985,7 +4082,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function restoreSavedPageTranslation() {
     const { settings } = await getStoredState()
-    if (disposed)
+    if (disposed || !settings.selection.pageTranslation.autoTranslationConfigured)
       return
 
     const siteHints = detectSpecialSiteHints()
@@ -4489,6 +4586,18 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const onKeyUp = (event: KeyboardEvent) => {
     const key = typeof event.key === 'string' ? event.key : ''
+    if (key === 'Control' || key === 'Alt') {
+      const now = performance.now()
+      if (now - lastModifierTapAt <= 360) {
+        lastModifierTapAt = 0
+        if (getSelectionSnapshot())
+          handleSelection().catch(error => console.warn('[Lexi] double modifier selection translation failed', error))
+        else
+          startPageTranslation().catch(error => console.warn('[Lexi] double modifier page translation failed', error))
+        return
+      }
+      lastModifierTapAt = now
+    }
     if (key.startsWith('Arrow') || key === 'Shift') {
       selectionFinalizedAt = performance.now()
       selectionFinalizedWithModifier = selectionModifierPressed(event)
@@ -4734,6 +4843,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return startPageTranslation()
     })
 
+  const onQuickTranslate = () => {
+    startPageTranslation().catch(error => console.warn('[Lexi] quick translation failed', error))
+  }
+
   const removePageTranslateStopListener = mediaPlaybackOnly
     ? () => {}
     : listenRuntimeMessage('lexi-page-translate-stop', () => {
@@ -4807,6 +4920,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     run().catch(handleEnhancerError)
     restoreSavedPageTranslation().catch(handleEnhancerError)
     void getStoredState().then(({ settings }) => {
+      if (settings.selection.pageTranslation.autoTranslationConfigured
+        && settings.selection.pageTranslation.autoTranslateEnglishPages
+        && settings.selection.translationDirection === 'en-to-zh'
+        && isPredominantlyEnglishDocument()) {
+        void startPageTranslation().catch(handleEnhancerError)
+      }
       if (disposed)
         return
 
@@ -4854,6 +4973,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     listeners.add(document, 'keyup', onKeyUp, true)
     listeners.add(document, 'selectionchange', onSelectionChange)
     listeners.add(document, 'keydown', onKeyDown, true)
+    listeners.add(document, 'lexi-quick-translate', onQuickTranslate)
     // Only the pointer variants: browsers emit pointer *and* mouse events for a mouse,
     // so binding both ran the hover-card handler twice on every single crossing.
     listeners.add(document, pointerEventName('over'), onPointerOver, true)

@@ -3,8 +3,13 @@ import type { Runtime } from 'webextension-polyfill'
 import { aiPortName } from '~/logic/aiPort'
 import { isAbortError, listProviderModels, runAiChat, runAiTest } from '~/logic/aiRunner'
 import type { AiCommand, AiEvent } from '~/logic/aiPort'
+import { createConcurrentTaskQueue } from '~/logic/asyncQueue'
+import { reserveTranslationQuota } from '~/logic/translationQuota'
+import { readLocalSettings } from '~/logic/settingsSync'
 
 const keepAliveIntervalMs = 20_000
+const maxConcurrentAiRequests = 3
+const enqueueAiRequest = createConcurrentTaskQueue(maxConcurrentAiRequests)
 
 /**
  * Holds the worker open for the length of one request.
@@ -37,6 +42,11 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
+const aiTranslationFallbackChannel = {
+  id: 'ai-translation-fallback',
+  label: 'AI 翻译回退',
+  dailyLimit: 0,
+}
 async function execute(port: Runtime.Port, command: AiCommand, signal: AbortSignal) {
   if (command.type === 'models') {
     post(port, { type: 'models', models: await listProviderModels(command.provider) })
@@ -46,6 +56,11 @@ async function execute(port: Runtime.Port, command: AiCommand, signal: AbortSign
   if (command.type === 'test') {
     post(port, { type: 'test', result: await runAiTest(command.scene, command.user, command.provider) })
     return
+  }
+
+  if (command.type === 'run' && command.scene === 'selection') {
+    const settings = await readLocalSettings()
+    await reserveTranslationQuota(settings.translation.rateLimit, aiTranslationFallbackChannel)
   }
 
   const result = await runAiChat(
@@ -112,7 +127,7 @@ export function startAiService() {
         return
 
       started = true
-      void handle(port, raw, controller.signal)
+      void enqueueAiRequest(() => handle(port, raw, controller.signal))
     })
   })
 }

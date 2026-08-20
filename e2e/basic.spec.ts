@@ -30,18 +30,47 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
 
   await expect(page.locator('.options-header')).toContainText('Lexi')
+
+  const settingsTabs = page.getByRole('tablist', { name: '基础设置分区' })
+  const vocabularyReplacement = settingsTabs.getByRole('tab', { name: '词汇替换', exact: true })
+  await expect(vocabularyReplacement).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('heading', { name: '替换强度' })).toBeVisible()
+
+  await settingsTabs.getByRole('tab', { name: '网页范围', exact: true }).click()
   await expect(page.getByRole('heading', { name: '网页启用范围' })).toBeVisible()
+
+  await settingsTabs.getByRole('tab', { name: '内容速读', exact: true }).click()
   await expect(page.getByRole('heading', { name: '多平台内容速读' })).toBeVisible()
   await expect(page.getByRole('switch', { name: '允许 NSFW 内容速读' })).toHaveAttribute('aria-checked', 'false')
-  await page.getByRole('tab', { name: 'AI 场景' }).click()
-  await expect(page.getByRole('heading', { name: 'Provider' })).toBeVisible()
+
+  await page.getByRole('tab', { name: '供应商与功能' }).click()
+  await expect(page.getByRole('heading', { name: '通用 Provider' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '协议' })).toBeVisible()
   await expect(page.getByRole('switch', { name: '内容速读' })).toBeVisible()
 })
 
+test('vocabulary tabs switch between overview and settings', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('tab', { name: '词库记录' }).click()
+
+  const vocabularyTabs = page.getByRole('tablist', { name: '词库记录分区' })
+  const overview = vocabularyTabs.getByRole('tab', { name: '概览', exact: true })
+  const settings = vocabularyTabs.getByRole('tab', { name: '设置', exact: true })
+
+  await settings.click()
+  await expect(settings).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('备份与迁移', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'AI 搜索' })).toBeHidden()
+
+  await overview.click()
+  await expect(overview).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('button', { name: 'AI 搜索' })).toBeVisible()
+  await expect(page.getByText('备份与迁移', { exact: true })).toBeHidden()
+})
+
 test('providers are created, tested and removed from the table', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
-  await page.getByRole('tab', { name: 'AI 场景' }).click()
+  await page.getByRole('tab', { name: '供应商与功能' }).click()
 
   // Wait for the stored settings to land; edits made before that first read are lost.
   await expect(page.getByRole('row', { name: /默认 Provider/ })).toBeVisible()
@@ -106,7 +135,7 @@ test('replacement strength maps levels and density tiers to plain language', asy
 
 test('HTTP endpoints require per-address confirmation', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
-  await page.getByRole('tab', { name: 'AI 场景' }).click()
+  await page.getByRole('tab', { name: '供应商与功能' }).click()
   await page.getByRole('row', { name: /默认 Provider/ }).getByRole('button', { name: '编辑' }).click()
 
   const editor = page.getByRole('dialog', { name: '编辑 Provider' })

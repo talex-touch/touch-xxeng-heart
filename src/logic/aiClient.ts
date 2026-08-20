@@ -239,6 +239,20 @@ export async function requestSelectionTranslation(
   context: string,
   onTranslation?: (translation: SelectionTranslation) => void,
 ): Promise<SelectionTranslation | undefined> {
+  const hasEngine = settings.translation.engines.some(engine => engine.enabled && (engine.kind !== 'google-web' || engine.acceptedRisk))
+  if (hasEngine) {
+    const { translateWithConfiguredEngines } = await import('./translationClient')
+    const result = await translateWithConfiguredEngines(text, settings.selection.translationDirection)
+    const translation: SelectionTranslation = {
+      original: text,
+      translation: result.text,
+      explanation: `由 ${result.engineLabel} 生成。`,
+      source: 'engine',
+    }
+    onTranslation?.(translation)
+    return translation
+  }
+
   const translated = await postAiText(
     'selection',
     [{
@@ -285,6 +299,18 @@ export async function requestPageTranslationBatch(
 ) {
   if (!items.length)
     return []
+
+  const hasEngine = settings.translation.engines.some(engine => engine.enabled && (engine.kind !== 'google-web' || engine.acceptedRisk))
+  if (hasEngine) {
+    if (signal?.aborted)
+      throw new DOMException('Translation request aborted', 'AbortError')
+
+    const { translateWithConfiguredEngines } = await import('./translationClient')
+    return Promise.all(items.map(async (item) => {
+      const result = await translateWithConfiguredEngines(item.text, settings.selection.translationDirection)
+      return { id: item.id, translation: result.text }
+    }))
+  }
 
   const data = await postAiJson<AiPageTranslationBatchResponse>('selection', {
     items: items.map(item => ({ id: item.id, text: item.text.slice(0, 900) })),

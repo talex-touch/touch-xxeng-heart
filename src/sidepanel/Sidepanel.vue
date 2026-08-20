@@ -28,6 +28,10 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
   { value: 'zh-to-en', label: '中译英' },
   { value: 'en-to-zh', label: '英译中' },
 ]
+const pageTranslationDirections: Array<{ value: TranslationDirection, label: string }> = [
+  { value: 'en-to-zh', label: '英文 → 中文' },
+  { value: 'zh-to-en', label: '中文 → 英文' },
+]
 const cleanupDays = ref(30)
 const importMessage = ref('')
 const hostLabel = ref('')
@@ -76,6 +80,7 @@ const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string,
   { value: 'regex', label: 'Regex', description: 'URL 命中正则时自动翻译' },
 ]
 const pageTranslationRunning = computed(() => pageTranslationStatus.value.enabled)
+const pageTranslationConfigured = computed(() => lexiSettings.value.selection.pageTranslation.autoTranslationConfigured)
 const pageTranslationStateLabel = computed(() => pageTranslationRunning.value ? '运行中' : '未开启')
 const pageTranslationScopeHint = computed(() => {
   const scope = lexiSettings.value.selection.pageTranslation.scope
@@ -287,6 +292,13 @@ function togglePageTranslation() {
   return controlPageTranslation(pageTranslationRunning.value ? 'stop' : 'start')
 }
 
+async function configureAndStartPageTranslation() {
+  const pageTranslation = lexiSettings.value.selection.pageTranslation
+  pageTranslation.autoTranslationConfigured = true
+  pageTranslation.autoTranslateEnglishPages = lexiSettings.value.selection.translationDirection === 'en-to-zh'
+  await controlPageTranslation('start')
+}
+
 function exportRecords() {
   exportVocabularyRecords(vocabularyRecords.value)
 }
@@ -470,9 +482,10 @@ onBeforeUnmount(() => {
         <section class="rounded-3 border border-neutral-200 bg-white px-3 py-3">
           <div class="flex items-center justify-between gap-3">
             <h2 class="text-13px font-700">
-              自动翻译本页
+              页面双语翻译
             </h2>
             <span
+              v-if="pageTranslationConfigured"
               class="shrink-0 inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-11px"
               :class="pageTranslationRunning ? 'bg-blue-50 text-blue-600' : 'bg-neutral-100 text-neutral-500'"
             >
@@ -481,52 +494,78 @@ onBeforeUnmount(() => {
             </span>
           </div>
 
-          <SegmentedControl
-            v-model="lexiSettings.selection.pageTranslation.scope"
-            class="mt-2.5"
-            :options="pageTranslationScopes"
-            label="自动翻译启用范围"
-          />
-          <p class="mt-2 text-11px leading-5 text-neutral-500">
-            {{ pageTranslationScopeHint }}；滚动到的段落优先翻译。
-          </p>
-
-          <label v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-2 block">
-            <span class="text-11px text-neutral-500">URL Regex</span>
-            <input v-model.trim="lexiSettings.selection.pageTranslation.regex" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 font-mono text-12px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
-          </label>
-
-          <div class="mt-3 border-t border-neutral-200 pt-3">
-            <div class="flex items-center justify-between gap-2 text-11px">
-              <span class="text-neutral-950">{{ pageTranslationCacheLabel }}</span>
-              <span class="truncate text-neutral-500">{{ pageTranslationMetaLabel }}</span>
-            </div>
-            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-neutral-200" aria-hidden="true">
-              <div class="h-full rounded-full transition-all duration-200" :class="pageTranslationTrackClass" />
-            </div>
-          </div>
-
-          <div class="mt-3 flex gap-2">
+          <div v-if="!pageTranslationConfigured" class="mt-3 rounded-2 border border-blue-100 bg-blue-50 p-3">
+            <h3 class="text-12px font-700 text-blue-950">
+              先选择翻译方向
+            </h3>
+            <p class="mt-1 text-11px leading-5 text-blue-800">
+              Lexi 不会自行翻译页面。确认后，英文→中文会在英文页面自动开启；中文→英文仅从你主动开始的页面起生效。
+            </p>
+            <SegmentedControl
+              v-model="lexiSettings.selection.translationDirection"
+              class="mt-3"
+              :options="pageTranslationDirections"
+              label="页面翻译方向"
+            />
             <button
               type="button"
-              class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+              class="mt-3 h-9 w-full flex items-center justify-center gap-1.5 rounded-2.5 bg-blue-700 text-12px text-white font-600 cursor-pointer hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-40"
               :disabled="pageTranslationLoading"
-              @click="togglePageTranslation"
+              @click="configureAndStartPageTranslation"
             >
-              <span class="block h-[13px] w-[13px]" :class="pageTranslationRunning ? 'i-lucide-pause' : 'i-lucide-play'" />
-              {{ pageTranslationRunning ? '暂停翻译' : '开始翻译' }}
-            </button>
-            <button
-              type="button"
-              class="h-9 w-9 flex shrink-0 items-center justify-center rounded-2.5 border border-neutral-200 bg-white text-neutral-500 cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
-              :disabled="pageTranslationLoading"
-              title="刷新状态"
-              aria-label="刷新状态"
-              @click="refreshPageTranslationStatus"
-            >
-              <span class="i-lucide-rotate-cw block h-[15px] w-[15px]" />
+              <span class="i-lucide-check block h-[13px] w-[13px]" />
+              保存选择并翻译本页
             </button>
           </div>
+
+          <template v-else>
+            <SegmentedControl
+              v-model="lexiSettings.selection.pageTranslation.scope"
+              class="mt-2.5"
+              :options="pageTranslationScopes"
+              label="自动翻译启用范围"
+            />
+            <p class="mt-2 text-11px leading-5 text-neutral-500">
+              {{ pageTranslationScopeHint }}；滚动到的段落优先翻译。
+            </p>
+
+            <label v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-2 block">
+              <span class="text-11px text-neutral-500">URL Regex</span>
+              <input v-model.trim="lexiSettings.selection.pageTranslation.regex" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 font-mono text-12px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
+            </label>
+
+            <div class="mt-3 border-t border-neutral-200 pt-3">
+              <div class="flex items-center justify-between gap-2 text-11px">
+                <span class="text-neutral-950">{{ pageTranslationCacheLabel }}</span>
+                <span class="truncate text-neutral-500">{{ pageTranslationMetaLabel }}</span>
+              </div>
+              <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-neutral-200" aria-hidden="true">
+                <div class="h-full rounded-full transition-all duration-200" :class="pageTranslationTrackClass" />
+              </div>
+            </div>
+
+            <div class="mt-3 flex gap-2">
+              <button
+                type="button"
+                class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="pageTranslationLoading"
+                @click="togglePageTranslation"
+              >
+                <span class="block h-[13px] w-[13px]" :class="pageTranslationRunning ? 'i-lucide-pause' : 'i-lucide-play'" />
+                {{ pageTranslationRunning ? '暂停翻译' : '开始翻译' }}
+              </button>
+              <button
+                type="button"
+                class="h-9 w-9 flex shrink-0 items-center justify-center rounded-2.5 border border-neutral-200 bg-white text-neutral-500 cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+                :disabled="pageTranslationLoading"
+                title="刷新状态"
+                aria-label="刷新状态"
+                @click="refreshPageTranslationStatus"
+              >
+                <span class="i-lucide-rotate-cw block h-[15px] w-[15px]" />
+              </button>
+            </div>
+          </template>
 
           <p
             v-if="pageTranslationMessage"

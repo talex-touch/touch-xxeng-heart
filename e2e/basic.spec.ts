@@ -153,11 +153,15 @@ test('enabling sync mirrors settings into the browser account', async ({ page, e
       return undefined
     }
 
-    if (!Number.isInteger(meta.chunks) || meta.chunks < 1 || !Number.isInteger(meta.length))
+    const chunkCount = meta.chunks
+    const payloadLength = meta.length
+    if (typeof chunkCount !== 'number' || !Number.isInteger(chunkCount) || chunkCount < 1
+      || typeof payloadLength !== 'number' || !Number.isInteger(payloadLength)) {
       return undefined
+    }
 
     const chunkKeys = Array.from(
-      { length: meta.chunks },
+      { length: chunkCount },
       (_, index) => `lexi-sync-settings-chunk-${index}`,
     )
     const mirrorKeys = Object.keys(items)
@@ -171,7 +175,7 @@ test('enabling sync mirrors settings into the browser account', async ({ page, e
       return undefined
 
     const payload = chunks.join('')
-    if (payload.length !== meta.length)
+    if (payload.length !== payloadLength)
       return undefined
 
     try {

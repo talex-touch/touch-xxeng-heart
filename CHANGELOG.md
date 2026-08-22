@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.11 - 2026-08-22
+
+Changes since v0.2.10.
+
+### Features
+- unify translation dispatch and rules (1b1f25d)
+- gate page translation and enforce quotas (690524a)
+
+### Tests
+- stabilize settings sync coverage (d366a74)
+- align extension release coverage (39d48b9)
+
+### Docs
+- add LinuxDo community badge (9dcc297)
+
+### Maintenance
+- publish to the chrome web store on tag and stop auto-tagging main (9c12951)
+
 ## v0.2.10 - 2026-08-12
 
 Changes since v0.2.9.
@@ -134,6 +152,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

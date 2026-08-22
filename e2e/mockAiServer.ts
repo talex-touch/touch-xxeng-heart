@@ -22,6 +22,8 @@ export interface MockAiServer {
   endpoint: (protocol: MockAiProtocol) => string
   /** Assistant text every subsequent chat request answers with. */
   answerWith: (text: string) => void
+  /** Assistant replies for successive chat requests. */
+  answerWithSequence: (texts: string[]) => void
   close: () => Promise<void>
 }
 
@@ -147,6 +149,7 @@ function resolveRoute(pathname: string): MockAiProtocol | 'models' | undefined {
 export async function startMockAiServer(): Promise<MockAiServer> {
   const requests: MockAiRequest[] = []
   let answer = ''
+  let orderedAnswers: string[] = []
 
   async function handle(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -202,9 +205,10 @@ export async function startMockAiServer(): Promise<MockAiServer> {
       return
     }
 
+    const reply = orderedAnswers.shift() ?? answer
     if (!streamed) {
       response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(buildJsonBody(route, answer))
+      response.end(buildJsonBody(route, reply))
       return
     }
 
@@ -213,7 +217,7 @@ export async function startMockAiServer(): Promise<MockAiServer> {
       'cache-control': 'no-cache',
       'connection': 'keep-alive',
     })
-    await writeInByteSlices(response, buildStreamBody(route, answer))
+    await writeInByteSlices(response, buildStreamBody(route, reply))
   }
 
   const server = createServer((request, response) => {
@@ -234,6 +238,10 @@ export async function startMockAiServer(): Promise<MockAiServer> {
     endpoint: protocol => (protocol === 'gemini' ? origin : `${origin}/v1`),
     answerWith: (text: string) => {
       answer = text
+      orderedAnswers = []
+    },
+    answerWithSequence: (texts: string[]) => {
+      orderedAnswers = [...texts]
     },
     close: () => new Promise<void>((resolve, reject) => {
       server.closeAllConnections()

@@ -75,6 +75,8 @@ export interface DigestProviderConfig {
  */
 export async function configureDigestProvider(page: Page, extensionId: string, config: DigestProviderConfig) {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('tablist', { name: '设置分类' }).getByRole('tab', { name: '基础设置', exact: true }).click()
+  await page.getByRole('tablist', { name: '基础设置分区' }).getByRole('tab', { name: '内容速读', exact: true }).click()
   await expect(page.getByRole('heading', { name: '多平台内容速读' })).toBeVisible()
   await expect.poll(() => page.evaluate(async (key) => {
     const stored = await chrome.storage.local.get(key)

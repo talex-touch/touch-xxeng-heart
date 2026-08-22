@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures'
+import { expect, settingsStorageKey, test } from './fixtures'
 
 declare const chrome: {
   runtime: {
@@ -44,6 +44,7 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
   await expect(page.getByRole('switch', { name: '允许 NSFW 内容速读' })).toHaveAttribute('aria-checked', 'false')
 
   await page.getByRole('tab', { name: '供应商与功能' }).click()
+  await page.getByRole('tablist', { name: '供应商与功能分区' }).getByRole('tab', { name: 'Provider 与功能', exact: true }).click()
   await expect(page.getByRole('heading', { name: '通用 Provider' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: '协议' })).toBeVisible()
   await expect(page.getByRole('switch', { name: '内容速读' })).toBeVisible()
@@ -71,6 +72,7 @@ test('vocabulary tabs switch between overview and settings', async ({ page, exte
 test('providers are created, tested and removed from the table', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
   await page.getByRole('tab', { name: '供应商与功能' }).click()
+  await page.getByRole('tablist', { name: '供应商与功能分区' }).getByRole('tab', { name: 'Provider 与功能', exact: true }).click()
 
   // Wait for the stored settings to land; edits made before that first read are lost.
   await expect(page.getByRole('row', { name: /默认 Provider/ })).toBeVisible()
@@ -96,23 +98,90 @@ test('providers are created, tested and removed from the table', async ({ page, 
 
 test('enabling sync mirrors settings into the browser account', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('tab', { name: '基础设置' }).click()
+  await page.getByRole('tablist', { name: '基础设置分区' }).getByRole('tab', { name: '同步', exact: true }).click()
 
   await expect(page.getByRole('heading', { name: '同步到 Google 账号' })).toBeVisible()
+  // Let the options page persist its initial settings before interacting; otherwise that
+  // initial write can overwrite the toggle and leave the background worker nothing to mirror.
+  await expect.poll(() => page.evaluate(async (key) => {
+    const stored = await chrome.storage.local.get(key)
+    return typeof stored[key] === 'string'
+  }, settingsStorageKey)).toBe(true)
+
   await page.getByRole('switch', { name: '启用同步' }).click()
 
-  // The background service worker debounces the push, so poll rather than wait once.
-  await expect.poll(async () => page.evaluate(async () => {
-    const items = await chrome.storage.sync.get(null)
-    return Object.keys(items).filter(key => key.startsWith('lexi-sync-settings')).length
-  }), { timeout: 15000 }).toBeGreaterThan(1)
+  await expect.poll(() => page.evaluate(async (key) => {
+    const stored = await chrome.storage.local.get(key)
+    if (typeof stored[key] !== 'string')
+      return false
 
-  const mirrored = await page.evaluate(async () => {
-    const items = await chrome.storage.sync.get(null)
-    return JSON.parse(String(items['lexi-sync-settings-meta']))
-  })
+    return JSON.parse(stored[key]).sync.enabled === true
+  }, settingsStorageKey)).toBe(true)
 
-  expect(mirrored.chunks).toBeGreaterThan(0)
-  expect(mirrored.updatedAt).toBeGreaterThan(0)
+  const expectedSettings = await page.evaluate(async (key) => {
+    const stored = await chrome.storage.local.get(key)
+    const settings = JSON.parse(String(stored[key]))
+    const { sync, ai, ...rest } = settings
+
+    return {
+      ...rest,
+      ai: {
+        ...ai,
+        approvedHttpEndpoints: [],
+        providers: ai.providers.map((provider: Record<string, unknown>) => (
+          sync.includeApiKeys ? provider : { ...provider, apiKey: '' }
+        )),
+      },
+    }
+  }, settingsStorageKey)
+
+  // The mirror is complete only when the canonical meta record names every contiguous
+  // chunk, the joined chunks match its recorded length, and their decoded settings equal
+  // the local user settings that are safe to sync.
+  await expect.poll(async () => page.evaluate(async (expected) => {
+    const items = await chrome.storage.sync.get(null)
+    const rawMeta = items['lexi-sync-settings-meta']
+    if (typeof rawMeta !== 'string')
+      return undefined
+
+    let meta: { chunks?: unknown, length?: unknown }
+    try {
+      meta = JSON.parse(rawMeta)
+    }
+    catch {
+      return undefined
+    }
+
+    if (!Number.isInteger(meta.chunks) || meta.chunks < 1 || !Number.isInteger(meta.length))
+      return undefined
+
+    const chunkKeys = Array.from(
+      { length: meta.chunks },
+      (_, index) => `lexi-sync-settings-chunk-${index}`,
+    )
+    const mirrorKeys = Object.keys(items)
+      .filter(key => key.startsWith('lexi-sync-settings'))
+      .sort()
+    if (JSON.stringify(mirrorKeys) !== JSON.stringify(['lexi-sync-settings-meta', ...chunkKeys].sort()))
+      return undefined
+
+    const chunks = chunkKeys.map(key => items[key])
+    if (chunks.some(chunk => typeof chunk !== 'string'))
+      return undefined
+
+    const payload = chunks.join('')
+    if (payload.length !== meta.length)
+      return undefined
+
+    try {
+      const snapshot = JSON.parse(payload)
+      return JSON.stringify(snapshot.settings) === JSON.stringify(expected)
+    }
+    catch {
+      return undefined
+    }
+  }, expectedSettings), { timeout: 15000 }).toBe(true)
 })
 
 test('replacement strength maps levels and density tiers to plain language', async ({ page, extensionId }) => {
@@ -130,12 +199,13 @@ test('replacement strength maps levels and density tiers to plain language', asy
   await card.getByRole('button', { name: '9 个等级分别对应什么' }).click()
   await card.getByRole('button', { name: /零基础 \/ 小学/ }).click()
   await expect(level).toHaveValue('1')
-  await expect(card.getByText('实际生效约 0.4%')).toBeVisible()
+  await expect(card.getByText('当前等级 1 折算系数 ×0.4，实际生效约 0.4%。')).toBeVisible()
 })
 
 test('HTTP endpoints require per-address confirmation', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
   await page.getByRole('tab', { name: '供应商与功能' }).click()
+  await page.getByRole('tablist', { name: '供应商与功能分区' }).getByRole('tab', { name: 'Provider 与功能', exact: true }).click()
   await page.getByRole('row', { name: /默认 Provider/ }).getByRole('button', { name: '编辑' }).click()
 
   const editor = page.getByRole('dialog', { name: '编辑 Provider' })
@@ -260,7 +330,7 @@ test('side panel follows active page support without reloading', async ({ page, 
   const supportedPage = await context.newPage()
   await supportedPage.goto('https://sidepanel.test/context')
   await expect(supportedPage.locator('#touch-xxeng-heart')).toBeAttached()
-  await expect(page.getByRole('heading', { name: '自动翻译本页' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '页面双语翻译' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '本页功能不可用' })).toBeHidden()
 
   const internalPage = await context.newPage()

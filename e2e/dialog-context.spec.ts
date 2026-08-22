@@ -79,14 +79,20 @@ test('模型可以请求检索页面中的其他内容', async ({ context, aiSer
   const dialog = await openDialogOn(page, aiServer)
 
   // First turn asks for the section the question's own wording never matched.
-  aiServer.answerWith('<search>评测方法</search>')
+  const finalAnswer = '它通过人工标注问答对、统计命中率并在长页面上采样覆盖来证明方案有效。'
+  aiServer.answerWithSequence([
+    '<search>评测方法</search>',
+    finalAnswer,
+  ])
   await dialog.locator('.lexi-dialog__input').fill('它怎么证明这套方案有效')
   await dialog.locator('.lexi-dialog__input').press('Enter')
 
   await expect.poll(() => sentPrompts(aiServer).length, { timeout: 15_000 }).toBeGreaterThan(1)
 
   const followUp = sentPrompts(aiServer).at(-1)
-  expect(followUp).toContain('评测')
+  expect(followUp).toContain(body[2])
+  const messages = dialog.locator('.lexi-dialog__messages')
+  await expect(messages).toContainText(finalAnswer)
   // The tool call is machinery; it must never reach the transcript.
-  await expect(dialog.locator('.lexi-dialog__messages')).not.toContainText('<search>')
+  await expect(messages).not.toContainText('<search>')
 })

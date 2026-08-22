@@ -5,10 +5,10 @@ import { isAnalyticsLogPayload, persistAnalyticsLog } from './analyticsStore'
 import { startSettingsSync } from './settingsSync'
 import { setAnalyticsSink } from '~/logic/analytics'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
-import { createConcurrentTaskQueue, createSerializedTaskQueue } from '~/logic/asyncQueue'
+import { createSerializedTaskQueue } from '~/logic/asyncQueue'
 import { readLocalSettings } from '~/logic/settingsSync'
 import { normalizeTranslationEngines, translateWithEngines } from '~/logic/translationEngines'
-import { reserveTranslationQuota } from '~/logic/translationQuota'
+import { enqueueTranslation, reserveTranslationQuota } from '~/logic/translationQuota'
 import type { PageTranslationCache, TranslationDirection, TranslationEngineConfig } from '~/logic/types'
 import { mergeDigestCacheEntry, pruneDigestCacheBySize } from '~/logic/digestCache'
 import { readJsonValue } from '~/logic/storageJson'
@@ -38,8 +38,6 @@ startSettingsSync()
 setAnalyticsSink(persistAnalyticsLog)
 startAiService()
 
-const enqueueTranslationRequest = createConcurrentTaskQueue(3)
-
 function isTranslationDirection(value: unknown): value is TranslationDirection {
   return value === 'auto' || value === 'zh-to-en' || value === 'en-to-zh'
 }
@@ -54,7 +52,7 @@ listenRuntimeMessage<{ text?: unknown, direction?: unknown }>('lexi-translate-te
   if (!text || !isTranslationDirection(direction))
     throw new Error('翻译参数无效。')
 
-  return enqueueTranslationRequest(async () => {
+  return enqueueTranslation(async () => {
     const settings = await readLocalSettings()
     return translateWithEngines(
       settings.translation.engines,
@@ -69,7 +67,7 @@ listenRuntimeMessage<unknown>('lexi-test-translation-engine', async (payload) =>
   if (!isTranslationEngineConfig(payload))
     throw new Error('翻译引擎参数无效。')
 
-  return enqueueTranslationRequest(() => translateWithEngines(
+  return enqueueTranslation(() => translateWithEngines(
     normalizeTranslationEngines([payload]),
     { text: 'Translation connection test.', direction: 'en-to-zh' },
   ))

@@ -2059,13 +2059,6 @@ function pageFeatureEnabled(settings: LexiSettings, hints = detectSpecialSiteHin
   )
 }
 
-function isPredominantlyEnglishDocument() {
-  const text = document.body?.textContent?.slice(0, 12000) ?? ''
-  const latin = (text.match(/[a-z]/gi) ?? []).length
-  const cjk = (text.match(/[\u3400-\u9FFF]/g) ?? []).length
-  return latin >= 240 && latin > cjk * 4
-}
-
 function detectSpecialSiteHints(): SiteDetectionHints {
   const documentElement = document.documentElement
   const body = document.body
@@ -2227,7 +2220,7 @@ function createPageTranslationMemoryKey(settings: LexiSettings, text: string) {
   const pageSettings = settings.selection.pageTranslation
   const scope = pageSettings.scope
   const identity = getPageTranslationScopeIdentity(scope, pageSettings.regex)
-  return [scope, identity, settings.selection.translationDirection, createPageTranslationBlockId(text)].join(':')
+  return [scope, identity, pageSettings.direction, createPageTranslationBlockId(text)].join(':')
 }
 
 function createPageTranslationBlockId(text: string) {
@@ -2400,11 +2393,6 @@ function updatePageTranslationElement(element: HTMLElement, block: PageTranslati
 }
 
 function renderPageLearningText(element: HTMLElement, text: string, settings: LexiSettings) {
-  if (!settings.selection.pageTranslation.autoTranslateEnglishPages) {
-    element.textContent = text
-    return
-  }
-
   const { min, max } = getDifficultyWindow(settings.replacement.level)
   const candidates = programmerVocabulary
     .filter(candidate => candidate.original.length >= 2 && !isProductVocabularyCandidate(candidate) && candidate.difficulty >= min && candidate.difficulty <= max && text.includes(candidate.original))
@@ -3749,7 +3737,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       url: normalizePageTranslationUrl(),
       title: document.title,
       host: location.hostname,
-      enabled: pageTranslationEnabled,
+      enabled: Boolean(pageTranslationActivation),
       blocks,
       updatedAt: Date.now(),
     })
@@ -3837,7 +3825,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
           ...block,
           url: normalizePageTranslationUrl(),
           host: location.hostname,
-          direction: settings.selection.translationDirection,
+          direction: settings.selection.pageTranslation.direction,
           updatedAt: Date.now(),
         }
       }
@@ -3979,9 +3967,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.addEventListener('scroll', onPageScroll, { passive: true })
   }
 
-  async function startPageTranslation() {
+  async function startPageTranslation(options: { persist?: boolean } = {}) {
     if (pageTranslationEnabled)
-      return { ok: true, message: '当前页面自动翻译已启用。', blocks: pageTranslationSources.size }
+      return { ok: true, message: '当前页面翻译已启用。', blocks: pageTranslationSources.size }
 
     const operation = pageTranslationEpoch.begin()
     pageTranslationOperation = operation
@@ -4003,9 +3991,9 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return failStart('划词翻译场景未启用。')
 
-    const activation = createPageTranslationActivation(settings)
-    if (!activation)
-      return failStart('自动翻译 Regex 无效或为空，请在设置中修正。')
+    const activation = options.persist ? createPageTranslationActivation(settings) : undefined
+    if (options.persist && !activation)
+      return failStart('翻译规则 Regex 无效或为空，请在设置中修正。')
 
     const cache = await restorePageTranslationCache(settings, true, () => !disposed && operation.isCurrent())
     if (disposed || !operation.isCurrent())
@@ -4017,7 +4005,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     pageTranslationActivation = activation
     pageTranslationEnabled = true
-    await savePageTranslationActivation(activation)
+    if (activation)
+      await savePageTranslationActivation(activation)
     if (disposed || !operation.isCurrent())
       return failStart('页面自动翻译已停止。')
 
@@ -4028,8 +4017,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     ensurePageTranslationWatcher(settings)
     schedulePageTranslationScan(settings, 0)
 
-    const scopeLabel = activation.scope === 'site' ? '当前站点' : activation.scope === 'regex' ? 'Regex 匹配页面' : '当前链接'
-    return { ok: true, message: `已启用${scopeLabel}自动翻译：可视区域优先，后续滚动会预加载。`, blocks: pageTranslationSources.size }
+    const scopeLabel = activation?.scope === 'site' ? '当前站点' : activation?.scope === 'regex' ? 'Regex 匹配页面' : activation ? '当前链接' : '本页'
+    return { ok: true, message: `已启用${scopeLabel}双语翻译：可视区域优先，后续滚动会预加载。`, blocks: pageTranslationSources.size }
   }
 
   async function stopPageTranslation() {
@@ -4082,7 +4071,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   async function restoreSavedPageTranslation() {
     const { settings } = await getStoredState()
-    if (disposed || !settings.selection.pageTranslation.autoTranslationConfigured)
+    if (disposed)
       return
 
     const siteHints = detectSpecialSiteHints()
@@ -4839,8 +4828,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const removePageTranslateStartListener = mediaPlaybackOnly
     ? () => {}
-    : listenRuntimeMessage('lexi-page-translate-start', () => {
-      return startPageTranslation()
+    : listenRuntimeMessage<{ persist?: unknown } | undefined>('lexi-page-translate-start', (data) => {
+      return startPageTranslation({ persist: data?.persist === true })
     })
 
   const onQuickTranslate = () => {
@@ -4920,12 +4909,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
     run().catch(handleEnhancerError)
     restoreSavedPageTranslation().catch(handleEnhancerError)
     void getStoredState().then(({ settings }) => {
-      if (settings.selection.pageTranslation.autoTranslationConfigured
-        && settings.selection.pageTranslation.autoTranslateEnglishPages
-        && settings.selection.translationDirection === 'en-to-zh'
-        && isPredominantlyEnglishDocument()) {
-        void startPageTranslation().catch(handleEnhancerError)
-      }
       if (disposed)
         return
 

@@ -64,10 +64,12 @@ async function postAiJson<T>(
   payload: Record<string, unknown>,
   system?: string,
   signal?: AbortSignal,
+  translation = false,
 ): Promise<T | undefined> {
   const result = await runAiScene({
     scene,
     system,
+    translation,
     messages: [{ role: 'user', content: JSON.stringify({ scene, ...payload }) }],
   }, undefined, signal)
 
@@ -81,8 +83,9 @@ async function postAiText(
   onText?: (text: string) => void,
   signal?: AbortSignal,
   normalizeText = normalizeTranslationText,
+  translation = false,
 ): Promise<string | undefined> {
-  const result = await runAiScene({ scene, messages }, (partial) => {
+  const result = await runAiScene({ scene, messages, translation }, (partial) => {
     const visible = normalizeText(partial)
     if (visible)
       onText?.(visible)
@@ -278,6 +281,9 @@ export async function requestSelectionTranslation(
         source: 'ai',
       })
     },
+    undefined,
+    undefined,
+    true,
   )
 
   if (typeof translated !== 'string' || !translated)
@@ -290,12 +296,12 @@ export async function requestSelectionTranslation(
     source: 'ai',
   }
 }
-
 export async function requestPageTranslationBatch(
   settings: LexiSettings,
   items: Array<{ id: string, text: string }>,
   context: string,
   signal?: AbortSignal,
+  direction = settings.selection.pageTranslation.direction,
 ) {
   if (!items.length)
     return []
@@ -307,7 +313,7 @@ export async function requestPageTranslationBatch(
 
     const { translateWithConfiguredEngines } = await import('./translationClient')
     return Promise.all(items.map(async (item) => {
-      const result = await translateWithConfiguredEngines(item.text, settings.selection.translationDirection)
+      const result = await translateWithConfiguredEngines(item.text, direction)
       return { id: item.id, translation: result.text }
     }))
   }
@@ -315,9 +321,9 @@ export async function requestPageTranslationBatch(
   const data = await postAiJson<AiPageTranslationBatchResponse>('selection', {
     items: items.map(item => ({ id: item.id, text: item.text.slice(0, 900) })),
     context: context.slice(0, 900),
-    direction: settings.selection.translationDirection,
+    direction,
     instruction: [
-      getTranslationDirectionInstruction(settings.selection.translationDirection),
+      getTranslationDirectionInstruction(direction),
       'Translate every item independently for page auto-translation.',
       'Keep ids exactly unchanged. Preserve code, URLs, product names and Markdown-like tokens.',
       'Use context only to disambiguate; do not translate context itself.',
@@ -326,7 +332,7 @@ export async function requestPageTranslationBatch(
   }, [
     'You are Lexi page auto-translator. Return only compact JSON matching the requested schema.',
     'Translations must be natural, concise and human-sounding. No markdown, no hidden reasoning.',
-  ].join(' '), signal)
+  ].join(' '), signal, true)
 
   return data?.items
     ?.filter(item => item.id && item.translation)

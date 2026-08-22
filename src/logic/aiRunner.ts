@@ -49,6 +49,8 @@ export interface AiRunRequest {
   messages: AiChatMessage[]
   /** Replaces the scene prompt for callers that need a task-specific system message. */
   system?: string
+  /** Translation must use one provider attempt at a time to respect the shared request cap. */
+  translation?: boolean
 }
 
 export interface AiRunResult {
@@ -374,6 +376,23 @@ async function runProviderRace<T>(
   })
 }
 
+async function runProvidersSequentially<T>(
+  requests: AiRequestContext[],
+  runner: (request: AiRequestContext, signal: AbortSignal, index: number) => Promise<T>,
+): Promise<T | undefined> {
+  const errors: string[] = []
+  for (const [index, request] of requests.entries()) {
+    const controller = new AbortController()
+    try {
+      return await runner(request, controller.signal, index)
+    }
+    catch (error) {
+      errors.push(`${createProviderErrorPrefix(request)}${getErrorMessage(error)}`)
+    }
+  }
+  throw new Error(errors.join('；') || '所有 AI Provider 均不可用')
+}
+
 /**
  * One provider attempt: request, one retry without streaming, then the usage log.
  *
@@ -501,7 +520,7 @@ export async function runAiChat(
     .map(config => (request.system ? { ...config, prompt: request.system } : config))
     .map(createRequestContextFromConfig)
 
-  const run = runProviderRace(contexts, (context, providerSignal, index) => {
+  const runner = (context: AiRequestContext, providerSignal: AbortSignal, index: number) => {
     // Only the first provider paints: two racing streams would interleave on screen.
     const listener = index === 0 ? onText : undefined
     if (!signal)
@@ -519,7 +538,11 @@ export async function runAiChat(
         signal.removeEventListener('abort', abort)
         providerSignal.removeEventListener('abort', abort)
       })
-  })
+  }
+
+  const run = request.translation
+    ? runProvidersSequentially(contexts, runner)
+    : runProviderRace(contexts, runner)
 
   if (!signal)
     return run

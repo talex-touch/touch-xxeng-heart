@@ -2,6 +2,7 @@ import type { AiProtocol } from './providers'
 
 export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni' | 'vocabulary'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
+export type PageTranslationDirection = Exclude<TranslationDirection, 'auto'>
 export type TranslationEngineKind = 'microsoft' | 'google-web'
 
 export interface TranslationEngineConfig {
@@ -125,10 +126,7 @@ export interface PageTranslationSettings {
   prefetchBlocks: number
   batchSize: number
   cacheDays: number
-  /** Automatically translate predominantly English pages into Chinese learning text. */
-  autoTranslateEnglishPages: boolean
-  /** Only a completed user configuration may restore or auto-start page translation. */
-  autoTranslationConfigured: boolean
+  direction: PageTranslationDirection
 }
 
 export interface PageTranslationActivation {

@@ -1,5 +1,5 @@
 import browser from 'webextension-polyfill'
-import { createSerializedTaskQueue } from './asyncQueue'
+import { createConcurrentTaskQueue, createSerializedTaskQueue } from './asyncQueue'
 import { readJsonValue } from './storageJson'
 import { translationUsageStorageKey } from './storageKeys'
 import type { TranslationEngineConfig, TranslationRateLimitSettings } from './types'
@@ -12,6 +12,13 @@ interface TranslationUsageEntry {
 type TranslationQuotaChannel = Pick<TranslationEngineConfig, 'id' | 'label' | 'dailyLimit'>
 
 const usageWrite = createSerializedTaskQueue()
+
+const enqueueTranslationRequest = createConcurrentTaskQueue(3)
+
+/** All translation paths share one FIFO concurrency budget. */
+export function enqueueTranslation<T>(task: () => Promise<T>) {
+  return enqueueTranslationRequest(task)
+}
 const maxStoredUsageEntries = 5000
 
 function startOfLocalDay(now: number) {

@@ -1322,16 +1322,19 @@ async function searchVocabularyWithAi() {
                   </option>
                 </BaseSelect>
               </FormField>
-              <div class="rounded-2 border border-blue-100 bg-blue-50 px-3 py-3 text-12px text-blue-950">
-                <strong>页面双语翻译需手动确认</strong>
-                <p class="mt-1 leading-5 text-blue-800">
-                  请在要翻译的网页打开 Lexi 侧边栏，选择方向后保存并开始。未完成该引导时，Lexi 不会自动翻译任何页面。
-                </p>
-              </div>
-
               <div class="settings-subcard">
-                <h3>页面自动翻译</h3>
-                <p>启用后可按当前链接、站点或自定义 Regex 自动恢复；滚动停止后的可视区域优先翻译，其余内容预加载并缓存。</p>
+                <h3>页面翻译规则</h3>
+                <p>在网页侧边栏保存当前链接、站点或 Regex 规则后，Lexi 才会自动恢复双语翻译。这里仅调整规则的默认参数。</p>
+                <FormField class="mt-4" label="页面翻译方向">
+                  <BaseSelect v-model="lexiSettings.selection.pageTranslation.direction">
+                    <option value="en-to-zh">
+                      英文 → 中文
+                    </option>
+                    <option value="zh-to-en">
+                      中文 → 英文
+                    </option>
+                  </BaseSelect>
+                </FormField>
                 <div class="settings-stack settings-stack--tight">
                   <FormField label="启用范围">
                     <BaseSelect v-model="lexiSettings.selection.pageTranslation.scope">

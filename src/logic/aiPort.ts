@@ -16,6 +16,8 @@ export interface AiRunCommand {
   messages: AiChatMessage[]
   /** Replaces the scene prompt when a caller needs a task-specific system message. */
   system?: string
+  /** Translation work uses the shared translation queue rather than the generic AI queue. */
+  translation?: boolean
 }
 
 /**

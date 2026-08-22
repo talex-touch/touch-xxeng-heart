@@ -93,8 +93,7 @@ const defaultPageTranslationSettings: PageTranslationSettings = {
   prefetchBlocks: 10,
   batchSize: 3,
   cacheDays: 14,
-  autoTranslateEnglishPages: false,
-  autoTranslationConfigured: false,
+  direction: 'en-to-zh',
 }
 
 const defaultTranslationRateLimitSettings = {

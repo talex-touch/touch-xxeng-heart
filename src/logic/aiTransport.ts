@@ -106,7 +106,7 @@ function sendAiCommand<T>(
  * streaming answer without tracking deltas itself.
  */
 export function runAiScene(
-  request: { scene: FeatureScene, messages: AiChatMessage[], system?: string },
+  request: { scene: FeatureScene, messages: AiChatMessage[], system?: string, translation?: boolean },
   onText?: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<AiRunOutcome | undefined> {

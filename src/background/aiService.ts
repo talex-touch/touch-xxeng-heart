@@ -4,7 +4,7 @@ import { aiPortName } from '~/logic/aiPort'
 import { isAbortError, listProviderModels, runAiChat, runAiTest } from '~/logic/aiRunner'
 import type { AiCommand, AiEvent } from '~/logic/aiPort'
 import { createConcurrentTaskQueue } from '~/logic/asyncQueue'
-import { reserveTranslationQuota } from '~/logic/translationQuota'
+import { enqueueTranslation, reserveTranslationQuota } from '~/logic/translationQuota'
 import { readLocalSettings } from '~/logic/settingsSync'
 
 const keepAliveIntervalMs = 20_000
@@ -58,13 +58,13 @@ async function execute(port: Runtime.Port, command: AiCommand, signal: AbortSign
     return
   }
 
-  if (command.type === 'run' && command.scene === 'selection') {
+  if (command.type === 'run' && command.translation) {
     const settings = await readLocalSettings()
     await reserveTranslationQuota(settings.translation.rateLimit, aiTranslationFallbackChannel)
   }
 
   const result = await runAiChat(
-    { scene: command.scene, messages: command.messages, system: command.system },
+    { scene: command.scene, messages: command.messages, system: command.system, translation: command.translation },
     text => post(port, { type: 'delta', text }),
     signal,
   )
@@ -121,13 +121,13 @@ export function startAiService() {
     const controller = new AbortController()
     let started = false
 
-    port.onDisconnect.addListener(() => controller.abort())
     port.onMessage.addListener((raw: unknown) => {
       if (started || !isAiCommand(raw))
         return
 
       started = true
-      void enqueueAiRequest(() => handle(port, raw, controller.signal))
+      const work = () => handle(port, raw, controller.signal)
+      void (raw.type === 'run' && raw.translation ? enqueueTranslation(work) : enqueueAiRequest(work))
     })
   })
 }

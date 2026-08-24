@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.13 - 2026-08-24
+
+Changes since v0.2.12.
+
+### Features
+- add scoped page translation and festival themes (739b434)
+
 ## v0.2.12 - 2026-08-24
 
 Changes since v0.2.11.
@@ -159,6 +166,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

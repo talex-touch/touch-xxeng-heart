@@ -1,5 +1,6 @@
 import browser from 'webextension-polyfill'
 
+import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
@@ -248,6 +249,7 @@ function textNodeAllowed(node: Text) {
 
 function isLexiIgnoredElement(element: Element) {
   return ignoredSelectors.some(selector => element.closest(selector))
+    || isAttachmentElement(element)
     || Boolean(element.closest('[contenteditable]:not([contenteditable="false"])'))
 }
 
@@ -2477,7 +2479,7 @@ function getPageTranslationTargets(settings: LexiSettings, limit = 12) {
   const targets: PageTranslationTarget[] = []
 
   for (const element of elements) {
-    if (isLexiIgnoredElement(element))
+    if (isLexiIgnoredElement(element) || isPageTranslationAttachment(element))
       continue
 
     const text = element.textContent?.replace(/\s+/g, ' ').trim() ?? ''

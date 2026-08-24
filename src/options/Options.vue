@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
-import { computed, defineAsyncComponent, ref, watchEffect } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { defaultSettings, featureLabels, maxVocabularyLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
+import { festivalThemeDetails, festivalThemeOptions, resolveFestivalTheme } from '~/logic/festivalTheme'
+import { pageTranslationAutoSiteOptions } from '~/logic/pageTranslationSites'
 import { fetchProviderModels, testAiProvider, testAiScene } from '~/logic/aiClient'
 import { runAiScene } from '~/logic/aiTransport'
 import { getProtocolLabel, protocolOptions } from '~/logic/providers'
@@ -80,7 +82,8 @@ const activeTabMeta = computed(() => tabs.find(tab => tab.id === activeTab.value
 const newSceneRuleDomain = ref('')
 const translationCardStyle = ref('calm')
 const vocabularySearchQuery = ref('')
-const DevFestivalPreview = __DEV__ ? defineAsyncComponent(() => import('./DevFestivalPreview.vue')) : null
+const effectiveFestivalTheme = computed(() => resolveFestivalTheme(undefined, lexiSettings.value.ui.festivalTheme))
+const festivalThemeDetail = computed(() => festivalThemeDetails[effectiveFestivalTheme.value])
 const domainText = computed({
   get: () => formatDomainList(lexiSettings.value.siteRules.domains),
   set: value => lexiSettings.value.siteRules.domains = parseDomainList(value),
@@ -853,7 +856,7 @@ async function searchVocabularyWithAi() {
 </script>
 
 <template>
-  <main class="options-page">
+  <main class="options-page" :data-lexi-festival="effectiveFestivalTheme">
     <a class="options-skip-link" href="#options-content">跳到主要内容</a>
     <dialog
       ref="httpApprovalDialog"
@@ -1335,6 +1338,19 @@ async function searchVocabularyWithAi() {
                     </option>
                   </BaseSelect>
                 </FormField>
+                <div class="settings-subcard">
+                  <h3>受支持站点自动翻译</h3>
+                  <p>仅在检测到英文正文时自动开始；不扫描全网，也不会覆盖你保存的翻译规则。</p>
+                  <div class="mt-3 grid gap-2">
+                    <BaseCheckbox
+                      v-for="site in pageTranslationAutoSiteOptions"
+                      :key="site.value"
+                      v-model="lexiSettings.selection.pageTranslation.autoSites[site.value]"
+                      :label="site.label"
+                      :hint="site.hint"
+                    />
+                  </div>
+                </div>
                 <div class="settings-stack settings-stack--tight">
                   <FormField label="启用范围">
                     <BaseSelect v-model="lexiSettings.selection.pageTranslation.scope">
@@ -1525,6 +1541,18 @@ async function searchVocabularyWithAi() {
                 label="右下角状态浮标"
                 hint="关闭后不显示“Lexi 已启用”。"
               />
+              <FormField label="节日外观" :hint="festivalThemeDetail.description">
+                <SegmentedControl
+                  v-model="lexiSettings.ui.festivalTheme"
+                  :options="festivalThemeOptions"
+                  label="节日外观"
+                />
+                <div class="festival-theme-preview mt-3" :data-lexi-festival="effectiveFestivalTheme">
+                  <span v-if="festivalThemeDetail.mark" class="festival-theme-preview__mark" aria-hidden="true">{{ festivalThemeDetail.mark }}</span>
+                  <span>{{ festivalThemeDetail.label }}</span>
+                  <span class="festival-theme-preview__description">{{ festivalThemeDetail.description }}</span>
+                </div>
+              </FormField>
               <FormField label="快捷对话键" hint="默认 Ctrl/Command+Shift+M；无选区时会基于整页内容提问。">
                 <BaseInput v-model="lexiSettings.ui.dialogShortcut" placeholder="mod+shift+m" />
               </FormField>
@@ -2460,8 +2488,6 @@ async function searchVocabularyWithAi() {
               </div>
             </div>
           </div>
-
-          <DevFestivalPreview v-if="DevFestivalPreview" />
 
           <dl class="about-facts">
             <div>

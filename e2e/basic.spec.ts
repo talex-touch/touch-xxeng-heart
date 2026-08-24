@@ -50,6 +50,24 @@ test('options exposes site and AI configuration', async ({ page, extensionId }) 
   await expect(page.getByRole('switch', { name: '内容速读' })).toBeVisible()
 })
 
+test('options expose disabled supported auto-translation sites and apply a festival theme', async ({ page, extensionId }) => {
+  await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
+  await page.getByRole('tablist', { name: '基础设置分区' }).getByRole('tab', { name: '划词翻译', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: '受支持站点自动翻译' })).toBeVisible()
+  for (const name of [/Discourse 主题帖/, /GitHub README/, /Reddit 帖子/]) {
+    const checkbox = page.getByRole('checkbox', { name })
+    await expect(checkbox).toBeVisible()
+    await expect(checkbox).not.toBeChecked()
+  }
+
+  await page.getByRole('tab', { name: '自定义', exact: true }).click()
+  const festivalTheme = page.getByRole('group', { name: '节日外观' })
+  await festivalTheme.getByRole('button', { name: '春节', exact: true }).click()
+
+  await expect(page.locator('main.options-page')).toHaveAttribute('data-lexi-festival', 'spring')
+})
+
 test('vocabulary tabs switch between overview and settings', async ({ page, extensionId }) => {
   await page.goto(`chrome-extension://${extensionId}/dist/options/index.html`)
   await page.getByRole('tab', { name: '词库记录' }).click()

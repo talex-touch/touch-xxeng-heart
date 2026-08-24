@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 import { estimateStorageBytes, formatBytes } from '~/logic/format'
 import { openOptionsPage } from '~/logic/browserActions'
+import { festivalThemeDetails, resolveFestivalTheme } from '~/logic/festivalTheme'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
 import type { DensityTierId } from '~/logic/replacementLevels'
@@ -11,7 +12,7 @@ import { exportVocabularyRecords, importVocabularyRecords } from '~/logic/vocabu
 import { maxVocabularyLimit, minVocabularyLimit } from '~/logic/defaults'
 import type { VocabularyReviewResult } from '~/logic/vocabularyRecords'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
-import type { PageTranslationDirection, PageTranslationScope, TranslationDirection } from '~/logic/types'
+import type { PageTranslationAutoSite, PageTranslationDirection, PageTranslationScope, TranslationDirection } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
 type PageContextStatus = 'loading' | 'supported' | 'unsupported'
@@ -45,6 +46,7 @@ const pageTranslationStatus = ref({
   ok: false,
   enabled: false,
   scope: undefined as PageTranslationScope | undefined,
+  autoSite: undefined as PageTranslationAutoSite | undefined,
   blocks: 0,
   cached: false,
   bytes: 0,
@@ -57,6 +59,8 @@ const pageStats = ref<PageStats>({
 })
 
 const activeLevel = computed(() => resolveReplacementLevel(lexiSettings.value.replacement.level))
+const festivalTheme = computed(() => resolveFestivalTheme(undefined, lexiSettings.value.ui.festivalTheme))
+const festivalThemeDetail = computed(() => festivalThemeDetails[festivalTheme.value])
 const difficulty = computed(() => getProgressDifficulty(
   vocabularyRecords.value,
   activeLevel.value.maxDifficulty,
@@ -80,7 +84,9 @@ const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string,
   { value: 'regex', label: 'Regex', description: 'URL 命中正则时自动翻译' },
 ]
 const pageTranslationRunning = computed(() => pageTranslationStatus.value.enabled)
-const pageTranslationStateLabel = computed(() => pageTranslationRunning.value ? '运行中' : '未开启')
+const pageTranslationStateLabel = computed(() => pageTranslationRunning.value
+  ? pageTranslationStatus.value.autoSite ? '平台自动翻译' : '运行中'
+  : '未开启')
 const pageTranslationScopeHint = computed(() => {
   const scope = lexiSettings.value.selection.pageTranslation.scope
   return pageTranslationScopes.find(item => item.value === scope)?.description ?? ''
@@ -377,11 +383,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="min-h-screen bg-white px-4 py-5 text-neutral-950">
+  <main
+    class="min-h-screen bg-white px-4 py-5 text-neutral-950"
+    :class="festivalTheme === 'spring' ? 'bg-emerald-50' : festivalTheme === 'valentine' ? 'bg-rose-50' : festivalTheme === 'halloween' ? 'bg-orange-50' : ''"
+    :data-lexi-festival="festivalTheme"
+  >
     <header class="flex items-start justify-between gap-3 border-b border-neutral-200 pb-3">
       <div class="min-w-0">
-        <div class="text-17px font-700">
-          Lexical
+        <div class="flex items-center gap-2">
+          <div class="text-17px font-700">
+            Lexical
+          </div>
+          <span v-if="festivalThemeDetail.mark" class="rounded-full px-1.5 py-0.5 text-10px font-700" :class="festivalTheme === 'spring' ? 'bg-emerald-700 text-white' : festivalTheme === 'valentine' ? 'bg-rose-700 text-white' : 'bg-orange-700 text-white'">{{ festivalThemeDetail.mark }}</span>
         </div>
         <div class="mt-1 truncate text-12px text-neutral-500">
           等级 {{ activeLevel.level }} · {{ activeLevel.shortLabel }} · 已记录 {{ vocabularyRecords.length }} 词
@@ -482,7 +495,7 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <p class="mt-2 text-11px leading-5 text-neutral-500">
-            选择方向与范围后保存为规则。Lexi 只会在匹配规则的页面自动翻译。
+            {{ pageTranslationStatus.autoSite ? '当前页命中已启用的平台自动翻译，仅处理英文正文。' : '选择方向与范围后保存为规则。Lexi 只会在匹配规则的页面自动翻译。' }}
           </p>
           <SegmentedControl v-model="lexiSettings.selection.pageTranslation.direction" class="mt-3" :options="pageTranslationDirections" label="页面翻译方向" />
           <SegmentedControl v-model="lexiSettings.selection.pageTranslation.scope" class="mt-2.5" :options="pageTranslationScopes" label="页面翻译启用范围" />

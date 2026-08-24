@@ -1,6 +1,7 @@
 import browser from 'webextension-polyfill'
 
 import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
+import { findEnabledEnglishAutoPageTranslationSite, getPageTranslationAutoSiteSelectors } from '~/logic/pageTranslationSites'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
@@ -28,7 +29,7 @@ import type { SiteDetectionHints } from '~/logic/siteRules'
 import { pageTranslationActivationsStorageKey, pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
 import { getVocabularyId, isProductVocabularyCandidate, isReplacementSuppressed, setVocabularyArchived, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
-import type { LexiSettings, PageTranslationActivation, PageTranslationBlock, PageTranslationCache, PageTranslationMemory, PageTranslationScope, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
+import type { LexiSettings, PageTranslationActivation, PageTranslationAutoSite, PageTranslationBlock, PageTranslationCache, PageTranslationMemory, PageTranslationScope, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
 interface EnhancerEvents {
   onStats: (stats: PageStats) => void
@@ -2470,10 +2471,12 @@ function getPageTranslationPriority(element: HTMLElement): Pick<PageTranslationT
   }
 }
 
-function getPageTranslationTargets(settings: LexiSettings, limit = 12) {
-  const selectors = location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
-    ? '[data-testid="tweetText"], article div[lang]'
-    : 'article p, article div[lang], main p, main li, p, li'
+function getPageTranslationTargets(settings: LexiSettings, limit = 12, autoSite?: PageTranslationAutoSite) {
+  const selectors = autoSite
+    ? getPageTranslationAutoSiteSelectors(autoSite)
+    : location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
+      ? '[data-testid="tweetText"], article div[lang]'
+      : 'article p, article div[lang], main p, main li, p, li'
   const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors)).slice(0, 420)
   const seen = new Set<string>()
   const targets: PageTranslationTarget[] = []
@@ -2522,14 +2525,19 @@ async function savePageTranslationCache(cache: PageTranslationCache) {
   await write
 }
 
-async function restorePageTranslationCache(settings: LexiSettings, force = false, isActive: () => boolean = () => true) {
+async function restorePageTranslationCache(
+  settings: LexiSettings,
+  force = false,
+  isActive: () => boolean = () => true,
+  autoSite?: PageTranslationAutoSite,
+) {
   const cache = await readPageTranslationCache()
   if (!isActive() || (!force && !cache?.enabled) || !cache?.blocks.length)
     return cache
 
   ensurePageStyles(settings.ui.customCss)
   removePageTranslationElements()
-  const targets = getPageTranslationTargets(settings, cache.blocks.length + 8)
+  const targets = getPageTranslationTargets(settings, cache.blocks.length + 8, autoSite)
   for (const block of cache.blocks) {
     if (!isActive())
       return cache
@@ -3581,6 +3589,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const pageTranslationEpoch = createOperationEpoch()
   let pageTranslationOperation: OperationEpochHandle | undefined
   let pageTranslationActivation: PageTranslationActivation | undefined
+  let pageTranslationAutoSite: PageTranslationAutoSite | undefined
   const pageTranslationSources = new Map<string, PageTranslationBlock>()
   const pageTranslationInFlight = new Map<string, number>()
   const recentSelectionKeys = new Set<string>()
@@ -3868,7 +3877,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
         return
 
       const limit = Math.min(getPageTranslationLimit(settings), remainingPageBudget)
-      const targets = getPageTranslationTargets(settings, limit)
+      const targets = getPageTranslationTargets(settings, limit, pageTranslationAutoSite)
       if (!targets.length)
         return
 
@@ -3993,6 +4002,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return failStart('划词翻译场景未启用。')
 
+    pageTranslationAutoSite = undefined
     const activation = options.persist ? createPageTranslationActivation(settings) : undefined
     if (options.persist && !activation)
       return failStart('翻译规则 Regex 无效或为空，请在设置中修正。')
@@ -4054,6 +4064,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (pageTranslationActivation)
       await removePageTranslationActivation(pageTranslationActivation)
     pageTranslationActivation = undefined
+    pageTranslationAutoSite = undefined
 
     return { ok: true, message: '已停止当前自动翻译范围。' }
   }
@@ -4065,6 +4076,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       ok: true,
       enabled: Boolean(pageTranslationEnabled || activation || cache?.enabled),
       scope: pageTranslationEnabled ? pageTranslationActivation?.scope : activation?.scope,
+      autoSite: pageTranslationEnabled ? pageTranslationAutoSite : undefined,
       blocks: pageTranslationSources.size || cache?.blocks.length || 0,
       cached: Boolean(pageTranslationSources.size || cache?.blocks.length),
       bytes: cache ? new Blob([JSON.stringify(cache)]).size : 0,
@@ -4084,18 +4096,27 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (disposed)
       return
 
-    const cache = await restorePageTranslationCache(settings, Boolean(activation), () => !disposed)
-    if (disposed)
+    const autoSite = activation || settings.selection.pageTranslation.direction !== 'en-to-zh'
+      ? undefined
+      : findEnabledEnglishAutoPageTranslationSite(
+        document,
+        location.href,
+        siteHints,
+        settings.selection.pageTranslation.autoSites,
+      )
+    if (!activation && !autoSite)
       return
 
-    if (!activation && !cache?.enabled)
+    const cache = await restorePageTranslationCache(settings, true, () => !disposed, autoSite)
+    if (disposed)
       return
 
     pageTranslationSources.clear()
     for (const block of cache?.blocks ?? [])
       pageTranslationSources.set(block.id, block)
 
-    pageTranslationActivation = activation ?? createPageTranslationActivation(settings)
+    pageTranslationActivation = activation
+    pageTranslationAutoSite = autoSite
     pageTranslationEnabled = true
     pageTranslationOperation = pageTranslationEpoch.begin()
     pageTranslationRunId = pageTranslationOperation.id
@@ -4858,8 +4879,32 @@ export function startPageEnhancer(events: EnhancerEvents) {
     })
 
   const onStorageChanged = (changes: Record<string, browser.Storage.StorageChange>, areaName: string) => {
-    if (areaName === 'local' && changes[settingsStorageKey])
-      refreshStats()
+    if (areaName !== 'local' || !changes[settingsStorageKey])
+      return
+
+    refreshStats()
+    if (mediaPlaybackOnly || pageTranslationActivation)
+      return
+
+    void getStoredState().then(async ({ settings }) => {
+      if (disposed)
+        return
+
+      const hints = detectSpecialSiteHints()
+      const autoSite = settings.selection.enabled
+        && settings.selection.pageTranslation.direction === 'en-to-zh'
+        && isSceneEnabled(settings, 'selection', location.href, hints)
+        ? findEnabledEnglishAutoPageTranslationSite(document, location.href, hints, settings.selection.pageTranslation.autoSites)
+        : undefined
+
+      if (pageTranslationAutoSite && !autoSite) {
+        await stopPageTranslation()
+        return
+      }
+
+      if (!pageTranslationEnabled && autoSite)
+        await restoreSavedPageTranslation()
+    }).catch(handleEnhancerError)
   }
 
   const stop = () => {
@@ -4894,7 +4939,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     closeMediaToolbar()
   }
 
-  const handleEnhancerError = (error: unknown) => {
+  function handleEnhancerError(error: unknown) {
     const message = typeof error === 'object' && error !== null && 'message' in error ? String(error.message) : String(error)
     if (/Extension context invalidated/i.test(message)) {
       stop()

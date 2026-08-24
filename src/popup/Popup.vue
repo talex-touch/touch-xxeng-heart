@@ -2,20 +2,30 @@
 import { computed } from 'vue'
 import { openOptionsPage } from '~/logic/browserActions'
 import { resolveReplacementLevel } from '~/logic/replacementLevels'
+import { festivalThemeDetails, resolveFestivalTheme } from '~/logic/festivalTheme'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 
 const appVersion = __VERSION__
 
 const totalRecords = computed(() => vocabularyRecords.value.length)
 const activeLevel = computed(() => resolveReplacementLevel(lexiSettings.value.replacement.level))
+const festivalTheme = computed(() => resolveFestivalTheme(undefined, lexiSettings.value.ui.festivalTheme))
+const festivalThemeDetail = computed(() => festivalThemeDetails[festivalTheme.value])
 </script>
 
 <template>
-  <main class="w-[320px] bg-white px-4 py-4 text-neutral-950">
+  <main
+    class="w-[320px] bg-white px-4 py-4 text-neutral-950"
+    :class="festivalTheme === 'spring' ? 'bg-emerald-50' : festivalTheme === 'valentine' ? 'bg-rose-50' : festivalTheme === 'halloween' ? 'bg-orange-50' : ''"
+    :data-lexi-festival="festivalTheme"
+  >
     <header class="flex items-start justify-between gap-3">
       <div>
-        <div class="text-15px font-700">
-          Lexi
+        <div class="flex items-center gap-1.5">
+          <div class="text-15px font-700">
+            Lexi
+          </div>
+          <span v-if="festivalThemeDetail.mark" class="rounded-full px-1.5 py-0.5 text-10px font-700" :class="festivalTheme === 'spring' ? 'bg-emerald-700 text-white' : festivalTheme === 'valentine' ? 'bg-rose-700 text-white' : 'bg-orange-700 text-white'">{{ festivalThemeDetail.mark }}</span>
         </div>
         <div class="mt-1 text-12px text-neutral-500">
           网页英语渐进学习 · v{{ appVersion }}

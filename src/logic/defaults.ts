@@ -1,6 +1,7 @@
 import { clampReplacementDensity, clampReplacementLevel, defaultReplacementLevel, densityTiers, levelFromLegacyDifficulty } from './replacementLevels'
 import type { AiConnectionConfig, AiProviderConfig, AiSceneConfig, AiSettings, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings, TranslationSettings } from './types'
 import { normalizeTranslationEngines } from './translationEngines'
+import { normalizeFestivalThemePreference } from './festivalTheme'
 
 /** Settings written before the 1-9 learner level replaced the 1-5 difficulty ceiling. */
 type StoredReplacementSettings = Partial<ReplacementSettings> & { difficulty?: number }
@@ -94,6 +95,11 @@ const defaultPageTranslationSettings: PageTranslationSettings = {
   batchSize: 3,
   cacheDays: 14,
   direction: 'en-to-zh',
+  autoSites: {
+    'discourse': false,
+    'github-readme': false,
+    'reddit': false,
+  },
 }
 
 const defaultTranslationRateLimitSettings = {
@@ -238,6 +244,7 @@ export const defaultSettings: LexiSettings = {
     dialogShortcut: 'mod+shift+m',
     mediaModifierShortcut: 'meta+shift',
     customCss: '',
+    festivalTheme: 'auto',
   },
   contentDigest: {
     enabled: true,
@@ -414,6 +421,11 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       pageTranslation: {
         ...defaultSettings.selection.pageTranslation,
         ...value?.selection?.pageTranslation,
+        autoSites: {
+          'discourse': value?.selection?.pageTranslation?.autoSites?.discourse === true,
+          'github-readme': value?.selection?.pageTranslation?.autoSites?.['github-readme'] === true,
+          'reddit': value?.selection?.pageTranslation?.autoSites?.reddit === true,
+        },
       },
     },
     translation: {
@@ -438,6 +450,7 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       ...defaultSettings.ui,
       ...value?.ui,
       dialogShortcut: uiDialogShortcut,
+      festivalTheme: normalizeFestivalThemePreference(value?.ui?.festivalTheme),
     },
     contentDigest: {
       ...defaultSettings.contentDigest,

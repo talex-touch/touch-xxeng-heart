@@ -3,6 +3,8 @@ import type { AiProtocol } from './providers'
 export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni' | 'vocabulary'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
 export type PageTranslationDirection = Exclude<TranslationDirection, 'auto'>
+export type PageTranslationAutoSite = 'discourse' | 'github-readme' | 'reddit'
+export type PageTranslationAutoSites = Record<PageTranslationAutoSite, boolean>
 export type TranslationEngineKind = 'microsoft' | 'google-web'
 
 export interface TranslationEngineConfig {
@@ -127,6 +129,7 @@ export interface PageTranslationSettings {
   batchSize: number
   cacheDays: number
   direction: PageTranslationDirection
+  autoSites: PageTranslationAutoSites
 }
 
 export interface PageTranslationActivation {
@@ -239,11 +242,15 @@ export interface SyncSettings {
   lastError: string
 }
 
+export type FestivalTheme = 'default' | 'spring' | 'valentine' | 'halloween'
+export type FestivalThemePreference = 'auto' | FestivalTheme
+
 export interface UiSettings {
   showFloatingStatus: boolean
   dialogShortcut: string
   mediaModifierShortcut: string
   customCss: string
+  festivalTheme: FestivalThemePreference
 }
 
 export interface ContentDigestSettings {

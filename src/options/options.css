@@ -1133,6 +1133,81 @@
   }
 }
 
+.festival-theme-preview {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-inline: 1px;
+  padding: 9px 11px;
+  color: var(--options-ink-2);
+  background: var(--options-subtle, #f5f7fa);
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.festival-theme-preview__mark {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #fff;
+  background: var(--options-accent);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.festival-theme-preview__description {
+  min-width: 0;
+  margin-left: auto;
+  color: var(--options-ink-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+.options-page[data-lexi-festival='spring'] {
+  --options-accent: #2d7a48;
+  --options-accent-soft: #e9f6e9;
+}
+
+.options-page[data-lexi-festival='valentine'] {
+  --options-accent: #b13f68;
+  --options-accent-soft: #fcedf2;
+}
+
+.options-page[data-lexi-festival='halloween'] {
+  --options-accent: #9c5418;
+  --options-accent-soft: #fff0df;
+}
+
+.options-page[data-lexi-festival='spring'] .festival-theme-preview {
+  color: #285d37;
+  background: #f0f8ec;
+}
+
+.options-page[data-lexi-festival='valentine'] .festival-theme-preview {
+  color: #7f2545;
+  background: #fff1f5;
+}
+
+.options-page[data-lexi-festival='halloween'] .festival-theme-preview {
+  color: #6a3a16;
+  background: #fff4e8;
+}
+
+@media (max-width: 640px) {
+  .festival-theme-preview {
+    align-items: flex-start;
+  }
+
+  .festival-theme-preview__description {
+    margin-left: 0;
+    text-align: left;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .options-page *,
   .options-page *::before,

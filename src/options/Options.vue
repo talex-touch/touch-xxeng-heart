@@ -3,7 +3,6 @@ import { useMediaQuery } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
 import { defaultSettings, featureLabels, maxVocabularyLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
 import { festivalThemeDetails, festivalThemeOptions, resolveFestivalTheme } from '~/logic/festivalTheme'
-import { pageTranslationAutoSiteOptions } from '~/logic/pageTranslationSites'
 import { fetchProviderModels, testAiProvider, testAiScene } from '~/logic/aiClient'
 import { runAiScene } from '~/logic/aiTransport'
 import { getProtocolLabel, protocolOptions } from '~/logic/providers'
@@ -19,7 +18,7 @@ import { exportVocabularyRecords, importVocabularyRecords } from '~/logic/vocabu
 import { testConfiguredTranslationEngine } from '~/logic/translationClient'
 import type { DensityTierId } from '~/logic/replacementLevels'
 import type { ProviderModel } from '~/logic/providers'
-import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, PageTranslationScope, SiteSceneRule, SpecialSiteProfile, TranslationDirection, TranslationEngineConfig, TranslationEngineKind } from '~/logic/types'
+import type { AiProviderConfig, AiTestResult, FeatureScene, ForumDigestCacheEntry, ForumDigestResult, SiteSceneRule, SpecialSiteProfile, TranslationDirection, TranslationEngineConfig, TranslationEngineKind } from '~/logic/types'
 
 type OptionsTab = 'settings' | 'customization' | 'vocabulary' | 'ai' | 'diagnostics' | 'about'
 type VocabularyTab = 'overview' | 'settings'
@@ -53,11 +52,6 @@ const translationDirections: Array<{ value: TranslationDirection, label: string 
   { value: 'zh-to-en', label: '中译英' },
   { value: 'en-to-zh', label: '英译中' },
 ]
-const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string }> = [
-  { value: 'url', label: '当前链接' },
-  { value: 'site', label: '当前站点' },
-  { value: 'regex', label: '自定义 Regex' },
-]
 const densityTierOptions = densityTiers.map(tier => ({ value: tier.id, label: tier.label }))
 const replacementDisplayOptions = [
   { value: 'english', label: '英语' },
@@ -76,6 +70,13 @@ const activeVocabularyTab = ref<VocabularyTab>('overview')
 const appVersion = __VERSION__
 const activeTab = ref<OptionsTab>('settings')
 const activeSettingsSection = ref<SettingsSection>('learning')
+
+// Deep-link targets used by the side panel, e.g. #translation opens the page-translation rules.
+const initialHash = location.hash.replace(/^#/, '')
+if (settingsSections.some(section => section.id === initialHash))
+  activeSettingsSection.value = initialHash as SettingsSection
+else if (tabs.some(tab => tab.id === initialHash))
+  activeTab.value = initialHash as OptionsTab
 const activeAiSection = ref<AiSection>('special')
 const isCompactLayout = useMediaQuery('(max-width: 860px)')
 const activeTabMeta = computed(() => tabs.find(tab => tab.id === activeTab.value) ?? tabs[0])
@@ -1302,8 +1303,8 @@ async function searchVocabularyWithAi() {
           <section v-show="activeTab === 'settings' && activeSettingsSection === 'translation'" class="settings-card">
             <header class="settings-card__head">
               <div>
-                <h2>划词与翻译</h2>
-                <p>控制划词翻译的触发方式、翻译方向，以及整页自动翻译。</p>
+                <h2>划词翻译</h2>
+                <p>选中文本时的即时翻译行为。</p>
               </div>
             </header>
 
@@ -1325,61 +1326,20 @@ async function searchVocabularyWithAi() {
                   </option>
                 </BaseSelect>
               </FormField>
-              <div class="settings-subcard">
-                <h3>页面翻译规则</h3>
-                <p>在网页侧边栏保存当前链接、站点或 Regex 规则后，Lexi 才会自动恢复双语翻译。这里仅调整规则的默认参数。</p>
-                <FormField class="mt-4" label="页面翻译方向">
-                  <BaseSelect v-model="lexiSettings.selection.pageTranslation.direction">
-                    <option value="en-to-zh">
-                      英文 → 中文
-                    </option>
-                    <option value="zh-to-en">
-                      中文 → 英文
-                    </option>
-                  </BaseSelect>
-                </FormField>
-                <div class="settings-subcard">
-                  <h3>受支持站点自动翻译</h3>
-                  <p>仅在检测到英文正文时自动开始；不扫描全网，也不会覆盖你保存的翻译规则。</p>
-                  <div class="mt-3 grid gap-2">
-                    <BaseCheckbox
-                      v-for="site in pageTranslationAutoSiteOptions"
-                      :key="site.value"
-                      v-model="lexiSettings.selection.pageTranslation.autoSites[site.value]"
-                      :label="site.label"
-                      :hint="site.hint"
-                    />
-                  </div>
-                </div>
-                <div class="settings-stack settings-stack--tight">
-                  <FormField label="启用范围">
-                    <BaseSelect v-model="lexiSettings.selection.pageTranslation.scope">
-                      <option v-for="item in pageTranslationScopes" :key="item.value" :value="item.value">
-                        {{ item.label }}
-                      </option>
-                    </BaseSelect>
-                  </FormField>
-                  <FormField v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" label="URL Regex">
-                    <BaseInput v-model="lexiSettings.selection.pageTranslation.regex" class="font-mono" placeholder="^https://docs\\.example\\.com/" />
-                  </FormField>
-                  <div class="settings-fields">
-                    <FormField label="合并请求段数" compact>
-                      <BaseInput v-model="lexiSettings.selection.pageTranslation.batchSize" type="number" :min="1" :max="8" />
-                    </FormField>
-                    <FormField label="预加载段数" compact>
-                      <BaseInput v-model="lexiSettings.selection.pageTranslation.prefetchBlocks" type="number" :min="0" :max="40" />
-                    </FormField>
-                    <FormField label="单页缓存上限" compact>
-                      <BaseInput v-model="lexiSettings.selection.pageTranslation.maxBlocksPerPage" type="number" :min="10" :max="300" />
-                    </FormField>
-                    <FormField label="缓存天数" compact>
-                      <BaseInput v-model="lexiSettings.selection.pageTranslation.cacheDays" type="number" :min="1" :max="90" />
-                    </FormField>
-                  </div>
-                </div>
-              </div>
             </div>
           </section>
+
+          <PageTranslationAutoSitesSettings v-show="activeTab === 'settings' && activeSettingsSection === 'translation'" />
+
+          <PageTranslationRulesList v-show="activeTab === 'settings' && activeSettingsSection === 'translation'" />
+
+          <CollapsibleSection
+            v-show="activeTab === 'settings' && activeSettingsSection === 'translation'"
+            title="高级与本地数据"
+            hint="整页翻译的性能与缓存"
+          >
+            <PageTranslationAdvancedSettings />
+          </CollapsibleSection>
 
           <section v-show="activeTab === 'settings' && activeSettingsSection === 'digest'" class="settings-card">
             <header class="settings-card__head">

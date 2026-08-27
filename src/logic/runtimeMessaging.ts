@@ -8,6 +8,7 @@ export type LexiRuntimeMessageType =
   | 'lexi-page-translate-start'
   | 'lexi-page-translate-status'
   | 'lexi-page-translate-stop'
+  | 'lexi-page-translate-pause'
   | 'lexi-record-analytics'
   | 'lexi-release-digest-lease'
   | 'lexi-test-translation-engine'

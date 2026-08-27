@@ -5,6 +5,7 @@ import { estimateStorageBytes, formatBytes } from '~/logic/format'
 import { openOptionsPage } from '~/logic/browserActions'
 import { festivalThemeDetails, resolveFestivalTheme } from '~/logic/festivalTheme'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
+import { pageTranslationAutoSiteOptions } from '~/logic/pageTranslationSites'
 import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
 import type { DensityTierId } from '~/logic/replacementLevels'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, reviewVocabularyRecord } from '~/logic/vocabularyRecords'
@@ -45,6 +46,8 @@ const pageTranslationFailed = ref(false)
 const pageTranslationStatus = ref({
   ok: false,
   enabled: false,
+  running: false,
+  origin: undefined as 'manual' | 'restored' | 'auto' | undefined,
   scope: undefined as PageTranslationScope | undefined,
   autoSite: undefined as PageTranslationAutoSite | undefined,
   blocks: 0,
@@ -78,39 +81,91 @@ const storageSize = computed(() => formatBytes(estimateStorageBytes(vocabularyRe
 const densityTierOptions = densityTiers.map(tier => ({ value: tier.id, label: tier.label }))
 const activeDensityTier = computed(() => resolveDensityTier(lexiSettings.value.replacement.density))
 const effectiveDensityLabel = computed(() => formatDensityPercent(getEffectiveDensity(lexiSettings.value.replacement)))
-const pageTranslationScopes: Array<{ value: PageTranslationScope, label: string, description: string }> = [
-  { value: 'url', label: '当前链接', description: '只在当前 URL 自动恢复' },
-  { value: 'site', label: '整个站点', description: '同一域名下都自动翻译' },
-  { value: 'regex', label: 'Regex', description: 'URL 命中正则时自动翻译' },
-]
-const pageTranslationRunning = computed(() => pageTranslationStatus.value.enabled)
-const pageTranslationStateLabel = computed(() => pageTranslationRunning.value
-  ? pageTranslationStatus.value.autoSite ? '平台自动翻译' : '运行中'
-  : '未开启')
-const pageTranslationScopeHint = computed(() => {
-  const scope = lexiSettings.value.selection.pageTranslation.scope
-  return pageTranslationScopes.find(item => item.value === scope)?.description ?? ''
-})
-const pageTranslationStorageLabel = computed(() => {
-  return pageTranslationStatus.value.cached
-    ? `可恢复 · ${formatBytes(pageTranslationStatus.value.bytes)}`
-    : '暂无缓存'
-})
-const pageTranslationCacheLabel = computed(() => `已缓存 ${pageTranslationStatus.value.blocks} 段`)
-const pageTranslationMetaLabel = computed(() =>
-  `${pageTranslationStorageLabel.value} · 预加载 ${lexiSettings.value.selection.pageTranslation.prefetchBlocks} 段`,
-)
-// The content script reports cached blocks but no page total, so the bar tracks coverage
-// state (running / restorable / empty) rather than a made-up percentage.
-const pageTranslationTrackClass = computed(() => {
-  if (pageTranslationLoading.value)
-    return 'w-full animate-pulse bg-blue-300'
-  if (pageTranslationRunning.value)
-    return 'w-full bg-blue-600'
-  if (pageTranslationStatus.value.cached)
-    return 'w-full bg-neutral-300'
+type PageTranslationStartScope = 'session' | PageTranslationScope
+type PageTranslationMode = 'idle' | 'manual' | 'restored' | 'auto'
 
-  return 'w-0'
+const startChooserOpen = ref(false)
+const startScope = ref<PageTranslationStartScope>('session')
+const startRegex = ref('')
+const startDirection = ref<PageTranslationDirection>('en-to-zh')
+const startScopeOptions: Array<{ value: PageTranslationStartScope, label: string }> = [
+  { value: 'session', label: '仅本次' },
+  { value: 'url', label: '当前链接' },
+  { value: 'site', label: '当前站点' },
+  { value: 'regex', label: 'Regex' },
+]
+const startScopeHints: Record<PageTranslationStartScope, string> = {
+  session: '只翻译这一次，不保存规则，关闭或刷新后不再恢复。',
+  url: '保存规则：此链接下次访问自动恢复翻译。',
+  site: '保存规则：该站点下的页面都自动翻译。',
+  regex: '保存规则：URL 命中正则的页面自动翻译。',
+}
+const startScopeHint = computed(() => startScopeHints[startScope.value])
+const startButtonLabel = computed(() => {
+  if (startScope.value === 'session')
+    return '仅本次翻译'
+  if (startScope.value === 'url')
+    return '保存当前链接规则并翻译'
+  if (startScope.value === 'site')
+    return '保存当前站点规则并翻译'
+
+  return '保存 Regex 规则并翻译'
+})
+const startConfirmDisabled = computed(() =>
+  pageTranslationLoading.value || (startScope.value === 'regex' && !startRegex.value.trim()),
+)
+
+const pageTranslationRunning = computed(() => pageTranslationStatus.value.running)
+const pageTranslationMode = computed<PageTranslationMode>(() => {
+  const status = pageTranslationStatus.value
+  if (!status.running)
+    return 'idle'
+  if (status.autoSite)
+    return 'auto'
+  if (status.origin === 'restored')
+    return 'restored'
+
+  return 'manual'
+})
+const pageTranslationStateLabel = computed(() => ({
+  idle: '未运行',
+  manual: '正在翻译',
+  restored: '已按规则恢复',
+  auto: '平台自动翻译',
+})[pageTranslationMode.value])
+const pageTranslationAutoSiteLabel = computed(() => {
+  const site = pageTranslationStatus.value.autoSite
+  return site ? pageTranslationAutoSiteOptions.find(option => option.value === site)?.label ?? site : ''
+})
+const pageTranslationScopeDescription = computed(() => {
+  const scope = pageTranslationStatus.value.scope
+  if (scope === 'site')
+    return hostLabel.value ? `${hostLabel.value} 站点` : '当前站点'
+  if (scope === 'regex')
+    return 'Regex 匹配页面'
+
+  return '当前链接'
+})
+const pageTranslationImpactLine = computed(() => {
+  const mode = pageTranslationMode.value
+  if (mode === 'auto')
+    return `已命中${pageTranslationAutoSiteLabel.value}自动翻译，只处理英文正文。`
+  if (mode === 'restored')
+    return `已按保存规则恢复：${pageTranslationScopeDescription.value}。`
+  if (mode === 'manual') {
+    return pageTranslationStatus.value.scope
+      ? `已保存为${pageTranslationScopeDescription.value}的规则，下次访问自动恢复。`
+      : '仅本次翻译；关闭或刷新后不再恢复。'
+  }
+
+  return '不会自动翻译任何页面；启动时可选择仅本次或保存为规则。'
+})
+const pageTranslationFeedbackLine = computed(() => {
+  if (!pageTranslationRunning.value)
+    return ''
+
+  const blocks = pageTranslationStatus.value.blocks
+  return blocks > 0 ? `已翻译 ${blocks} 段` : '正在处理可见内容…'
 })
 const dailyRecommendations = computed(() => getTodayRecommendations(
   vocabularyRecords.value,
@@ -179,7 +234,10 @@ function resetPageContextState() {
   pageTranslationStatus.value = {
     ok: false,
     enabled: false,
+    running: false,
+    origin: undefined,
     scope: undefined,
+    autoSite: undefined,
     blocks: 0,
     cached: false,
     bytes: 0,
@@ -255,7 +313,7 @@ function formatBridgeError(error: unknown) {
   return message || '无法连接当前页面'
 }
 
-async function controlPageTranslation(action: 'start' | 'stop') {
+async function controlPageTranslation(action: 'start' | 'stop' | 'pause', data: Record<string, unknown> = {}) {
   let tab: Awaited<ReturnType<typeof getActiveTab>>
   try {
     tab = await getActiveTab()
@@ -274,8 +332,8 @@ async function controlPageTranslation(action: 'start' | 'stop') {
   try {
     const result = await sendTabRuntimeMessage<{ message: string }>(
       tab.id,
-      action === 'start' ? 'lexi-page-translate-start' : 'lexi-page-translate-stop',
-      action === 'start' ? { persist: true } : {},
+      action === 'start' ? 'lexi-page-translate-start' : action === 'pause' ? 'lexi-page-translate-pause' : 'lexi-page-translate-stop',
+      data,
     )
     pageTranslationMessage.value = result.message
     await refreshPageTranslationStatus()
@@ -291,10 +349,44 @@ async function controlPageTranslation(action: 'start' | 'stop') {
   }
 }
 
-// One primary action instead of the old 启用 / 停止 pair: the button always performs the
-// move that makes sense for the current state.
-function togglePageTranslation() {
-  return controlPageTranslation(pageTranslationRunning.value ? 'stop' : 'start')
+function openStartChooser() {
+  // Session-only is always the default so a persistent rule never appears by accident.
+  startScope.value = 'session'
+  startRegex.value = lexiSettings.value.selection.pageTranslation.regex
+  startDirection.value = lexiSettings.value.selection.pageTranslation.direction
+  startChooserOpen.value = true
+}
+
+async function confirmStartPageTranslation() {
+  const scope = startScope.value
+  const persist = scope !== 'session'
+  const regex = startRegex.value.trim()
+  const pageTranslation = lexiSettings.value.selection.pageTranslation
+  pageTranslation.direction = startDirection.value
+  if (persist) {
+    pageTranslation.scope = scope as PageTranslationScope
+    if (scope === 'regex')
+      pageTranslation.regex = regex
+  }
+
+  await controlPageTranslation('start', {
+    persist,
+    direction: startDirection.value,
+    ...(persist ? { scope, ...(scope === 'regex' ? { regex } : {}) } : {}),
+  })
+  startChooserOpen.value = false
+}
+
+function stopCurrentPageTranslation() {
+  return controlPageTranslation('stop')
+}
+
+function pauseCurrentPageTranslation() {
+  return controlPageTranslation('pause')
+}
+
+function openTranslationSettings() {
+  openOptionsPage('translation')
 }
 
 function exportRecords() {
@@ -495,33 +587,54 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <p class="mt-2 text-11px leading-5 text-neutral-500">
-            {{ pageTranslationStatus.autoSite ? '当前页命中已启用的平台自动翻译，仅处理英文正文。' : '选择方向与范围后保存为规则。Lexi 只会在匹配规则的页面自动翻译。' }}
+            {{ pageTranslationImpactLine }}
           </p>
-          <SegmentedControl v-model="lexiSettings.selection.pageTranslation.direction" class="mt-3" :options="pageTranslationDirections" label="页面翻译方向" />
-          <SegmentedControl v-model="lexiSettings.selection.pageTranslation.scope" class="mt-2.5" :options="pageTranslationScopes" label="页面翻译启用范围" />
-          <p class="mt-2 text-11px leading-5 text-neutral-500">
-            {{ pageTranslationScopeHint }}；滚动到的段落优先翻译。
+          <p v-if="pageTranslationFeedbackLine" class="mt-1 text-11px leading-5 text-neutral-500" aria-live="polite">
+            {{ pageTranslationFeedbackLine }}
           </p>
 
-          <label v-if="lexiSettings.selection.pageTranslation.scope === 'regex'" class="mt-2 block">
-            <span class="text-11px text-neutral-500">URL Regex</span>
-            <input v-model.trim="lexiSettings.selection.pageTranslation.regex" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 font-mono text-12px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
-          </label>
-
-          <div class="mt-3 border-t border-neutral-200 pt-3">
-            <div class="flex items-center justify-between gap-2 text-11px">
-              <span class="text-neutral-950">{{ pageTranslationCacheLabel }}</span>
-              <span class="truncate text-neutral-500">{{ pageTranslationMetaLabel }}</span>
+          <template v-if="pageTranslationMode === 'idle'">
+            <div v-if="!startChooserOpen" class="mt-3 flex gap-2">
+              <button type="button" class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" @click="openStartChooser">
+                <span class="i-lucide-play block h-[13px] w-[13px]" />
+                翻译此页
+              </button>
+              <button type="button" class="h-9 w-9 flex shrink-0 items-center justify-center rounded-2.5 border border-neutral-200 bg-white text-neutral-500 cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" title="刷新状态" aria-label="刷新状态" @click="refreshPageTranslationStatus">
+                <span class="i-lucide-rotate-cw block h-[15px] w-[15px]" />
+              </button>
             </div>
-            <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-neutral-200" aria-hidden="true">
-              <div class="h-full rounded-full transition-all duration-200" :class="pageTranslationTrackClass" />
+            <div v-else class="mt-3 rounded-2.5 border border-neutral-200 bg-neutral-50 px-2.5 py-2.5">
+              <SegmentedControl v-model="startScope" :options="startScopeOptions" label="翻译范围" />
+              <p class="mt-1.5 text-11px leading-5 text-neutral-500">
+                {{ startScopeHint }}
+              </p>
+              <label v-if="startScope === 'regex'" class="mt-2 block">
+                <span class="text-11px text-neutral-500">URL Regex</span>
+                <input v-model.trim="startRegex" class="mt-1 h-9 w-full rounded-2 border border-neutral-200 bg-white px-2 font-mono text-12px outline-none focus:border-neutral-950" placeholder="^https://docs\\.example\\.com/">
+              </label>
+              <SegmentedControl v-model="startDirection" class="mt-2.5" :options="pageTranslationDirections" label="页面翻译方向" />
+              <div class="mt-2.5 flex gap-2">
+                <button type="button" class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40" :disabled="startConfirmDisabled" @click="confirmStartPageTranslation">
+                  {{ startButtonLabel }}
+                </button>
+                <button type="button" class="h-9 shrink-0 rounded-2.5 border border-neutral-200 bg-white px-3 text-12px text-neutral-600 cursor-pointer hover:bg-neutral-50" @click="startChooserOpen = false">
+                  取消
+                </button>
+              </div>
             </div>
-          </div>
+          </template>
 
-          <div class="mt-3 flex gap-2">
-            <button type="button" class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" @click="togglePageTranslation">
-              <span class="block h-[13px] w-[13px]" :class="pageTranslationRunning ? 'i-lucide-pause' : 'i-lucide-play'" />
-              {{ pageTranslationRunning ? '暂停翻译' : '保存规则并翻译' }}
+          <div v-else class="mt-3 flex gap-2">
+            <button v-if="pageTranslationMode === 'manual'" type="button" class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" @click="stopCurrentPageTranslation">
+              <span class="i-lucide-square block h-[13px] w-[13px]" />
+              停止本页翻译
+            </button>
+            <button v-else type="button" class="h-9 flex flex-1 items-center justify-center gap-1.5 rounded-2.5 bg-neutral-950 text-12px text-white font-600 cursor-pointer hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" @click="pauseCurrentPageTranslation">
+              <span class="i-lucide-pause block h-[13px] w-[13px]" />
+              暂停本页
+            </button>
+            <button v-if="pageTranslationMode !== 'manual'" type="button" class="h-9 shrink-0 rounded-2.5 border border-neutral-200 bg-white px-3 text-12px text-neutral-600 cursor-pointer hover:bg-neutral-50" @click="openTranslationSettings">
+              {{ pageTranslationMode === 'auto' ? '管理自动翻译' : '管理规则' }}
             </button>
             <button type="button" class="h-9 w-9 flex shrink-0 items-center justify-center rounded-2.5 border border-neutral-200 bg-white text-neutral-500 cursor-pointer hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40" :disabled="pageTranslationLoading" title="刷新状态" aria-label="刷新状态" @click="refreshPageTranslationStatus">
               <span class="i-lucide-rotate-cw block h-[15px] w-[15px]" />

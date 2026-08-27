@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill'
 
 import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
-import { findEnabledEnglishAutoPageTranslationSite, getPageTranslationAutoSiteSelectors } from '~/logic/pageTranslationSites'
+import { getPageTranslationAutoSiteSelectors, resolveAutoPageTranslationSite } from '~/logic/pageTranslationSites'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
@@ -26,10 +26,11 @@ import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessagi
 import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import type { SiteDetectionHints } from '~/logic/siteRules'
-import { pageTranslationActivationsStorageKey, pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
+import { pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
+import { deletePageTranslationActivation, findMatchingPageTranslationActivation as findActivationMatchingUrl, getPageTranslationActivationKey, normalizePageTranslationUrl as normalizeTranslationRuleUrl, upsertPageTranslationActivation } from '~/logic/pageTranslationRules'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
 import { getVocabularyId, isProductVocabularyCandidate, isReplacementSuppressed, setVocabularyArchived, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
-import type { LexiSettings, PageTranslationActivation, PageTranslationAutoSite, PageTranslationBlock, PageTranslationCache, PageTranslationMemory, PageTranslationScope, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
+import type { LexiSettings, PageTranslationActivation, PageTranslationAutoSite, PageTranslationBlock, PageTranslationCache, PageTranslationDirection, PageTranslationMemory, PageTranslationScope, SelectionTranslation, VocabularyCandidate, VocabularyRecord } from '~/logic/types'
 
 interface EnhancerEvents {
   onStats: (stats: PageStats) => void
@@ -2186,7 +2187,12 @@ interface PageTranslationTarget {
   score: number
 }
 
-type PageTranslationActivations = Record<string, PageTranslationActivation>
+interface PageTranslationStartOptions {
+  persist?: boolean
+  scope?: PageTranslationScope
+  regex?: string
+  direction?: PageTranslationDirection
+}
 
 const enqueuePageTranslationActivationWrite = createSerializedTaskQueue()
 const enqueuePageTranslationCacheWrite = createSerializedTaskQueue()
@@ -2195,14 +2201,7 @@ let pageTranslationCacheWritesSettled: Promise<unknown> = Promise.resolve()
 let pageTranslationMemoryWritesSettled: Promise<unknown> = Promise.resolve()
 
 function normalizePageTranslationUrl(url = location.href) {
-  try {
-    const parsed = new URL(url)
-    parsed.hash = ''
-    return parsed.toString()
-  }
-  catch {
-    return url.split('#')[0]
-  }
+  return normalizeTranslationRuleUrl(url)
 }
 
 function getPageTranslationCacheKey(url = location.href) {
@@ -2256,68 +2255,34 @@ function createPageTranslationActivation(settings: LexiSettings): PageTranslatio
   }
 }
 
-function getPageTranslationActivationKey(activation: PageTranslationActivation) {
-  if (activation.scope === 'site')
-    return `site:${activation.host}`
+function applyPageTranslationStartOverrides(settings: LexiSettings, options: PageTranslationStartOptions): LexiSettings {
+  if (options.scope === undefined && options.regex === undefined && options.direction === undefined)
+    return settings
 
-  if (activation.scope === 'regex')
-    return `regex:${activation.regex}`
-
-  return `url:${normalizePageTranslationUrl(activation.url)}`
-}
-
-function pageTranslationActivationMatches(activation: PageTranslationActivation, url = location.href) {
-  if (!activation.enabled)
-    return false
-
-  const normalizedUrl = normalizePageTranslationUrl(url)
-  if (activation.scope === 'url')
-    return normalizePageTranslationUrl(activation.url) === normalizedUrl
-
-  if (activation.scope === 'site')
-    return activation.host === location.hostname
-
-  if (!activation.regex.trim())
-    return false
-
-  try {
-    return new RegExp(activation.regex).test(url)
-  }
-  catch {
-    return false
+  return {
+    ...settings,
+    selection: {
+      ...settings.selection,
+      pageTranslation: {
+        ...settings.selection.pageTranslation,
+        ...(options.scope !== undefined ? { scope: options.scope } : {}),
+        ...(options.regex !== undefined ? { regex: options.regex } : {}),
+        ...(options.direction !== undefined ? { direction: options.direction } : {}),
+      },
+    },
   }
 }
 
-async function readPageTranslationActivations() {
-  const stored = await browser.storage.local.get(pageTranslationActivationsStorageKey)
-  return readJsonValue<PageTranslationActivations>(stored[pageTranslationActivationsStorageKey], {})
-}
-
-async function savePageTranslationActivations(activations: PageTranslationActivations) {
-  await browser.storage.local.set({ [pageTranslationActivationsStorageKey]: JSON.stringify(activations) })
-}
-
-async function findMatchingPageTranslationActivation() {
-  const activations = await readPageTranslationActivations()
-  return Object.values(activations)
-    .filter(activation => pageTranslationActivationMatches(activation))
-    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+function findMatchingPageTranslationActivation() {
+  return findActivationMatchingUrl(location.href)
 }
 
 async function savePageTranslationActivation(activation: PageTranslationActivation) {
-  await enqueuePageTranslationActivationWrite(async () => {
-    const activations = await readPageTranslationActivations()
-    activations[getPageTranslationActivationKey(activation)] = activation
-    await savePageTranslationActivations(activations)
-  })
+  await enqueuePageTranslationActivationWrite(() => upsertPageTranslationActivation(activation))
 }
 
 async function removePageTranslationActivation(activation: PageTranslationActivation) {
-  await enqueuePageTranslationActivationWrite(async () => {
-    const activations = await readPageTranslationActivations()
-    delete activations[getPageTranslationActivationKey(activation)]
-    await savePageTranslationActivations(activations)
-  })
+  await enqueuePageTranslationActivationWrite(() => deletePageTranslationActivation(getPageTranslationActivationKey(activation)))
 }
 
 async function readPageTranslationMemory() {
@@ -3582,6 +3547,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let activeSelectionBlock: { remove: () => void } | undefined
   let pageTranslationRunningId: number | undefined
   let pageTranslationEnabled = false
+  // Distinguishes the four side-panel states: manual run, rule-restored run, platform auto run.
+  let pageTranslationOrigin: 'manual' | 'restored' | 'auto' | undefined
+  // Set when the user pauses; blocks rule/auto restarts until the next page load.
+  let pageTranslationSuppressed = false
   let pageTranslationTimer: number | undefined
   let pageTranslationObserver: MutationObserver | undefined
   let pageTranslationScanPending = false
@@ -3978,7 +3947,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     window.addEventListener('scroll', onPageScroll, { passive: true })
   }
 
-  async function startPageTranslation(options: { persist?: boolean } = {}) {
+  async function startPageTranslation(options: PageTranslationStartOptions = {}) {
     if (pageTranslationEnabled)
       return { ok: true, message: '当前页面翻译已启用。', blocks: pageTranslationSources.size }
 
@@ -3994,9 +3963,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
       return { ok: false, message, blocks: 0 }
     }
 
-    const { settings } = await getStoredState()
+    const { settings: storedSettings } = await getStoredState()
     if (disposed || !operation.isCurrent())
       return failStart('页面自动翻译已停止。')
+
+    // The side panel writes the chosen scope/direction to settings storage in
+    // parallel with this message; overrides keep this run from racing that write.
+    const settings = applyPageTranslationStartOverrides(storedSettings, options)
 
     const siteHints = detectSpecialSiteHints()
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
@@ -4017,6 +3990,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     pageTranslationActivation = activation
     pageTranslationEnabled = true
+    pageTranslationOrigin = 'manual'
+    pageTranslationSuppressed = false
     if (activation)
       await savePageTranslationActivation(activation)
     if (disposed || !operation.isCurrent())
@@ -4029,11 +4004,17 @@ export function startPageEnhancer(events: EnhancerEvents) {
     ensurePageTranslationWatcher(settings)
     schedulePageTranslationScan(settings, 0)
 
-    const scopeLabel = activation?.scope === 'site' ? '当前站点' : activation?.scope === 'regex' ? 'Regex 匹配页面' : activation ? '当前链接' : '本页'
-    return { ok: true, message: `已启用${scopeLabel}双语翻译：可视区域优先，后续滚动会预加载。`, blocks: pageTranslationSources.size }
+    const scopeLabel = activation?.scope === 'site' ? '当前站点' : activation?.scope === 'regex' ? 'Regex 匹配页面' : '当前链接'
+    return {
+      ok: true,
+      message: activation
+        ? `已保存${scopeLabel}规则并开始翻译：可视区域优先，命中规则的页面会自动恢复。`
+        : '已开始翻译本页（仅本次）：可视区域优先，关闭或刷新后不再自动恢复。',
+      blocks: pageTranslationSources.size,
+    }
   }
 
-  async function stopPageTranslation() {
+  async function stopPageTranslation(options: { keepActivation?: boolean } = {}) {
     pageTranslationEpoch.invalidate()
     pageTranslationOperation = undefined
     pageTranslationRunId += 1
@@ -4061,12 +4042,24 @@ export function startPageEnhancer(events: EnhancerEvents) {
       updatedAt: Date.now(),
     })
 
-    if (pageTranslationActivation)
+    const pausedActivation = options.keepActivation ? pageTranslationActivation : undefined
+    const pausedAutoSite = options.keepActivation ? pageTranslationAutoSite : undefined
+    if (pageTranslationActivation && !options.keepActivation)
       await removePageTranslationActivation(pageTranslationActivation)
+    if (options.keepActivation)
+      pageTranslationSuppressed = true
     pageTranslationActivation = undefined
     pageTranslationAutoSite = undefined
+    pageTranslationOrigin = undefined
 
-    return { ok: true, message: '已停止当前自动翻译范围。' }
+    return {
+      ok: true,
+      message: pausedActivation
+        ? '已暂停本页翻译；保存的规则仍会在下次访问时恢复。'
+        : pausedAutoSite
+          ? '已暂停本页翻译；本次浏览不再自动开始。'
+          : '已停止本页翻译，本页不会再自动恢复。',
+    }
   }
 
   async function getPageTranslationStatus() {
@@ -4075,6 +4068,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     return {
       ok: true,
       enabled: Boolean(pageTranslationEnabled || activation || cache?.enabled),
+      running: pageTranslationEnabled,
+      origin: pageTranslationOrigin,
       scope: pageTranslationEnabled ? pageTranslationActivation?.scope : activation?.scope,
       autoSite: pageTranslationEnabled ? pageTranslationAutoSite : undefined,
       blocks: pageTranslationSources.size || cache?.blocks.length || 0,
@@ -4092,18 +4087,20 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return
 
+    if (pageTranslationSuppressed)
+      return
+
     const activation = await findMatchingPageTranslationActivation()
     if (disposed)
       return
 
-    const autoSite = activation || settings.selection.pageTranslation.direction !== 'en-to-zh'
-      ? undefined
-      : findEnabledEnglishAutoPageTranslationSite(
-        document,
-        location.href,
-        siteHints,
-        settings.selection.pageTranslation.autoSites,
-      )
+    const autoSite = resolveAutoPageTranslationSite(
+      document,
+      location.href,
+      siteHints,
+      settings.selection.pageTranslation,
+      activation,
+    )
     if (!activation && !autoSite)
       return
 
@@ -4118,6 +4115,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationActivation = activation
     pageTranslationAutoSite = autoSite
     pageTranslationEnabled = true
+    pageTranslationOrigin = activation ? 'restored' : 'auto'
     pageTranslationOperation = pageTranslationEpoch.begin()
     pageTranslationRunId = pageTranslationOperation.id
     ensurePageTranslationWatcher(settings)
@@ -4851,8 +4849,13 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const removePageTranslateStartListener = mediaPlaybackOnly
     ? () => {}
-    : listenRuntimeMessage<{ persist?: unknown } | undefined>('lexi-page-translate-start', (data) => {
-      return startPageTranslation({ persist: data?.persist === true })
+    : listenRuntimeMessage<{ persist?: unknown, scope?: unknown, regex?: unknown, direction?: unknown } | undefined>('lexi-page-translate-start', (data) => {
+      return startPageTranslation({
+        persist: data?.persist === true,
+        scope: data?.scope === 'url' || data?.scope === 'site' || data?.scope === 'regex' ? data.scope : undefined,
+        regex: typeof data?.regex === 'string' ? data.regex : undefined,
+        direction: data?.direction === 'en-to-zh' || data?.direction === 'zh-to-en' ? data.direction : undefined,
+      })
     })
 
   const onQuickTranslate = () => {
@@ -4863,6 +4866,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
     ? () => {}
     : listenRuntimeMessage('lexi-page-translate-stop', () => {
       return stopPageTranslation()
+    })
+
+  const removePageTranslatePauseListener = mediaPlaybackOnly
+    ? () => {}
+    : listenRuntimeMessage('lexi-page-translate-pause', () => {
+      return stopPageTranslation({ keepActivation: true })
     })
 
   const removePageTranslateStatusListener = mediaPlaybackOnly
@@ -4892,9 +4901,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
       const hints = detectSpecialSiteHints()
       const autoSite = settings.selection.enabled
-        && settings.selection.pageTranslation.direction === 'en-to-zh'
         && isSceneEnabled(settings, 'selection', location.href, hints)
-        ? findEnabledEnglishAutoPageTranslationSite(document, location.href, hints, settings.selection.pageTranslation.autoSites)
+        ? resolveAutoPageTranslationSite(document, location.href, hints, settings.selection.pageTranslation, undefined)
         : undefined
 
       if (pageTranslationAutoSite && !autoSite) {
@@ -4931,6 +4939,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     removeContextTranslateListener()
     removePageTranslateStartListener()
     removePageTranslateStopListener()
+    removePageTranslatePauseListener()
     removePageTranslateStatusListener()
     removePageStatsListener()
     browser.storage.onChanged.removeListener(onStorageChanged)

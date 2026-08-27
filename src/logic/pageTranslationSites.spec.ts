@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest'
-import { findEnabledEnglishAutoPageTranslationSite } from './pageTranslationSites'
+import { findEnabledEnglishAutoPageTranslationSite, resolveAutoPageTranslationSite } from './pageTranslationSites'
+import type { PageTranslationActivation } from './types'
 
 const enabledSites = {
   'discourse': true,
@@ -69,5 +70,42 @@ describe('findEnabledEnglishAutoPageTranslationSite', () => {
     document.body.innerHTML = html
 
     expect(findEnabledEnglishAutoPageTranslationSite(document, url, hints, enabled)).toBeUndefined()
+  })
+})
+
+describe('resolveAutoPageTranslationSite', () => {
+  const url = 'https://github.com/lexi/lexi'
+  const manualRule: PageTranslationActivation = {
+    enabled: true,
+    scope: 'site',
+    url,
+    host: 'github.com',
+    regex: '',
+    updatedAt: 1,
+  }
+
+  function renderReadme() {
+    document.body.innerHTML = `<section id="readme"><article><p>${englishBody}</p></article></section>`
+  }
+
+  it('yields the auto site when enabled and no manual rule applies', () => {
+    renderReadme()
+
+    const pageTranslation = { direction: 'en-to-zh' as const, autoSites: enabledSites }
+    expect(resolveAutoPageTranslationSite(document, url, {}, pageTranslation, undefined)).toBe('github-readme')
+  })
+
+  it('prefers a manual rule over the platform auto path', () => {
+    renderReadme()
+
+    const pageTranslation = { direction: 'en-to-zh' as const, autoSites: enabledSites }
+    expect(resolveAutoPageTranslationSite(document, url, {}, pageTranslation, manualRule)).toBeUndefined()
+  })
+
+  it('never auto-runs outside the fixed en→zh direction', () => {
+    renderReadme()
+
+    const pageTranslation = { direction: 'zh-to-en' as const, autoSites: enabledSites }
+    expect(resolveAutoPageTranslationSite(document, url, {}, pageTranslation, undefined)).toBeUndefined()
   })
 })

@@ -150,4 +150,18 @@ describe('settings compatibility', () => {
       expect(settings.replacement.displayMode).toBe(displayMode)
     }
   })
+
+  it('keeps platform auto translation opt-in: every auto site defaults to off', () => {
+    expect(defaultSettings.selection.pageTranslation.autoSites).toEqual({
+      'discourse': false,
+      'github-readme': false,
+      'reddit': false,
+    })
+
+    // A legacy blob without the field must not silently opt pages in either.
+    const settings = mergeSettings({
+      selection: {} as LexiSettings['selection'],
+    })
+    expect(Object.values(settings.selection.pageTranslation.autoSites)).not.toContain(true)
+  })
 })

@@ -1,4 +1,4 @@
-import type { PageTranslationAutoSite, PageTranslationAutoSites } from './types'
+import type { PageTranslationActivation, PageTranslationAutoSite, PageTranslationAutoSites, PageTranslationDirection } from './types'
 import type { SiteDetectionHints } from './siteRules'
 
 export const pageTranslationAutoSiteOptions: Array<{ value: PageTranslationAutoSite, label: string, hint: string }> = [
@@ -99,4 +99,21 @@ export function findEnabledEnglishAutoPageTranslationSite(
     return undefined
 
   return site
+}
+
+/**
+ * A manually saved rule always outranks the platform auto path, and auto
+ * translation only ever runs for the fixed English → Chinese direction.
+ */
+export function resolveAutoPageTranslationSite(
+  document: Document,
+  url: string,
+  hints: SiteDetectionHints,
+  pageTranslation: { direction: PageTranslationDirection, autoSites: PageTranslationAutoSites },
+  manualActivation: PageTranslationActivation | undefined,
+): PageTranslationAutoSite | undefined {
+  if (manualActivation || pageTranslation.direction !== 'en-to-zh')
+    return undefined
+
+  return findEnabledEnglishAutoPageTranslationSite(document, url, hints, pageTranslation.autoSites)
 }

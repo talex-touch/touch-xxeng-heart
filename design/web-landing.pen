@@ -1,5 +1,5 @@
 {
-  "version": "2.15",
+  "version": "2.17",
   "children": [
     {
       "type": "frame",
@@ -274,7 +274,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "apps/site/public/assets/icon.png",
+                    "url": "../apps/site/public/assets/icon.png",
                     "mode": "fill"
                   },
                   "width": 26,
@@ -656,7 +656,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "apps/site/public/assets/icon.png",
+                        "url": "../apps/site/public/assets/icon.png",
                         "mode": "fill"
                       },
                       "width": 20,
@@ -1191,7 +1191,7 @@
                                   "fill": {
                                     "type": "image",
                                     "enabled": true,
-                                    "url": "apps/site/public/assets/icon.png",
+                                    "url": "../apps/site/public/assets/icon.png",
                                     "mode": "fill"
                                   },
                                   "width": 18,
@@ -1393,7 +1393,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 20,
@@ -2628,7 +2628,8 @@
                                       "content": "解释",
                                       "lineHeight": 1.2,
                                       "fontFamily": "$font-sans",
-                                      "fontSize": 12.5
+                                      "fontSize": 12.5,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -2663,7 +2664,8 @@
                                       "content": "加入词库",
                                       "lineHeight": 1.2,
                                       "fontFamily": "$font-sans",
-                                      "fontSize": 12.5
+                                      "fontSize": 12.5,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 }
@@ -4112,7 +4114,8 @@
                                   "content": "MCP",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -4192,7 +4195,8 @@
                                   "content": "per-seat",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -4253,7 +4257,8 @@
                                   "content": "ARR",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -4314,7 +4319,8 @@
                                   "content": "infrastructure SaaS",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -4375,7 +4381,8 @@
                                   "content": "Series F",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -4425,7 +4432,8 @@
                                   "content": "post-money valuation",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -4467,7 +4475,8 @@
                                   "content": "liquidation preference",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -5411,7 +5420,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 19,
@@ -7508,7 +7517,8 @@
                           "content": "GitLab",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -7560,7 +7570,8 @@
                           "content": "Gitee",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -7612,7 +7623,8 @@
                           "content": "Discourse",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -7664,7 +7676,8 @@
                           "content": "Stack Overflow",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -7716,7 +7729,8 @@
                           "content": "V2EX",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -7768,7 +7782,8 @@
                           "content": "掘金",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -9260,7 +9275,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 20,
@@ -11027,7 +11042,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "apps/site/public/assets/icon.png",
+                "url": "../apps/site/public/assets/icon.png",
                 "mode": "fill"
               },
               "width": 60,
@@ -11167,7 +11182,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 24,
@@ -12656,7 +12671,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 24,
@@ -12865,7 +12880,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 24,
@@ -13038,7 +13053,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 24,
@@ -13197,7 +13212,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "apps/site/public/assets/icon.png",
+                    "url": "../apps/site/public/assets/icon.png",
                     "mode": "fill"
                   },
                   "width": 30,
@@ -13469,7 +13484,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "./images/generated-1785639289118.png",
+                "url": "images/generated-1785639289118.png",
                 "mode": "fill"
               },
               "cornerRadius": 28,
@@ -14631,7 +14646,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "apps/site/public/assets/icon.png",
+                "url": "../apps/site/public/assets/icon.png",
                 "mode": "fill"
               },
               "width": 62,
@@ -14800,7 +14815,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "apps/site/public/assets/icon.png",
+                    "url": "../apps/site/public/assets/icon.png",
                     "mode": "fill"
                   },
                   "width": 26,
@@ -15181,7 +15196,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "apps/site/public/assets/icon.png",
+                        "url": "../apps/site/public/assets/icon.png",
                         "mode": "fill"
                       },
                       "width": 20,
@@ -15716,7 +15731,7 @@
                                   "fill": {
                                     "type": "image",
                                     "enabled": true,
-                                    "url": "apps/site/public/assets/icon.png",
+                                    "url": "../apps/site/public/assets/icon.png",
                                     "mode": "fill"
                                   },
                                   "width": 18,
@@ -15918,7 +15933,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 20,
@@ -17862,7 +17877,8 @@
                                   "content": "MCP",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -17942,7 +17958,8 @@
                                   "content": "per-seat",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -18003,7 +18020,8 @@
                                   "content": "ARR",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -18064,7 +18082,8 @@
                                   "content": "infrastructure SaaS",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -18125,7 +18144,8 @@
                                   "content": "Series F",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -18175,7 +18195,8 @@
                                   "content": "post-money valuation",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -18217,7 +18238,8 @@
                                   "content": "liquidation preference",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -19161,7 +19183,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 19,
@@ -21258,7 +21280,8 @@
                           "content": "GitLab",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -21310,7 +21333,8 @@
                           "content": "Gitee",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -21362,7 +21386,8 @@
                           "content": "Discourse",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -21414,7 +21439,8 @@
                           "content": "Stack Overflow",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -21466,7 +21492,8 @@
                           "content": "V2EX",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -21518,7 +21545,8 @@
                           "content": "掘金",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -23010,7 +23038,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 20,
@@ -24777,7 +24805,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "apps/site/public/assets/icon.png",
+                "url": "../apps/site/public/assets/icon.png",
                 "mode": "fill"
               },
               "width": 60,
@@ -24917,7 +24945,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 24,
@@ -25242,7 +25270,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "apps/site/public/assets/icon.png",
+                    "url": "../apps/site/public/assets/icon.png",
                     "mode": "fill"
                   },
                   "width": 26,
@@ -25623,7 +25651,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "apps/site/public/assets/icon.png",
+                        "url": "../apps/site/public/assets/icon.png",
                         "mode": "fill"
                       },
                       "width": 20,
@@ -26158,7 +26186,7 @@
                                   "fill": {
                                     "type": "image",
                                     "enabled": true,
-                                    "url": "apps/site/public/assets/icon.png",
+                                    "url": "../apps/site/public/assets/icon.png",
                                     "mode": "fill"
                                   },
                                   "width": 18,
@@ -26360,7 +26388,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 20,
@@ -27594,7 +27622,8 @@
                                       "content": "解释",
                                       "lineHeight": 1.2,
                                       "fontFamily": "$font-sans",
-                                      "fontSize": 12.5
+                                      "fontSize": 12.5,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -27629,7 +27658,8 @@
                                       "content": "加入词库",
                                       "lineHeight": 1.2,
                                       "fontFamily": "$font-sans",
-                                      "fontSize": 12.5
+                                      "fontSize": 12.5,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 }
@@ -29078,7 +29108,8 @@
                                   "content": "MCP",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -29158,7 +29189,8 @@
                                   "content": "per-seat",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -29219,7 +29251,8 @@
                                   "content": "ARR",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -29280,7 +29313,8 @@
                                   "content": "infrastructure SaaS",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -29341,7 +29375,8 @@
                                   "content": "Series F",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -29391,7 +29426,8 @@
                                   "content": "post-money valuation",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -29433,7 +29469,8 @@
                                   "content": "liquidation preference",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -30377,7 +30414,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 19,
@@ -32474,7 +32511,8 @@
                           "content": "GitLab",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -32526,7 +32564,8 @@
                           "content": "Gitee",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -32578,7 +32617,8 @@
                           "content": "Discourse",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -32630,7 +32670,8 @@
                           "content": "Stack Overflow",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -32682,7 +32723,8 @@
                           "content": "V2EX",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -32734,7 +32776,8 @@
                           "content": "掘金",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -34225,7 +34268,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 20,
@@ -35992,7 +36035,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "apps/site/public/assets/icon.png",
+                "url": "../apps/site/public/assets/icon.png",
                 "mode": "fill"
               },
               "width": 60,
@@ -36131,7 +36174,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 24,
@@ -36456,7 +36499,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "apps/site/public/assets/icon.png",
+                    "url": "../apps/site/public/assets/icon.png",
                     "mode": "fill"
                   },
                   "width": 26,
@@ -36654,7 +36697,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "./images/generated-1785722033464.png",
+                    "url": "images/generated-1785722033464.png",
                     "mode": "fill"
                   }
                 },
@@ -36837,7 +36880,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "apps/site/public/assets/icon.png",
+                        "url": "../apps/site/public/assets/icon.png",
                         "mode": "fill"
                       },
                       "width": 20,
@@ -37372,7 +37415,7 @@
                                   "fill": {
                                     "type": "image",
                                     "enabled": true,
-                                    "url": "apps/site/public/assets/icon.png",
+                                    "url": "../apps/site/public/assets/icon.png",
                                     "mode": "fill"
                                   },
                                   "width": 18,
@@ -37574,7 +37617,7 @@
                               "fill": {
                                 "type": "image",
                                 "enabled": true,
-                                "url": "apps/site/public/assets/icon.png",
+                                "url": "../apps/site/public/assets/icon.png",
                                 "mode": "fill"
                               },
                               "width": 20,
@@ -38352,7 +38395,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "./images/generated-1785720686414.png",
+                "url": "images/generated-1785720686414.png",
                 "mode": "fill"
               }
             }
@@ -38410,7 +38453,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "./images/generated-1785720680541.png",
+                        "url": "images/generated-1785720680541.png",
                         "mode": "fill"
                       }
                     }
@@ -38808,7 +38851,8 @@
                                       "content": "解释",
                                       "lineHeight": 1.2,
                                       "fontFamily": "$font-sans",
-                                      "fontSize": 12.5
+                                      "fontSize": 12.5,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 },
@@ -38843,7 +38887,8 @@
                                       "content": "加入词库",
                                       "lineHeight": 1.2,
                                       "fontFamily": "$font-sans",
-                                      "fontSize": 12.5
+                                      "fontSize": 12.5,
+                                      "fontWeight": "normal"
                                     }
                                   ]
                                 }
@@ -40072,7 +40117,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "./images/generated-1785720682716.png",
+                        "url": "images/generated-1785720682716.png",
                         "mode": "fill"
                       }
                     }
@@ -40292,7 +40337,8 @@
                                   "content": "MCP",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -40372,7 +40418,8 @@
                                   "content": "per-seat",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -40433,7 +40480,8 @@
                                   "content": "ARR",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -40494,7 +40542,8 @@
                                   "content": "infrastructure SaaS",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -40555,7 +40604,8 @@
                                   "content": "Series F",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -40605,7 +40655,8 @@
                                   "content": "post-money valuation",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -40647,7 +40698,8 @@
                                   "content": "liquidation preference",
                                   "lineHeight": 1.6,
                                   "fontFamily": "$font-latin",
-                                  "fontSize": 16
+                                  "fontSize": 16,
+                                  "fontWeight": "normal"
                                 },
                                 {
                                   "type": "ellipse",
@@ -41591,7 +41643,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 19,
@@ -43534,7 +43586,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "./images/generated-1785721065368.png",
+                        "url": "images/generated-1785721065368.png",
                         "mode": "fill"
                       }
                     }
@@ -43688,7 +43740,8 @@
                           "content": "GitLab",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -43740,7 +43793,8 @@
                           "content": "Gitee",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -43792,7 +43846,8 @@
                           "content": "Discourse",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -43844,7 +43899,8 @@
                           "content": "Stack Overflow",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -43896,7 +43952,8 @@
                           "content": "V2EX",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -43948,7 +44005,8 @@
                           "content": "掘金",
                           "lineHeight": 1.2,
                           "fontFamily": "$font-sans",
-                          "fontSize": 12.5
+                          "fontSize": 12.5,
+                          "fontWeight": "normal"
                         }
                       ]
                     }
@@ -45128,7 +45186,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "./images/generated-1785720657223.png",
+                    "url": "images/generated-1785720657223.png",
                     "mode": "fill"
                   }
                 },
@@ -45264,7 +45322,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "./images/generated-1785720698615.png",
+                        "url": "images/generated-1785720698615.png",
                         "mode": "fill"
                       }
                     },
@@ -45439,7 +45497,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 20,
@@ -46738,7 +46796,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "./images/generated-1785720694408.png",
+                        "url": "images/generated-1785720694408.png",
                         "mode": "fill"
                       }
                     }
@@ -47030,7 +47088,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "./images/generated-1785721067498.png",
+                    "url": "images/generated-1785721067498.png",
                     "mode": "fill"
                   }
                 },
@@ -47206,7 +47264,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "apps/site/public/assets/icon.png",
+                "url": "../apps/site/public/assets/icon.png",
                 "mode": "fill"
               },
               "width": 60,
@@ -47233,7 +47291,7 @@
               "fill": {
                 "type": "image",
                 "enabled": true,
-                "url": "./images/generated-1785720697373.png",
+                "url": "images/generated-1785720697373.png",
                 "mode": "fill"
               }
             },
@@ -47345,7 +47403,7 @@
                           "fill": {
                             "type": "image",
                             "enabled": true,
-                            "url": "apps/site/public/assets/icon.png",
+                            "url": "../apps/site/public/assets/icon.png",
                             "mode": "fill"
                           },
                           "width": 24,

@@ -251,7 +251,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "src/assets/logo.png",
+                        "url": "../src/assets/logo.png",
                         "mode": "fill"
                       },
                       "cornerRadius": 9
@@ -4869,7 +4869,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "src/assets/logo.png",
+                        "url": "../src/assets/logo.png",
                         "mode": "fill"
                       },
                       "cornerRadius": 9
@@ -7709,7 +7709,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "src/assets/logo.png",
+                        "url": "../src/assets/logo.png",
                         "mode": "fill"
                       },
                       "cornerRadius": 9
@@ -10463,7 +10463,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "src/assets/logo.png",
+                        "url": "../src/assets/logo.png",
                         "mode": "fill"
                       },
                       "cornerRadius": 9
@@ -14465,7 +14465,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "src/assets/logo.png",
+                        "url": "../src/assets/logo.png",
                         "mode": "fill"
                       },
                       "cornerRadius": 9
@@ -17609,7 +17609,7 @@
                       "fill": {
                         "type": "image",
                         "enabled": true,
-                        "url": "src/assets/logo.png",
+                        "url": "../src/assets/logo.png",
                         "mode": "fill"
                       },
                       "cornerRadius": 9
@@ -17887,7 +17887,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "src/assets/logo.png",
+                    "url": "../src/assets/logo.png",
                     "mode": "fill"
                   },
                   "cornerRadius": 20
@@ -19089,7 +19089,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "src/assets/logo.png",
+                    "url": "../src/assets/logo.png",
                     "mode": "fill"
                   },
                   "cornerRadius": 6
@@ -20381,7 +20381,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "src/assets/logo.png",
+                    "url": "../src/assets/logo.png",
                     "mode": "fill"
                   },
                   "cornerRadius": 6
@@ -21427,7 +21427,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "src/assets/logo.png",
+                    "url": "../src/assets/logo.png",
                     "mode": "fill"
                   },
                   "cornerRadius": 6
@@ -22480,7 +22480,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "src/assets/logo.png",
+                    "url": "../src/assets/logo.png",
                     "mode": "fill"
                   },
                   "cornerRadius": 6
@@ -23358,7 +23358,7 @@
                   "fill": {
                     "type": "image",
                     "enabled": true,
-                    "url": "src/assets/logo.png",
+                    "url": "../src/assets/logo.png",
                     "mode": "fill"
                   },
                   "cornerRadius": 6

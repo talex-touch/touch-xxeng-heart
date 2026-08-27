@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.14 - 2026-08-27
+
+Changes since v0.2.13.
+
+### Features
+- add the entity detection section to the landing page (a7ececd)
+- restructure page translation into per-page control and central rules (05b1b5b)
+
+### Docs
+- repoint mockup image fills after the move into design/ (463ecf5)
+- backfill the v2 side-panel states into the extension mockup (e89fd9e)
+
+### Maintenance
+- check in Pencil design sources and the options store screenshot (f2168ac)
+- move the side panel onto Lexi tokens and quiet in-page translations (5142c56)
+
 ## v0.2.13 - 2026-08-24
 
 Changes since v0.2.12.
@@ -166,6 +182,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

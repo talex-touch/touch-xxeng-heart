@@ -1,5 +1,5 @@
 {
-  "version": "2.15",
+  "version": "2.17",
   "children": [
     {
       "type": "frame",
@@ -22431,8 +22431,1791 @@
       "y": -380,
       "name": "改版说明",
       "width": 340,
-      "height": 430,
-      "content": "改版说明 · 侧边面板\n\n【精简】\n· 3 张卡片 → 1 行总开关 + 2 张卡片，去掉「灰卡里套白卡」的双层容器\n· 状态徽章只保留 1 个；2 个统计块合并成 1 行进度信息；刷新成功时不再弹提示条\n· 页面高度 1154 → 739（-36%），主要操作不再需要滚动\n\n【重新分类】\n· 标签页改为 本页 / 全局 / 记录，单行标签\n· 总开关「启用 Lexi」提到最上方，并显示当前站点域名\n· 保存历史、合并请求段数、预加载段数移入「全局 · 自动翻译与记录」\n· 「划词翻译方向」移到「划词翻译」开关下方，关闭时置灰\n· 存储体积移出主标签（仍在「记录」里）\n\n【优化交互】\n· 启用范围：下拉框 → 分段控件，一次点击完成选择\n· 启用 / 停止 / 刷新 → 一个主操作（开始翻译 ⇄ 暂停翻译）+ 刷新图标按钮\n· 进度条表示覆盖状态：运行中=蓝、有缓存可恢复=灰、无缓存=空；段数与体积在上方文字里\n· 「快速入口」卡片 → 整行可点的记录入口\n· 错误提示改为红色行内文案，成功时保持安静\n\n【已落地代码】\n· src/sidepanel/Sidepanel.vue\n· src/components/SegmentedControl.vue（新增共享组件）"
+      "height": 620,
+      "content": "改版说明 · 侧边面板\n\n【精简】\n· 3 张卡片 → 1 行总开关 + 2 张卡片，去掉「灰卡里套白卡」的双层容器\n· 状态徽章只保留 1 个；2 个统计块合并成 1 行进度信息；刷新成功时不再弹提示条\n· 页面高度 1154 → 739（-36%），主要操作不再需要滚动\n\n【重新分类】\n· 标签页改为 本页 / 全局 / 记录，单行标签\n· 总开关「启用 Lexi」提到最上方，并显示当前站点域名\n· 保存历史、合并请求段数、预加载段数移入「全局 · 自动翻译与记录」\n· 「划词翻译方向」移到「划词翻译」开关下方，关闭时置灰\n· 存储体积移出主标签（仍在「记录」里）\n\n【优化交互】\n· 启用范围：下拉框 → 分段控件，一次点击完成选择\n· 启用 / 停止 / 刷新 → 一个主操作（开始翻译 ⇄ 暂停翻译）+ 刷新图标按钮\n· 进度条表示覆盖状态：运行中=蓝、有缓存可恢复=灰、无缓存=空；段数与体积在上方文字里\n· 「快速入口」卡片 → 整行可点的记录入口\n· 错误提示改为红色行内文案，成功时保持安静\n\n【已落地代码】\n· src/sidepanel/Sidepanel.vue\n· src/components/SegmentedControl.vue（新增共享组件）\n\n────────────────\n\n改版 v2 · 2026-08-26（已落地）\n\n· 四状态模型：未运行 / 正在翻译（手动）/ 已按规则恢复 / 平台自动翻译；状态徽章改为图标+文字\n· 范围选择不再常驻：点「翻译此页」后展开，新增「仅本次」为默认，不落规则\n· 暂停语义：规则恢复态与平台自动态的暂停保留规则，仅抑制本页会话；手动停止才删规则\n· 缓存字节 / 预加载段数退出主信息，只保留「已翻译 N 段」\n· 主操作弃用 panel-ink 黑（#0A0A0A），统一 DESIGN.md 清醒蓝 #2F6FED；控件走共享 BaseButton（38px/9px）\n· 次操作：管理规则 / 管理自动翻译 → 深链设置页 #translation（规则列表 + 三平台自动翻译开关 + 折叠高级参数）\n· 网页内译文改为安静附注：无左侧色条、无渐变流光、无优先级脉冲；加载只显示「正在翻译…」\n\n【v2 已落地代码】\n· src/sidepanel/Sidepanel.vue、src/options/Options.vue\n· src/components/PageTranslation{RulesList,AutoSitesSettings,AdvancedSettings}.vue\n· src/logic/pageTranslationRules.ts、src/contentScripts/pageEnhancer.ts\n\n下方 v1 改版 frame 已过时，仅存档；v2 状态见「改版 v2」frame。"
+    },
+    {
+      "type": "frame",
+      "id": "u8PUZ",
+      "x": 10856,
+      "y": 459,
+      "name": "Lexi 面板 / 改版 v2 · 本页（未运行）",
+      "clip": true,
+      "width": 376,
+      "height": 739,
+      "fill": "$surface",
+      "stroke": "$panel-line",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "JC9i9",
+          "name": "Title Bar",
+          "width": "fill_container",
+          "height": 48,
+          "padding": [
+            0,
+            12,
+            0,
+            14
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "FFBcs",
+              "name": "Brand",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "E5sV5",
+                  "name": "Logo Mark",
+                  "width": 20,
+                  "height": 20,
+                  "fill": {
+                    "type": "image",
+                    "enabled": true,
+                    "url": "src/assets/logo.png",
+                    "mode": "fill"
+                  },
+                  "cornerRadius": 6
+                },
+                {
+                  "type": "text",
+                  "id": "laOQd",
+                  "name": "App Name",
+                  "fill": "$panel-ink",
+                  "content": "Lexi",
+                  "lineHeight": 1.2,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 15,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MsOr1",
+              "name": "Window Actions",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "z78YVZ",
+                  "name": "Pin Off",
+                  "width": 17,
+                  "height": 17,
+                  "icon": "pin-off",
+                  "library": "lucide",
+                  "fill": "$panel-ink-2"
+                },
+                {
+                  "type": "icon",
+                  "id": "Ro8Mj",
+                  "name": "Close",
+                  "width": 18,
+                  "height": 18,
+                  "icon": "x",
+                  "library": "lucide",
+                  "fill": "$panel-ink-2"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "OPuf3",
+          "name": "Site Header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": [
+            8,
+            24,
+            0,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "rYpMg",
+              "name": "Site Block",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "t5E99P",
+                  "name": "Title Row",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Qhttv",
+                      "name": "Title Left",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "U7ETqP",
+                          "name": "Site Title",
+                          "fill": "$panel-ink",
+                          "content": "Lexical",
+                          "lineHeight": 1.25,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 17.5,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "B1CbtB",
+                      "name": "Icon Button / 完整配置",
+                      "width": 30,
+                      "height": 30,
+                      "fill": "$surface",
+                      "cornerRadius": 9,
+                      "stroke": "$panel-line",
+                      "strokeWidth": 1,
+                      "strokeAlignment": "inner",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "fh276",
+                          "name": "Icon",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "sliders-horizontal",
+                          "library": "lucide",
+                          "fill": "$panel-ink"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "ASx3a",
+                  "name": "Meta",
+                  "fill": "$panel-ink-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "难度 5 · 已记录 500 词",
+                  "lineHeight": 1.4,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11.5,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "rectangle",
+              "id": "iGOw3",
+              "name": "Divider",
+              "fill": "$panel-line",
+              "width": "fill_container",
+              "height": 1
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "S3SWl",
+          "name": "Tabs Wrapper",
+          "width": "fill_container",
+          "padding": [
+            14,
+            24,
+            0,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "jSVCz",
+              "name": "Tab Bar",
+              "width": "fill_container",
+              "height": 34,
+              "fill": "$panel-mute",
+              "cornerRadius": 10,
+              "gap": 2,
+              "padding": 3,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ImVDT",
+                  "name": "Tab / 本页",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 8,
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "#0B152A1F",
+                    "offset": {
+                      "x": 0,
+                      "y": 1
+                    },
+                    "blur": 2
+                  },
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "m7fMF",
+                      "name": "Label",
+                      "fill": "$panel-ink",
+                      "content": "本页",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "TQgL6",
+                  "name": "Tab / 全局",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "oZOk8",
+                      "name": "Label",
+                      "fill": "$panel-ink-2",
+                      "content": "全局",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "f46aZ",
+                  "name": "Tab / 记录",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "AQsD4",
+                      "name": "Label",
+                      "fill": "$panel-ink-2",
+                      "content": "记录",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "jMLQx",
+          "name": "Content",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "padding": [
+            14,
+            24,
+            24,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "fmwsp",
+              "name": "Row / 站点总开关",
+              "width": "fill_container",
+              "fill": "$panel-soft",
+              "cornerRadius": 12,
+              "stroke": "$panel-line",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "mivmD",
+                  "name": "Label Block",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 3,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "gyBeN",
+                      "name": "Label",
+                      "fill": "$panel-ink",
+                      "content": "在本站启用 Lexi",
+                      "lineHeight": 1.4,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12.5,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "d9bKjz",
+                      "name": "Desc",
+                      "fill": "$panel-ink-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "lexical.dev · 关闭后本站点全部功能暂停",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 10.5,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "id": "Mqf9G",
+                  "type": "ref",
+                  "ref": "SiQt6",
+                  "name": "Toggle On"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Amogs",
+              "name": "Card / 自动翻译本页",
+              "width": "fill_container",
+              "fill": "$surface",
+              "cornerRadius": 14,
+              "stroke": "$panel-line",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "dK0Az",
+                  "name": "Header Row",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "pV7rW",
+                      "name": "Title",
+                      "fill": "$panel-ink",
+                      "content": "页面双语翻译",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 13.5,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mWItU",
+                      "name": "Status Chip",
+                      "height": 22,
+                      "fill": "$panel-mute",
+                      "cornerRadius": 11,
+                      "gap": 5,
+                      "padding": [
+                        0,
+                        8
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "oMa3l",
+                          "name": "Dot",
+                          "fill": "#A3A3A3",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "x2rrd6",
+                          "name": "Label",
+                          "fill": "$panel-ink-2",
+                          "content": "未运行",
+                          "lineHeight": 1.3,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 10.5,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "HJdWQ",
+                  "name": "Hint",
+                  "fill": "$panel-ink-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "不会自动翻译任何页面；启动时可选择仅本次或保存为规则。",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 10.5,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "RQ1Q3",
+                  "name": "Actions",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qr3zm",
+                      "name": "Button / 翻译此页",
+                      "width": "fill_container",
+                      "height": 36,
+                      "fill": "$accent",
+                      "cornerRadius": 10,
+                      "gap": 6,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "fec6V",
+                          "name": "Icon",
+                          "width": 13,
+                          "height": 13,
+                          "icon": "play",
+                          "library": "lucide",
+                          "fill": "#FFFFFF"
+                        },
+                        {
+                          "type": "text",
+                          "id": "iycZN",
+                          "name": "Label",
+                          "fill": "#FFFFFF",
+                          "content": "翻译此页",
+                          "lineHeight": 1.3,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "b6I1p6",
+                      "name": "Icon Button / 刷新",
+                      "width": 36,
+                      "height": 36,
+                      "fill": "$surface",
+                      "cornerRadius": 10,
+                      "stroke": "$panel-line",
+                      "strokeWidth": 1,
+                      "strokeAlignment": "inner",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "K2rHI7",
+                          "name": "Icon",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "rotate-cw",
+                          "library": "lucide",
+                          "fill": "$panel-ink-2"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "pm4Ap",
+              "name": "Section / 本页增强",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "aYD9c",
+                  "name": "Section Label",
+                  "fill": "$panel-ink-2",
+                  "content": "本页增强",
+                  "lineHeight": 1.3,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 0.4
+                },
+                {
+                  "type": "frame",
+                  "id": "apKPW",
+                  "name": "Card / 增强开关",
+                  "clip": true,
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 14,
+                  "stroke": "$panel-line",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "YJbKm",
+                      "name": "Row / 替换网页文本",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "padding": [
+                        11,
+                        12
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "g9ZGS",
+                          "name": "Label Block",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 3,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "qktUr",
+                              "name": "Label",
+                              "fill": "$panel-ink",
+                              "content": "替换网页文本",
+                              "lineHeight": 1.4,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 12.5,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "text",
+                              "id": "NHFqn",
+                              "name": "Desc",
+                              "fill": "$panel-ink-2",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "将部分中文替换为英文",
+                              "lineHeight": 1.45,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 10.5,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "WvKFv",
+                          "type": "ref",
+                          "ref": "SiQt6",
+                          "name": "Toggle On"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "TjQQh",
+                      "name": "Divider",
+                      "fill": "$panel-line",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "l0WzJ",
+                      "name": "Block / 划词翻译",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "r2lnkT",
+                          "name": "Row / 划词翻译",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "padding": [
+                            11,
+                            12,
+                            8,
+                            12
+                          ],
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "p0esu",
+                              "name": "Label Block",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 3,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "RYlvt",
+                                  "name": "Label",
+                                  "fill": "$panel-ink",
+                                  "content": "划词翻译",
+                                  "lineHeight": 1.4,
+                                  "fontFamily": "$font-ui",
+                                  "fontSize": 12.5,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "VIQcT",
+                                  "name": "Desc",
+                                  "fill": "$panel-ink-2",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "选中文本后快速翻译",
+                                  "lineHeight": 1.45,
+                                  "fontFamily": "$font-ui",
+                                  "fontSize": 10.5,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "wqJBS",
+                              "type": "ref",
+                              "ref": "SiQt6",
+                              "name": "Toggle On"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "dLXEf",
+                          "name": "Direction Wrapper",
+                          "width": "fill_container",
+                          "padding": [
+                            0,
+                            12,
+                            11,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "sm0hH",
+                              "name": "Segmented / 翻译方向",
+                              "width": "fill_container",
+                              "height": 28,
+                              "fill": "$panel-mute",
+                              "cornerRadius": 8,
+                              "gap": 2,
+                              "padding": 3,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "SXWdP",
+                                  "name": "Seg / 自动判断",
+                                  "width": "fill_container",
+                                  "height": "fill_container",
+                                  "fill": "$surface",
+                                  "cornerRadius": 6,
+                                  "effect": {
+                                    "type": "shadow",
+                                    "shadowType": "outer",
+                                    "color": "#0B152A1F",
+                                    "offset": {
+                                      "x": 0,
+                                      "y": 1
+                                    },
+                                    "blur": 2
+                                  },
+                                  "justifyContent": "center",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "BYWpk",
+                                      "name": "Label",
+                                      "fill": "$panel-ink",
+                                      "content": "自动判断",
+                                      "lineHeight": 1.3,
+                                      "fontFamily": "$font-ui",
+                                      "fontSize": 10.5,
+                                      "fontWeight": "600"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "kZZ4O",
+                                  "name": "Seg / 中译英",
+                                  "width": "fill_container",
+                                  "height": "fill_container",
+                                  "cornerRadius": 6,
+                                  "justifyContent": "center",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "TsnjN",
+                                      "name": "Label",
+                                      "fill": "$panel-ink-2",
+                                      "content": "中译英",
+                                      "lineHeight": 1.3,
+                                      "fontFamily": "$font-ui",
+                                      "fontSize": 10.5,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "FPaZF",
+                                  "name": "Seg / 英译中",
+                                  "width": "fill_container",
+                                  "height": "fill_container",
+                                  "cornerRadius": 6,
+                                  "justifyContent": "center",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "DlzJJ",
+                                      "name": "Label",
+                                      "fill": "$panel-ink-2",
+                                      "content": "英译中",
+                                      "lineHeight": 1.3,
+                                      "fontFamily": "$font-ui",
+                                      "fontSize": 10.5,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "SQ8XO",
+              "name": "Row / 记录与复盘",
+              "width": "fill_container",
+              "fill": "$panel-soft",
+              "cornerRadius": 12,
+              "stroke": "$panel-line",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "gap": 10,
+              "padding": [
+                11,
+                12
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "VjUhN",
+                  "name": "Label Block",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 3,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "NQsLn",
+                      "name": "Label",
+                      "fill": "$panel-ink",
+                      "content": "记录与复盘",
+                      "lineHeight": 1.4,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12.5,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "G7B94",
+                      "name": "Desc",
+                      "fill": "$panel-ink-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "最近翻译 4 条 · 待复盘 8 条",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 10.5,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon",
+                  "id": "CXlyz",
+                  "name": "Chevron",
+                  "width": 16,
+                  "height": 16,
+                  "icon": "chevron-right",
+                  "library": "lucide",
+                  "fill": "$panel-ink-2"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "NJkqF",
+      "x": 11332,
+      "y": 459,
+      "name": "Lexi 面板 / 改版 v2 · 规则恢复中",
+      "clip": true,
+      "width": 376,
+      "height": 739,
+      "fill": "$surface",
+      "stroke": "$panel-line",
+      "strokeWidth": 1,
+      "strokeAlignment": "inner",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "etJjz",
+          "name": "Title Bar",
+          "width": "fill_container",
+          "height": 48,
+          "padding": [
+            0,
+            12,
+            0,
+            14
+          ],
+          "justifyContent": "space_between",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "gVNKg",
+              "name": "Brand",
+              "gap": 8,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "jldCd",
+                  "name": "Logo Mark",
+                  "width": 20,
+                  "height": 20,
+                  "fill": {
+                    "type": "image",
+                    "enabled": true,
+                    "url": "src/assets/logo.png",
+                    "mode": "fill"
+                  },
+                  "cornerRadius": 6
+                },
+                {
+                  "type": "text",
+                  "id": "w5Irx",
+                  "name": "App Name",
+                  "fill": "$panel-ink",
+                  "content": "Lexi",
+                  "lineHeight": 1.2,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 15,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "SpUcw",
+              "name": "Window Actions",
+              "gap": 14,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon",
+                  "id": "AmWhd",
+                  "name": "Pin Off",
+                  "width": 17,
+                  "height": 17,
+                  "icon": "pin-off",
+                  "library": "lucide",
+                  "fill": "$panel-ink-2"
+                },
+                {
+                  "type": "icon",
+                  "id": "EBQN5",
+                  "name": "Close",
+                  "width": 18,
+                  "height": 18,
+                  "icon": "x",
+                  "library": "lucide",
+                  "fill": "$panel-ink-2"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "J0C7AP",
+          "name": "Site Header",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "padding": [
+            8,
+            24,
+            0,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "obmWx",
+              "name": "Site Block",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 3,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "pGE0e",
+                  "name": "Title Row",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "wZIUW",
+                      "name": "Title Left",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "G6fg63",
+                          "name": "Site Title",
+                          "fill": "$panel-ink",
+                          "content": "Lexical",
+                          "lineHeight": 1.25,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 17.5,
+                          "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "zCggQ",
+                      "name": "Icon Button / 完整配置",
+                      "width": 30,
+                      "height": 30,
+                      "fill": "$surface",
+                      "cornerRadius": 9,
+                      "stroke": "$panel-line",
+                      "strokeWidth": 1,
+                      "strokeAlignment": "inner",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "bghkt",
+                          "name": "Icon",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "sliders-horizontal",
+                          "library": "lucide",
+                          "fill": "$panel-ink"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "MFY55",
+                  "name": "Meta",
+                  "fill": "$panel-ink-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "难度 5 · 已记录 500 词",
+                  "lineHeight": 1.4,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11.5,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "rectangle",
+              "id": "u1Feki",
+              "name": "Divider",
+              "fill": "$panel-line",
+              "width": "fill_container",
+              "height": 1
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "IhY1S",
+          "name": "Tabs Wrapper",
+          "width": "fill_container",
+          "padding": [
+            14,
+            24,
+            0,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "PHtGJ",
+              "name": "Tab Bar",
+              "width": "fill_container",
+              "height": 34,
+              "fill": "$panel-mute",
+              "cornerRadius": 10,
+              "gap": 2,
+              "padding": 3,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "SHvZ3",
+                  "name": "Tab / 本页",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 8,
+                  "effect": {
+                    "type": "shadow",
+                    "shadowType": "outer",
+                    "color": "#0B152A1F",
+                    "offset": {
+                      "x": 0,
+                      "y": 1
+                    },
+                    "blur": 2
+                  },
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "VD9V3",
+                      "name": "Label",
+                      "fill": "$panel-ink",
+                      "content": "本页",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "bEasq",
+                  "name": "Tab / 全局",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "yy1R4",
+                      "name": "Label",
+                      "fill": "$panel-ink-2",
+                      "content": "全局",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Ip9Iz",
+                  "name": "Tab / 记录",
+                  "width": "fill_container",
+                  "height": "fill_container",
+                  "cornerRadius": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Zgj4Y",
+                      "name": "Label",
+                      "fill": "$panel-ink-2",
+                      "content": "记录",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "z2XQLP",
+          "name": "Content",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 14,
+          "padding": [
+            14,
+            24,
+            24,
+            24
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "S3uUiT",
+              "name": "Row / 站点总开关",
+              "width": "fill_container",
+              "fill": "$panel-soft",
+              "cornerRadius": 12,
+              "stroke": "$panel-line",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "gap": 10,
+              "padding": [
+                10,
+                12
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "TeywH",
+                  "name": "Label Block",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 3,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "QoALF",
+                      "name": "Label",
+                      "fill": "$panel-ink",
+                      "content": "在本站启用 Lexi",
+                      "lineHeight": 1.4,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12.5,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "D7X3S",
+                      "name": "Desc",
+                      "fill": "$panel-ink-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "lexical.dev · 关闭后本站点全部功能暂停",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 10.5,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "id": "PhTQH",
+                  "type": "ref",
+                  "ref": "SiQt6",
+                  "name": "Toggle On"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mvCEF",
+              "name": "Card / 自动翻译本页",
+              "width": "fill_container",
+              "fill": "$surface",
+              "cornerRadius": 14,
+              "stroke": "$panel-line",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "layout": "vertical",
+              "gap": 10,
+              "padding": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "v9eJ6",
+                  "name": "Header Row",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "wujuI",
+                      "name": "Title",
+                      "fill": "$panel-ink",
+                      "content": "页面双语翻译",
+                      "lineHeight": 1.3,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 13.5,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "tPgo1",
+                      "name": "Status Chip",
+                      "height": 22,
+                      "fill": "$accent-soft",
+                      "cornerRadius": 11,
+                      "gap": 5,
+                      "padding": [
+                        0,
+                        8
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "N9bbB",
+                          "name": "Dot",
+                          "fill": "$accent",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "jejBC",
+                          "name": "Label",
+                          "fill": "$accent",
+                          "content": "已按规则恢复",
+                          "lineHeight": 1.3,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 10.5,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "PZahy",
+                  "name": "Hint",
+                  "fill": "$panel-ink-2",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "已按保存规则恢复：当前链接。已翻译 12 段。",
+                  "lineHeight": 1.5,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 10.5,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "uKGSC",
+                  "name": "Actions",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Cx6nw",
+                      "name": "Button / 暂停本页",
+                      "width": "fill_container",
+                      "height": 36,
+                      "fill": "#FFFFFF",
+                      "cornerRadius": 10,
+                      "stroke": "$panel-line",
+                      "strokeWidth": 1,
+                      "gap": 6,
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "d9ZWn",
+                          "name": "Icon",
+                          "width": 13,
+                          "height": 13,
+                          "icon": "pause",
+                          "library": "lucide",
+                          "fill": "#FFFFFF"
+                        },
+                        {
+                          "type": "text",
+                          "id": "utuwC",
+                          "name": "Label",
+                          "fill": "$panel-ink-2",
+                          "content": "暂停本页",
+                          "lineHeight": 1.3,
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "zC2Rt",
+                      "name": "Icon Button / 刷新",
+                      "width": 36,
+                      "height": 36,
+                      "fill": "$surface",
+                      "cornerRadius": 10,
+                      "stroke": "$panel-line",
+                      "strokeWidth": 1,
+                      "strokeAlignment": "inner",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon",
+                          "id": "TVjFC",
+                          "name": "Icon",
+                          "width": 15,
+                          "height": 15,
+                          "icon": "rotate-cw",
+                          "library": "lucide",
+                          "fill": "$panel-ink-2"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "O4cDjm",
+                      "name": "Button / 管理规则",
+                      "height": 36,
+                      "cornerRadius": 9,
+                      "padding": [
+                        0,
+                        13
+                      ],
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "vzHxi",
+                          "name": "Label",
+                          "fill": "$panel-ink-2",
+                          "content": "管理规则",
+                          "fontFamily": "$font-ui",
+                          "fontSize": 12.5,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "EobG2",
+              "name": "Section / 本页增强",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "V20bM",
+                  "name": "Section Label",
+                  "fill": "$panel-ink-2",
+                  "content": "本页增强",
+                  "lineHeight": 1.3,
+                  "fontFamily": "$font-ui",
+                  "fontSize": 11,
+                  "fontWeight": "600",
+                  "letterSpacing": 0.4
+                },
+                {
+                  "type": "frame",
+                  "id": "slFY3",
+                  "name": "Card / 增强开关",
+                  "clip": true,
+                  "width": "fill_container",
+                  "fill": "$surface",
+                  "cornerRadius": 14,
+                  "stroke": "$panel-line",
+                  "strokeWidth": 1,
+                  "strokeAlignment": "inner",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "FM32I",
+                      "name": "Row / 替换网页文本",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "padding": [
+                        11,
+                        12
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "p5XGFi",
+                          "name": "Label Block",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 3,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "DUoya",
+                              "name": "Label",
+                              "fill": "$panel-ink",
+                              "content": "替换网页文本",
+                              "lineHeight": 1.4,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 12.5,
+                              "fontWeight": "600"
+                            },
+                            {
+                              "type": "text",
+                              "id": "VbbPs",
+                              "name": "Desc",
+                              "fill": "$panel-ink-2",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "将部分中文替换为英文",
+                              "lineHeight": 1.45,
+                              "fontFamily": "$font-ui",
+                              "fontSize": 10.5,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "w2DLl",
+                          "type": "ref",
+                          "ref": "SiQt6",
+                          "name": "Toggle On"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rectangle",
+                      "id": "UhzG6",
+                      "name": "Divider",
+                      "fill": "$panel-line",
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "frame",
+                      "id": "sMYhN",
+                      "name": "Block / 划词翻译",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "uGDok",
+                          "name": "Row / 划词翻译",
+                          "width": "fill_container",
+                          "gap": 12,
+                          "padding": [
+                            11,
+                            12,
+                            8,
+                            12
+                          ],
+                          "justifyContent": "space_between",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "Wlp18",
+                              "name": "Label Block",
+                              "width": "fill_container",
+                              "layout": "vertical",
+                              "gap": 3,
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "sDrYr",
+                                  "name": "Label",
+                                  "fill": "$panel-ink",
+                                  "content": "划词翻译",
+                                  "lineHeight": 1.4,
+                                  "fontFamily": "$font-ui",
+                                  "fontSize": 12.5,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "F7FZ8",
+                                  "name": "Desc",
+                                  "fill": "$panel-ink-2",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "选中文本后快速翻译",
+                                  "lineHeight": 1.45,
+                                  "fontFamily": "$font-ui",
+                                  "fontSize": 10.5,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "QPGCj",
+                              "type": "ref",
+                              "ref": "SiQt6",
+                              "name": "Toggle On"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RpP8q",
+                          "name": "Direction Wrapper",
+                          "width": "fill_container",
+                          "padding": [
+                            0,
+                            12,
+                            11,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "i7Mrp",
+                              "name": "Segmented / 翻译方向",
+                              "width": "fill_container",
+                              "height": 28,
+                              "fill": "$panel-mute",
+                              "cornerRadius": 8,
+                              "gap": 2,
+                              "padding": 3,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "rGVxb",
+                                  "name": "Seg / 自动判断",
+                                  "width": "fill_container",
+                                  "height": "fill_container",
+                                  "fill": "$surface",
+                                  "cornerRadius": 6,
+                                  "effect": {
+                                    "type": "shadow",
+                                    "shadowType": "outer",
+                                    "color": "#0B152A1F",
+                                    "offset": {
+                                      "x": 0,
+                                      "y": 1
+                                    },
+                                    "blur": 2
+                                  },
+                                  "justifyContent": "center",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "cBnRj",
+                                      "name": "Label",
+                                      "fill": "$panel-ink",
+                                      "content": "自动判断",
+                                      "lineHeight": 1.3,
+                                      "fontFamily": "$font-ui",
+                                      "fontSize": 10.5,
+                                      "fontWeight": "600"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "lb9U9",
+                                  "name": "Seg / 中译英",
+                                  "width": "fill_container",
+                                  "height": "fill_container",
+                                  "cornerRadius": 6,
+                                  "justifyContent": "center",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "fBl1c",
+                                      "name": "Label",
+                                      "fill": "$panel-ink-2",
+                                      "content": "中译英",
+                                      "lineHeight": 1.3,
+                                      "fontFamily": "$font-ui",
+                                      "fontSize": 10.5,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "BuDJ1",
+                                  "name": "Seg / 英译中",
+                                  "width": "fill_container",
+                                  "height": "fill_container",
+                                  "cornerRadius": 6,
+                                  "justifyContent": "center",
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "MAaMh",
+                                      "name": "Label",
+                                      "fill": "$panel-ink-2",
+                                      "content": "英译中",
+                                      "lineHeight": 1.3,
+                                      "fontFamily": "$font-ui",
+                                      "fontSize": 10.5,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "TlTe4",
+              "name": "Row / 记录与复盘",
+              "width": "fill_container",
+              "fill": "$panel-soft",
+              "cornerRadius": 12,
+              "stroke": "$panel-line",
+              "strokeWidth": 1,
+              "strokeAlignment": "inner",
+              "gap": 10,
+              "padding": [
+                11,
+                12
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "DB66h",
+                  "name": "Label Block",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 3,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "H9zuKx",
+                      "name": "Label",
+                      "fill": "$panel-ink",
+                      "content": "记录与复盘",
+                      "lineHeight": 1.4,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 12.5,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "vH2Sv",
+                      "name": "Desc",
+                      "fill": "$panel-ink-2",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "最近翻译 4 条 · 待复盘 8 条",
+                      "lineHeight": 1.45,
+                      "fontFamily": "$font-ui",
+                      "fontSize": 10.5,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "icon",
+                  "id": "y0upaJ",
+                  "name": "Chevron",
+                  "width": 16,
+                  "height": 16,
+                  "icon": "chevron-right",
+                  "library": "lucide",
+                  "fill": "$panel-ink-2"
+                }
+              ]
+            }
+          ]
+        }
+      ]
     }
   ],
   "variables": {

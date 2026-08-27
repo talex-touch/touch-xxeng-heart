@@ -13,6 +13,7 @@ useSeoMeta({
   <SectionHero />
   <SectionBrand />
   <SectionFeatures />
+  <SectionDetection />
   <SectionGlance />
   <SectionSteps />
   <SectionControl />

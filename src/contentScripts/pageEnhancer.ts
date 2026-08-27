@@ -620,13 +620,6 @@ function getPageStyleContent(customCss = '') {
       background-size: 220% 100%;
     }
 
-    [data-lexi-theme="dark"] .lexi-page-translation[data-lexi-loading="true"] {
-      background:
-        linear-gradient(rgba(28, 28, 30, 0.88), rgba(28, 28, 30, 0.88)) padding-box,
-        linear-gradient(110deg, #6fa8ff, #1976ff, #6fa8ff) border-box;
-      background-size: 100% 100%, 240% 100%;
-      color: rgba(141, 184, 255, 0.8);
-    }
 
     [data-lexi-theme="dark"] .lexi-media-toolbar__button:first-child {
       background: #ececec;
@@ -1186,15 +1179,15 @@ function getPageStyleContent(customCss = '') {
       }
     }
 
+    /* Translations read as quiet footnotes to the original paragraph, not as
+       AI task cards: one soft tint, no accent bars, no looping animation.
+       Scheduling priority (viewport/near/prefetch) stays invisible on purpose. */
     .lexi-page-translation {
       all: initial;
       box-sizing: border-box;
       display: block;
-      position: relative;
       margin: 0.55em 0;
-      border: 1px solid var(--lexi-line);
-      border-left: 3px solid var(--lexi-accent);
-      border-radius: 10px;
+      border-radius: 8px;
       background: var(--lexi-accent-soft);
       padding: 0.55em 0.7em;
       color: var(--lexi-ink);
@@ -1206,66 +1199,21 @@ function getPageStyleContent(customCss = '') {
     }
 
     .lexi-page-translation[data-lexi-loading="true"] {
-      border-color: transparent;
-      background:
-        linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)) padding-box,
-        linear-gradient(110deg, #1976ff, #6fa8ff, #1976ff) border-box;
-      background-size: 100% 100%, 240% 100%;
-      color: rgba(11, 87, 199, 0.78);
-      animation: lexi-page-translation-enter 180ms ease-out both, lexi-ai-border-flow var(--lexi-page-translation-speed, 1100ms) linear infinite, lexi-priority-opacity var(--lexi-page-translation-pulse, 1200ms) ease-in-out infinite;
-    }
-
-    .lexi-page-translation[data-lexi-loading="true"]::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(105deg, transparent 8%, rgba(25, 118, 255, 0.12) 45%, transparent 72%);
-      transform: translateX(-120%);
-      animation: lexi-page-translation-sweep var(--lexi-page-translation-speed, 1100ms) ease-in-out infinite;
-      pointer-events: none;
-    }
-
-    .lexi-page-translation[data-lexi-priority="viewport"] {
-      --lexi-page-translation-speed: 520ms;
-      --lexi-page-translation-pulse: 760ms;
-      border-left-color: var(--lexi-accent);
-    }
-
-    .lexi-page-translation[data-lexi-priority="near"] {
-      --lexi-page-translation-speed: 860ms;
-      --lexi-page-translation-pulse: 1040ms;
-      border-left-color: var(--lexi-accent-ink);
-    }
-
-    .lexi-page-translation[data-lexi-priority="prefetch"] {
-      --lexi-page-translation-speed: 1350ms;
-      --lexi-page-translation-pulse: 1480ms;
-      opacity: 0.82;
+      color: var(--lexi-ink-3);
+      transition: opacity 180ms ease;
+      opacity: 0.75;
     }
 
     @keyframes lexi-page-translation-enter {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
-    @keyframes lexi-ai-border-flow {
-      to { background-position: 0 0, -240% 0; }
-    }
-
-    @keyframes lexi-priority-opacity {
-      0%, 100% { opacity: 0.54; }
-      50% { opacity: 0.98; }
-    }
-
-    @keyframes lexi-page-translation-sweep {
-      to { transform: translateX(120%); }
+      from { opacity: 0; }
+      to { opacity: 1; }
     }
 
     @media (prefers-reduced-motion: reduce) {
       .lexi-page-translation,
-      .lexi-page-translation[data-lexi-loading="true"],
-      .lexi-page-translation[data-lexi-loading="true"]::before {
+      .lexi-page-translation[data-lexi-loading="true"] {
         animation: none;
+        transition: none;
       }
     }
 
@@ -3741,7 +3689,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
       const placeholder = insertPageTranslationElement(target.element, {
         id: target.id,
         source: target.text,
-        translation: target.priority === 'viewport' ? '正在优先翻译当前可视区域...' : '预加载翻译中...',
+        translation: '正在翻译…',
         priority: target.priority,
         updatedAt: Date.now(),
       }, { loading: true, priority: target.priority })

@@ -20,6 +20,7 @@ import { getStoredState, primeStoredRecords } from '~/logic/settingsCache'
 import { createSerializedTaskQueue } from '~/logic/asyncQueue'
 import { createOperationEpoch } from '~/logic/operationEpoch'
 import type { OperationEpochHandle } from '~/logic/operationEpoch'
+import { classifyTranslationFailure, createFailureReporter, describeTranslationFailure, isTerminalTranslationFailure } from '~/logic/translationFailure'
 import { getDifficultyWindow, getEffectiveDensity } from '~/logic/replacementLevels'
 import { readJsonValue } from '~/logic/storageJson'
 import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessaging'
@@ -82,6 +83,7 @@ const ignoredSelectors = [
   '.note-editable',
   '.medium-editor-element',
   '[data-lexi-token]',
+  '[data-lexi-entity]',
   '[data-lexi-selection-translation]',
   '[data-lexi-page-translation]',
   '[data-lexi-dialog]',
@@ -139,6 +141,8 @@ const maxAiReplacementSeedsPerPage = 3
 const requestedReplacementSeeds = new Set<string>()
 const replacementFreshnessWindowMs = 7 * 24 * 60 * 60 * 1000
 const maxSelectionTranslationLength = 5000
+/** Traversal budget, not a translation budget — how many blocks actually get translated is a separate limit. */
+const maxPageTranslationScanElements = 2000
 
 interface ReplacementSeed {
   text: string
@@ -2273,9 +2277,16 @@ function prunePageTranslationMemory(memory: PageTranslationMemory, settings: Lex
   return next
 }
 
+interface PageTranslationElementOptions {
+  loading?: boolean
+  priority?: PageTranslationPriority
+  /** Omit only for the loading placeholder; every real translation needs it to mark up vocabulary. */
+  settings?: LexiSettings
+}
+
 function createPageTranslationElement(
   block: PageTranslationBlock,
-  options: { loading?: boolean, priority?: PageTranslationPriority } = {},
+  options: PageTranslationElementOptions = {},
 ) {
   const element = document.createElement('div')
   element.dataset.lexiPageTranslation = 'true'
@@ -2284,16 +2295,16 @@ function createPageTranslationElement(
   if (options.loading)
     element.dataset.lexiLoading = 'true'
   element.className = 'lexi-page-translation'
-  element.textContent = block.translation
+  renderPageLearningText(element, block.translation, options.settings)
   return element
 }
 
-function updatePageTranslationElement(element: HTMLElement, block: PageTranslationBlock) {
+function updatePageTranslationElement(element: HTMLElement, block: PageTranslationBlock, settings?: LexiSettings) {
   const from = element.getBoundingClientRect()
   element.dataset.lexiPriority = block.priority ?? element.dataset.lexiPriority ?? 'prefetch'
   delete element.dataset.lexiLoading
   element.removeAttribute('aria-busy')
-  element.textContent = block.translation
+  renderPageLearningText(element, block.translation, settings)
 
   if (prefersReducedMotion())
     return
@@ -2308,7 +2319,23 @@ function updatePageTranslationElement(element: HTMLElement, block: PageTranslati
   })
 }
 
-function renderPageLearningText(element: HTMLElement, text: string, settings: LexiSettings) {
+/**
+ * The one place a translation's text reaches the DOM.
+ *
+ * Four paths produce a translation — a fresh request, session reuse, the page cache and
+ * cross-page memory — and only the first used to run this pass. A reload therefore kept
+ * the translation but stripped every vocabulary token out of it, so the learning layer
+ * only ever worked on a page's first visit.
+ *
+ * `settings` is absent for the loading placeholder, which is a status string rather than
+ * translated prose and has nothing to mark up.
+ */
+function renderPageLearningText(element: HTMLElement, text: string, settings?: LexiSettings) {
+  if (!settings) {
+    element.textContent = text
+    return
+  }
+
   const { min, max } = getDifficultyWindow(settings.replacement.level)
   const candidates = programmerVocabulary
     .filter(candidate => candidate.original.length >= 2 && !isProductVocabularyCandidate(candidate) && candidate.difficulty >= min && candidate.difficulty <= max && text.includes(candidate.original))
@@ -2341,7 +2368,7 @@ function getPageTranslationElementAfter(element: HTMLElement, blockId: string) {
 function insertPageTranslationElement(
   target: HTMLElement,
   block: PageTranslationBlock,
-  options: { loading?: boolean, priority?: PageTranslationPriority } = {},
+  options: PageTranslationElementOptions = {},
 ) {
   const existing = getPageTranslationElementAfter(target, block.id)
   if (existing)
@@ -2390,7 +2417,12 @@ function getPageTranslationTargets(settings: LexiSettings, limit = 12, autoSite?
     : location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
       ? '[data-testid="tweetText"], article div[lang]'
       : 'article p, article div[lang], main p, main li, p, li'
-  const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors)).slice(0, 420)
+  // Scanning is bounded, but the bound cannot be applied here in DOM order: the priority
+  // sort at the bottom is what puts the viewport first, and cutting at 420 beforehand
+  // meant a long document simply had no viewport candidates left to sort once the reader
+  // scrolled past that point. Every rect read below happens without an interleaved write,
+  // so the whole pass costs one layout regardless of how many elements it walks.
+  const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors)).slice(0, maxPageTranslationScanElements)
   const seen = new Set<string>()
   const targets: PageTranslationTarget[] = []
 
@@ -2459,7 +2491,7 @@ async function restorePageTranslationCache(
     if (!target)
       continue
 
-    insertPageTranslationElement(target.element, block, { priority: block.priority ?? target.priority })
+    insertPageTranslationElement(target.element, block, { priority: block.priority ?? target.priority, settings })
   }
 
   return cache
@@ -3502,6 +3534,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let pageTranslationTimer: number | undefined
   let pageTranslationObserver: MutationObserver | undefined
   let pageTranslationScanPending = false
+  // Set when a failure will repeat until the reader changes something — a daily cap, an
+  // out-of-hours schedule, a bad key. Scanning stops rather than retrying into the wall.
+  let pageTranslationHalted = false
+  const pageTranslationFailureReporter = createFailureReporter(60_000)
   let pageTranslationRunId = 0
   const pageTranslationEpoch = createOperationEpoch()
   let pageTranslationOperation: OperationEpochHandle | undefined
@@ -3745,9 +3781,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
           updatedAt: Date.now(),
         }
         const element = getPageTranslationElementAfter(target.element, target.id)
-          ?? insertPageTranslationElement(target.element, block, { priority: target.priority })
-        updatePageTranslationElement(element, block)
-        renderPageLearningText(element, block.translation, settings)
+          ?? insertPageTranslationElement(target.element, block, { priority: target.priority, settings })
+        updatePageTranslationElement(element, block, settings)
         pageTranslationSources.set(block.id, block)
         memory[target.memoryKey] = {
           ...block,
@@ -3807,7 +3842,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
         const cached = pageTranslationSources.get(target.id)
         if (cached) {
-          insertPageTranslationElement(target.element, { ...cached, priority: target.priority }, { priority: target.priority })
+          insertPageTranslationElement(target.element, { ...cached, priority: target.priority }, { priority: target.priority, settings })
           continue
         }
 
@@ -3821,7 +3856,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
             updatedAt: memoryEntry.updatedAt,
           }
           pageTranslationSources.set(target.id, block)
-          insertPageTranslationElement(target.element, block, { priority: target.priority })
+          insertPageTranslationElement(target.element, block, { priority: target.priority, settings })
           continue
         }
 
@@ -3861,7 +3896,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   function schedulePageTranslationScan(settings: LexiSettings, delay = 700) {
     const operation = pageTranslationOperation
-    if (!pageTranslationEnabled || !operation?.isCurrent())
+    if (!pageTranslationEnabled || pageTranslationHalted || !operation?.isCurrent())
       return
 
     if (pageTranslationRunningId != null) {
@@ -3873,10 +3908,33 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationTimer = window.setTimeout(() => {
       runPageTranslation(settings, operation)
         .catch((error) => {
-          if (!isAbortLikeError(error))
-            console.warn('[Lexi] page translation failed', error)
+          if (isAbortLikeError(error))
+            return
+
+          console.warn('[Lexi] page translation failed', error)
+          reportPageTranslationFailure(error, settings)
         })
     }, delay)
+  }
+
+  /**
+   * The loading placeholder is removed in a `finally`, so a silent failure reads as the
+   * spinner disappearing for no reason. Say why once, and stop scanning when retrying
+   * cannot help — otherwise scroll and mutation keep re-running a scan that will fail the
+   * same way for as long as the tab stays open.
+   */
+  function reportPageTranslationFailure(error: unknown, settings: LexiSettings) {
+    const kind = classifyTranslationFailure(error)
+
+    if (pageTranslationFailureReporter.shouldReport(kind))
+      showLexiToast(describeTranslationFailure(kind, error), settings.ui.customCss)
+
+    if (isTerminalTranslationFailure(kind)) {
+      pageTranslationHalted = true
+      pageTranslationObserver?.disconnect()
+      pageTranslationObserver = undefined
+      window.clearTimeout(pageTranslationTimer)
+    }
   }
 
   function ensurePageTranslationWatcher(settings: LexiSettings) {
@@ -3938,6 +3996,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     pageTranslationActivation = activation
     pageTranslationEnabled = true
+    pageTranslationHalted = false
+    pageTranslationFailureReporter.reset()
     pageTranslationOrigin = 'manual'
     pageTranslationSuppressed = false
     if (activation)
@@ -4063,6 +4123,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationActivation = activation
     pageTranslationAutoSite = autoSite
     pageTranslationEnabled = true
+    pageTranslationHalted = false
+    pageTranslationFailureReporter.reset()
     pageTranslationOrigin = activation ? 'restored' : 'auto'
     pageTranslationOperation = pageTranslationEpoch.begin()
     pageTranslationRunId = pageTranslationOperation.id

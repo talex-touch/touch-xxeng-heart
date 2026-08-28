@@ -4,6 +4,7 @@ export type LexiRuntimeMessageType =
   | 'lexi-acquire-digest-lease'
   | 'lexi-context-translate'
   | 'lexi-download-media'
+  | 'lexi-page-entities'
   | 'lexi-page-stats'
   | 'lexi-page-translate-start'
   | 'lexi-page-translate-status'

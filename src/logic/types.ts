@@ -1,6 +1,6 @@
 import type { AiProtocol } from './providers'
 
-export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni' | 'vocabulary'
+export type FeatureScene = 'replacement' | 'selection' | 'daily' | 'digest' | 'omni' | 'vocabulary' | 'entity'
 export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
 export type PageTranslationDirection = Exclude<TranslationDirection, 'auto'>
 export type PageTranslationAutoSite = 'discourse' | 'github-readme' | 'reddit'
@@ -182,6 +182,7 @@ export interface SiteSceneRule {
   daily: boolean
   digest: boolean
   omni: boolean
+  entity: boolean
 }
 
 export type SpecialSiteKind = 'social-feed' | 'forum-feed' | 'learning-exam' | 'custom'
@@ -396,6 +397,76 @@ export interface ForumDigestCacheEntry {
 
 export type ForumDigestCache = Record<string, ForumDigestCacheEntry>
 
+export type EntityDomain = 'tech' | 'finance' | 'product' | 'medical' | 'legal' | 'academic'
+
+/** One domain-specific reading of a term. Entries with two or more senses are the reason page-domain detection exists. */
+export interface EntitySense {
+  domain: EntityDomain
+  meaning: string
+  /** Written-out form of an abbreviation, e.g. ARR -> Annual Recurring Revenue. */
+  expansion?: string
+}
+
+export interface EntityEntry {
+  term: string
+  /** Ordered; the first sense is what an undecided page falls back to. */
+  senses: EntitySense[]
+  aliases?: string[]
+  /** Abbreviations match their exact casing, so `ARR` never fires on `arr`. */
+  caseSensitive?: boolean
+}
+
+export interface DetectedEntity {
+  term: string
+  domain: EntityDomain
+  meaning: string
+  expansion?: string
+  source: 'seed' | 'ai'
+  /**
+       The other domains this surface has a sense for; the hover card names them so a
+      wrong page-domain call stays visible to the reader instead of silently winning.
+   */
+  alternativeDomains: EntityDomain[]
+  count: number
+}
+
+export interface PageDomainProfile {
+  primary?: EntityDomain
+  /** Share of the winning domain, 0-1. Below the disambiguation floor `primary` stays undefined. */
+  confidence: number
+  scores: Record<EntityDomain, number>
+}
+
+export interface PageEntityReport {
+  domain: PageDomainProfile
+  entities: DetectedEntity[]
+  aiAssisted: boolean
+}
+
+export interface EntityDetectionSettings {
+  enabled: boolean
+  /** Lets the model name page-specific entities the seed dictionary cannot know. */
+  aiAssist: boolean
+  autoDelaySeconds: number
+  maxPerPage: number
+  cacheDays: number
+}
+
+export interface EntityCacheEntry {
+  url: string
+  title: string
+  host: string
+  primaryDomain?: EntityDomain
+  entities: DetectedEntity[]
+  sourceHash: string
+  templateVersion: number
+  modelFingerprint: string
+  updatedAt: number
+  lastAccessedAt: number
+}
+
+export type EntityCache = Record<string, EntityCacheEntry>
+
 export interface LexiSettings {
   siteRules: SiteRules
   replacement: ReplacementSettings
@@ -407,6 +478,7 @@ export interface LexiSettings {
   contentDigest: ContentDigestSettings
   githubDigest: GitHubDigestSettings
   forumDigest: ForumDigestSettings
+  entityDetection: EntityDetectionSettings
   ai: AiSettings
   sync: SyncSettings
 }

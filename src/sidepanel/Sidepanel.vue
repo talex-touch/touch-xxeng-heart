@@ -12,8 +12,10 @@ import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getToday
 import { exportVocabularyRecords, importVocabularyRecords } from '~/logic/vocabularyTransfer'
 import { maxVocabularyLimit, minVocabularyLimit } from '~/logic/defaults'
 import type { VocabularyReviewResult } from '~/logic/vocabularyRecords'
+import { entityDomainColors } from '~/logic/entityDomains'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
-import type { PageTranslationAutoSite, PageTranslationDirection, PageTranslationScope, TranslationDirection } from '~/logic/types'
+import type { PageEntitySummary } from '~/contentScripts/pageEntities'
+import type { EntityDomain, PageTranslationAutoSite, PageTranslationDirection, PageTranslationScope, TranslationDirection } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
 type PageContextStatus = 'loading' | 'supported' | 'unsupported'
@@ -27,12 +29,14 @@ const activeTab = ref<SidepanelTab>('common')
 
 const translationDirections: Array<{ value: TranslationDirection, label: string }> = [
   { value: 'auto', label: '自动判断' },
-  { value: 'zh-to-en', label: '中译英' },
-  { value: 'en-to-zh', label: '英译中' },
+  { value: 'zh-to-en', label: '译成英文' },
+  { value: 'en-to-zh', label: '译成中文' },
 ]
+// Named by target, not by pair: the engine detects the source itself, so `en-to-zh` also
+// covers a Japanese or Korean page. Labelling it 英文 → 中文 would be a promise we break.
 const pageTranslationDirections: Array<{ value: PageTranslationDirection, label: string }> = [
-  { value: 'en-to-zh', label: '英文 → 中文' },
-  { value: 'zh-to-en', label: '中文 → 英文' },
+  { value: 'en-to-zh', label: '译成中文' },
+  { value: 'zh-to-en', label: '译成英文' },
 ]
 const cleanupDays = ref(30)
 const importMessage = ref('')
@@ -60,6 +64,27 @@ const pageStats = ref<PageStats>({
   enabled: false,
   showFloatingStatus: false,
 })
+
+function createEmptyEntitySummary(): PageEntitySummary {
+  return {
+    domain: { primary: undefined, confidence: 0, scores: { tech: 0, finance: 0, product: 0, medical: 0, legal: 0, academic: 0 } },
+    entities: [],
+    aiAssisted: false,
+    primaryLabel: '',
+    domainCounts: [],
+  }
+}
+
+const pageEntities = ref<PageEntitySummary>(createEmptyEntitySummary())
+const visibleEntities = computed(() => pageEntities.value.entities.slice(0, 8))
+
+function domainInk(domain: EntityDomain) {
+  return entityDomainColors[domain].ink
+}
+
+function domainChipStyle(domain: EntityDomain) {
+  return { background: entityDomainColors[domain].soft, color: entityDomainColors[domain].ink }
+}
 
 const activeLevel = computed(() => resolveReplacementLevel(lexiSettings.value.replacement.level))
 const festivalTheme = computed(() => resolveFestivalTheme(undefined, lexiSettings.value.ui.festivalTheme))
@@ -248,6 +273,7 @@ function resetPageContextState() {
     enabled: false,
     showFloatingStatus: false,
   }
+  pageEntities.value = createEmptyEntitySummary()
 }
 
 let pageContextEpoch = 0
@@ -273,15 +299,19 @@ async function refreshPageTranslationStatus() {
 
     pageContextStatus.value = 'supported'
     pageContextMessage.value = ''
-    const [stats, status] = await Promise.all([
+    const [stats, status, entities] = await Promise.all([
       sendTabRuntimeMessage<PageStats>(tab.id, 'lexi-page-stats', {}),
       sendTabRuntimeMessage<typeof pageTranslationStatus.value>(tab.id, 'lexi-page-translate-status', {}),
+      // A page still running an older content script has no entity listener; that is a
+      // missing section, not a broken panel, so it must not fail the whole refresh.
+      sendTabRuntimeMessage<PageEntitySummary>(tab.id, 'lexi-page-entities', {}).catch(() => undefined),
     ])
     if (epoch !== pageContextEpoch)
       return
 
     pageStats.value = stats
     pageTranslationStatus.value = status
+    pageEntities.value = entities ?? createEmptyEntitySummary()
     // Cache size and block count now live in the progress row, so a healthy refresh
     // stays silent instead of restating them as a message.
     pageTranslationFailed.value = false
@@ -656,6 +686,46 @@ onBeforeUnmount(() => {
           </p>
         </section>
 
+        <section v-if="pageEntities.entities.length" class="rounded-3 border border-lexi-border bg-white px-3 py-3">
+          <div class="flex items-center justify-between gap-3">
+            <span class="min-w-0">
+              <span class="block text-12px font-600">本页实体</span>
+              <span class="mt-0.5 block text-11px text-lexi-ink-3">
+                {{ pageEntities.primaryLabel ? `按${pageEntities.primaryLabel}领域解释` : '页面领域未确定，按默认释义显示' }}
+              </span>
+            </span>
+            <span class="shrink-0 rounded-full bg-lexi-subtle px-2 py-1 text-11px font-600">
+              {{ pageEntities.entities.length }}
+            </span>
+          </div>
+
+          <p v-if="pageEntities.domainCounts.length" class="mt-2.5 flex flex-wrap gap-1.5">
+            <span
+              v-for="item in pageEntities.domainCounts"
+              :key="item.domain"
+              class="inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-11px font-600"
+              :style="domainChipStyle(item.domain)"
+            >
+              <i class="block h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
+              {{ item.label }} {{ item.count }}
+            </span>
+          </p>
+
+          <ul class="mt-1.5">
+            <li v-for="entity in visibleEntities" :key="entity.term" class="flex items-center gap-2 py-1.5">
+              <i class="block h-1.5 w-1.5 shrink-0 rounded-full" :style="{ background: domainInk(entity.domain) }" aria-hidden="true" />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-12px font-600">{{ entity.term }}</span>
+                <span class="mt-0.5 block truncate text-11px text-lexi-ink-3">{{ entity.meaning }}</span>
+              </span>
+            </li>
+          </ul>
+
+          <p v-if="pageEntities.entities.length > visibleEntities.length" class="mt-1 text-11px text-lexi-ink-3">
+            另有 {{ pageEntities.entities.length - visibleEntities.length }} 个已在正文中标出。
+          </p>
+        </section>
+
         <div>
           <h2 class="px-0.5 text-11px text-lexi-ink-3 font-600">
             本页增强
@@ -685,6 +755,14 @@ onBeforeUnmount(() => {
                 :disabled="!lexiSettings.selection.enabled"
                 label="划词翻译方向"
               />
+            </div>
+
+            <div class="border-t border-lexi-border flex items-center justify-between gap-3 px-3 py-2.5">
+              <span class="min-w-0">
+                <span class="block text-12px font-600">实体检测</span>
+                <span class="mt-0.5 block text-11px text-lexi-ink-3">标出专有名词及其所属领域</span>
+              </span>
+              <ToggleSwitch v-model="lexiSettings.entityDetection.enabled" label="实体检测" />
             </div>
           </div>
         </div>

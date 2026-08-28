@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
-import { defaultSettings, featureLabels, maxVocabularyLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
+import { defaultSettings, featureLabels, maxEntityLimit, maxVocabularyLimit, minEntityLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
+import { entitySeedSurfaceCount } from '~/logic/entityBank'
 import { festivalThemeDetails, festivalThemeOptions, resolveFestivalTheme } from '~/logic/festivalTheme'
 import { fetchProviderModels, testAiProvider, testAiScene } from '~/logic/aiClient'
 import { runAiScene } from '~/logic/aiTransport'
@@ -25,7 +26,7 @@ type VocabularyTab = 'overview' | 'settings'
 type SettingsSection = 'learning' | 'sites' | 'translation' | 'digest' | 'sync'
 type AiSection = 'special' | 'translation' | 'providers'
 
-const scenes: Exclude<FeatureScene, 'vocabulary'>[] = ['replacement', 'selection', 'daily', 'digest', 'omni']
+const scenes: Exclude<FeatureScene, 'vocabulary'>[] = ['replacement', 'selection', 'daily', 'digest', 'omni', 'entity']
 const aiScenes: FeatureScene[] = [...scenes, 'vocabulary']
 const tabs: Array<{ id: OptionsTab, label: string, icon: string, description: string }> = [
   { id: 'settings', label: '基础设置', icon: 'i-lucide-sliders-horizontal', description: '控制 Lexi 在哪些网页生效、替换多少词，以及划词与翻译的行为。' },
@@ -47,10 +48,11 @@ const settingsSections: Array<{ id: SettingsSection, label: string }> = [
   { id: 'digest', label: '内容速读' },
   { id: 'sync', label: '同步' },
 ]
+// Named by target: the engine detects the source, so these also serve Japanese and Korean.
 const translationDirections: Array<{ value: TranslationDirection, label: string }> = [
   { value: 'auto', label: '自动判断' },
-  { value: 'zh-to-en', label: '中译英' },
-  { value: 'en-to-zh', label: '英译中' },
+  { value: 'zh-to-en', label: '译成英文' },
+  { value: 'en-to-zh', label: '译成中文' },
 ]
 const densityTierOptions = densityTiers.map(tier => ({ value: tier.id, label: tier.label }))
 const replacementDisplayOptions = [
@@ -739,6 +741,7 @@ function addSceneRule() {
     daily: true,
     digest: true,
     omni: true,
+    entity: true,
   }
   lexiSettings.value.siteRules.sceneRules = [rule, ...lexiSettings.value.siteRules.sceneRules]
   newSceneRuleDomain.value = ''
@@ -1413,6 +1416,32 @@ async function searchVocabularyWithAi() {
                   />
                   <FormField label="缓存天数">
                     <BaseInput v-model="lexiSettings.forumDigest.cacheDays" type="number" :min="1" :max="60" />
+                  </FormField>
+                </div>
+              </div>
+
+              <div class="settings-subcard">
+                <h3>实体检测</h3>
+                <p>
+                  用内置的 {{ entitySeedSurfaceCount }} 条种子词典认出页面里的专有名词，先判断整页属于哪个领域，再决定同形词给出哪一个释义。
+                  开启 AI 补充后，还会请模型认出词典里没有的名字；这需要在「供应商与功能」里同时启用「实体检测」场景。
+                </p>
+                <div class="settings-stack settings-stack--tight">
+                  <SettingToggle v-model="lexiSettings.entityDetection.enabled" label="在网页中标出实体" />
+                  <SettingToggle
+                    v-model="lexiSettings.entityDetection.aiAssist"
+                    label="用 AI 补充词典之外的实体"
+                    hint="每页最多一次请求，结果按页面内容缓存。"
+                  />
+                  <RangeControl
+                    v-model="lexiSettings.entityDetection.maxPerPage"
+                    label="每页最多标注"
+                    :display-value="`${lexiSettings.entityDetection.maxPerPage} 个`"
+                    :min="minEntityLimit"
+                    :max="maxEntityLimit"
+                  />
+                  <FormField label="缓存天数">
+                    <BaseInput v-model="lexiSettings.entityDetection.cacheDays" type="number" :min="1" :max="60" />
                   </FormField>
                 </div>
               </div>

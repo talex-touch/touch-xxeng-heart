@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LexiSettings, SiteSceneRule } from './types'
-import { defaultSettings, mergeSettings } from './defaults'
+import { defaultSettings, maxEntityLimit, mergeSettings, minEntityLimit } from './defaults'
 
 describe('settings compatibility', () => {
   it('promotes a legacy global AI connection to the default provider', () => {
@@ -123,6 +123,36 @@ describe('settings compatibility', () => {
 
     expect(settings.ai.digest).toEqual(defaultSettings.ai.digest)
     expect(settings.siteRules.sceneRules[0].digest).toBe(true)
+  })
+
+  it('fills in entity detection for settings written before it existed', () => {
+    const { entityDetection, ...legacy } = defaultSettings
+    const settings = mergeSettings({
+      ...legacy,
+      siteRules: {
+        ...defaultSettings.siteRules,
+        sceneRules: [{
+          domain: 'example.com',
+          replacement: true,
+          selection: true,
+          daily: true,
+          digest: true,
+          omni: true,
+        } as unknown as SiteSceneRule],
+      },
+    })
+
+    expect(settings.entityDetection).toEqual(defaultSettings.entityDetection)
+    expect(settings.ai.entity).toEqual(defaultSettings.ai.entity)
+    expect(settings.siteRules.sceneRules[0].entity).toBe(true)
+  })
+
+  it('keeps a hand-edited entity budget inside the range the options page allows', () => {
+    const tooMany = mergeSettings({ entityDetection: { ...defaultSettings.entityDetection, maxPerPage: 5000 } })
+    const tooFew = mergeSettings({ entityDetection: { ...defaultSettings.entityDetection, maxPerPage: 0 } })
+
+    expect(tooMany.entityDetection.maxPerPage).toBe(maxEntityLimit)
+    expect(tooFew.entityDetection.maxPerPage).toBe(minEntityLimit)
   })
 
   it('migrates the old dialog shortcut to the current default', () => {

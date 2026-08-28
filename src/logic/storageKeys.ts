@@ -10,6 +10,7 @@ export const translationUsageStorageKey = 'touch-xxeng-heart-translation-usage'
 export const githubDigestStorageKey = 'touch-xxeng-heart-github-digests'
 export const forumDigestStorageKey = 'touch-xxeng-heart-forum-digests'
 export const contentDigestStorageKey = 'touch-xxeng-heart-content-digests'
+export const pageEntitiesStorageKey = 'touch-xxeng-heart-page-entities'
 export const contentDigestLeaseStorageKey = 'touch-xxeng-heart-content-digest-leases'
 /** Sync-area keys; the mirror is chunked because one sync item is capped at 8 KB. */
 export const syncSettingsMetaKey = 'lexi-sync-settings-meta'

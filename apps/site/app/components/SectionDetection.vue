@@ -5,31 +5,32 @@ const entities = [
   { en: 'MCP', zh: '技术工程', d: 'tech' },
   { en: 'per-seat', zh: '金融商业', d: 'fin' },
   { en: 'ARR', zh: '金融商业', d: 'fin' },
-  { en: 'infrastructure SaaS', zh: '技术工程', d: 'tech' },
+  { en: 'infrastructure SaaS', zh: '产品与公司', d: 'prod' },
   { en: 'Series F', zh: '金融商业', d: 'fin' },
   { en: 'post-money valuation', zh: '金融商业', d: 'fin' },
-  { en: 'liquidation preference', zh: '法律合规', d: 'law' },
+  { en: 'liquidation preference', zh: '金融商业', d: 'fin' },
   { en: 'Class II', zh: '法律合规', d: 'law' },
   { en: 'Phase II trial', zh: '医学生物', d: 'med' },
   { en: 'peer-reviewed', zh: '学术论文', d: 'aca' },
 ]
 
 const summary = [
-  { label: '技术', d: 'tech', n: 2 },
-  { label: '金融', d: 'fin', n: 4 },
-  { label: '产品', d: 'prod', n: 1 },
-  { label: '法律', d: 'law', n: 2 },
+  { label: '技术', d: 'tech', n: 1 },
+  { label: '金融', d: 'fin', n: 5 },
+  { label: '产品', d: 'prod', n: 2 },
+  { label: '法律', d: 'law', n: 1 },
   { label: '医学', d: 'med', n: 1 },
   { label: '学术', d: 'aca', n: 1 },
 ]
 
+// Examples, not inventory: every term below actually ships in the seed dictionary.
 const domains = [
-  { label: '技术工程', d: 'tech', n: '4,200+' },
-  { label: '金融商业', d: 'fin', n: '2,800+' },
-  { label: '产品与公司', d: 'prod', n: '1,600+' },
-  { label: '医学生物', d: 'med', n: '3,100+' },
-  { label: '法律合规', d: 'law', n: '1,200+' },
-  { label: '学术论文', d: 'aca', n: '2,400+' },
+  { label: '技术工程', d: 'tech', eg: 'MCP · idempotent · backpressure' },
+  { label: '金融商业', d: 'fin', eg: 'ARR · liquidation preference · basis point' },
+  { label: '产品与公司', d: 'prod', eg: 'Claude Code · Vite · Stripe' },
+  { label: '医学生物', d: 'med', eg: 'Phase II · biomarker · half-life' },
+  { label: '法律合规', d: 'law', eg: 'GDPR · force majeure · non-compete' },
+  { label: '学术论文', d: 'aca', eg: 'peer-reviewed · p-value · ablation study' },
 ]
 
 const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
@@ -70,9 +71,9 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
             tools across agents. Enterprise seats are priced <span class="ent is-fin">per-seat</span> with
             annual commitments, and analysts put the implied
             <span class="ent ent--demo is-fin" style="--i:1">ARR</span> multiple near 18x — well above the
-            median for <span class="ent is-tech">infrastructure SaaS</span>. The round was structured as a
+            median for <span class="ent is-prod">infrastructure SaaS</span>. The round was structured as a
             <span class="ent is-fin">Series F</span> at a $183B <span class="ent is-fin">post-money valuation</span>,
-            with standard <span class="ent ent--demo is-law" style="--i:3">liquidation preference</span>.
+            with standard <span class="ent ent--demo is-fin" style="--i:3">liquidation preference</span>.
             Separately, its health arm filed for <span class="ent is-law">Class II</span> clearance and began a
             <span class="ent ent--demo is-med" style="--i:2">Phase II trial</span> of an AI triage tool; results
             are due in a <span class="ent is-aca">peer-reviewed</span> journal next quarter.
@@ -82,110 +83,44 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
           <div class="cards" aria-hidden="true">
             <div class="glass card" style="--i:0">
               <div class="card__head">
-                <span class="card__glyph mono">&gt;_</span>
-                <span class="card__name">
-                  <b>Claude Code</b>
-                  <em>Anthropic · 终端 AI 编程代理</em>
-                </span>
-                <span class="tag is-prod">产品</span>
+                <b class="card__term">Claude Code</b>
+                <span class="tag is-prod">产品与公司</span>
               </div>
               <p class="card__desc">
-                运行在终端里的 AI 编程工具，能直接读写仓库、执行命令，并通过 MCP 接入外部工具。
-              </p>
-              <hr>
-              <dl class="card__facts">
-                <div>
-                  <dt>类别</dt><dd class="mono">
-                    CLI Coding Agent
-                  </dd>
-                </div>
-                <div>
-                  <dt>同类</dt><dd class="mono">
-                    Cursor · Codex · Aider
-                  </dd>
-                </div>
-                <div>
-                  <dt>常见搭配</dt><dd class="mono">
-                    MCP · subagent · hooks
-                  </dd>
-                </div>
-              </dl>
-              <hr>
-              <p class="card__foot">
-                <span>本页出现 3 次</span><b>官网 ↗</b>
+                Anthropic 推出的终端 AI 编程代理，可直接读写仓库、执行命令，并通过 MCP 接入外部工具。
               </p>
             </div>
 
             <div class="glass card" style="--i:1">
               <div class="card__head">
-                <b class="card__abbr mono">ARR</b>
-                <span class="tag is-fin">金融 · 缩写</span>
+                <b class="card__term mono">ARR</b>
+                <span class="tag is-fin">金融商业</span>
               </div>
-              <p class="card__expand">
+              <p class="card__expansion">
                 Annual Recurring Revenue
               </p>
-              <p class="card__zh">
-                年度经常性收入
-              </p>
               <p class="card__desc">
-                订阅业务在一年内可重复获得的收入，常用于给 SaaS 公司估值，比一次性收入更能反映稳定性。
-              </p>
-              <p class="card__formula mono">
-                Σ ARR = MRR × 12
-              </p>
-              <hr>
-              <p class="card__foot">
-                <b>＋ 加入词库</b><span class="mono">Investopedia</span>
+                年度经常性收入：订阅业务一年内可重复取得的收入，比一次性收入更能反映稳定性。
               </p>
             </div>
 
             <div class="glass card" style="--i:2">
               <div class="card__head">
-                <b class="card__abbr">Phase II trial</b>
-                <span class="tag is-med">医学</span>
+                <b class="card__term">Phase II trial</b>
+                <span class="tag is-med">医学生物</span>
               </div>
-              <p class="card__zh">
-                二期临床试验
-              </p>
               <p class="card__desc">
-                在较小规模患者中验证疗效、继续观察安全性的阶段，通常几十到几百人，决定新药能否进入三期。
-              </p>
-              <hr>
-              <dl class="card__facts">
-                <div>
-                  <dt>阶段</dt><dd class="mono">
-                    II / IV
-                  </dd>
-                </div>
-                <div>
-                  <dt>常见规模</dt><dd class="mono">
-                    100 – 300 人
-                  </dd>
-                </div>
-              </dl>
-              <hr>
-              <p class="card__foot">
-                <b>＋ 加入词库</b><span class="mono">相关 Phase I · III</span>
+                二期临床试验：在较小规模患者中验证疗效并继续观察安全性，通常 100–300 人。
               </p>
             </div>
 
             <div class="glass card" style="--i:3">
               <div class="card__head">
-                <b class="card__abbr">liquidation preference</b>
-                <span class="tag is-law">法律</span>
+                <b class="card__term">liquidation preference</b>
+                <span class="tag is-fin">金融商业</span>
               </div>
-              <p class="card__zh">
-                清算优先权
-              </p>
               <p class="card__desc">
-                公司清算或被收购时，投资人先于普通股东按约定倍数收回本金的权利，常见为 1x 无参与分配。
-              </p>
-              <p class="card__formula mono">
-                § 1x non-participating
-              </p>
-              <hr>
-              <p class="card__foot">
-                <b>＋ 加入词库</b><span class="mono">相关 Series F</span>
+                清算优先权：公司清算或被收购时投资人先于普通股东按约定倍数收回本金的权利，常见为 1x 无参与分配。
               </p>
             </div>
           </div>
@@ -239,17 +174,25 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
         <li v-for="d in domains" :key="d.label" :class="`is-${d.d}`">
           <p><i class="dot" /> <b>{{ d.label }}</b></p>
           <p class="mono">
-            {{ d.n }} 词条
+            {{ d.eg }}
           </p>
         </li>
       </ul>
+
+      <p class="domains__note">
+        六个领域由一份内置的种子词典打底——约 230 条，覆盖长期稳定的术语和一词多义的词。
+        这一页特有的名字（本季度的新产品、这篇论文的方法、这份文件里的对手方）由 AI 现场识别并补进来，每页最多一次请求，结果按页面内容缓存。
+      </p>
 
       <div class="panel ambiguity">
         <div class="ambiguity__copy">
           <h3 class="h3">
             同一个词，看上下文再决定。
           </h3>
-          <p>理析先判断这一页属于哪个领域，再决定给出哪一个释义，而不是把词典里的义项一股脑摊开。</p>
+          <p>
+            理析先从网址、标题和正文判断这一页属于哪个领域，再决定给出哪一个释义，而不是把词典里的义项一股脑摊开。
+            判断不出来时它会说明，并退回默认释义；选了一边时，卡片也会注明这个词在别的领域另有含义。
+          </p>
         </div>
         <div class="ambiguity__examples">
           <div>
@@ -386,7 +329,7 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
   top: 128px;
   right: clamp(16px, 2vw, 28px);
   width: 340px;
-  min-height: 300px;
+  min-height: 190px;
   pointer-events: none;
 }
 
@@ -408,70 +351,27 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
   24%, 100% { opacity: 0; transform: translateY(-6px); }
 }
 
-.card hr {
-  margin: 0;
-  border: 0;
-  border-top: 1px solid var(--line);
-}
-
 .card__head {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
-.card__glyph {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex: none;
-  border-radius: 9px;
-  background: var(--ink);
-  color: var(--inverse);
-  font-size: 12px;
-}
-
-.card__name {
+.card__term {
   flex: 1;
   min-width: 0;
-}
-
-.card__name b {
-  display: block;
   font-size: 15px;
   letter-spacing: -0.02em;
-  line-height: 1.3;
+  line-height: 1.35;
 }
 
-.card__name em {
-  display: block;
-  color: var(--ink-3);
-  font-size: 11.5px;
-  font-style: normal;
-  line-height: 1.4;
-}
-
-.card__abbr {
-  flex: 1;
-  min-width: 0;
-  font-size: 16px;
-  letter-spacing: -0.02em;
-  line-height: 1.3;
-}
-
-.card__expand {
+.card__expansion {
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   line-height: 1.4;
-  margin-bottom: -6px;
-}
-
-.card__zh {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.4;
+  margin-bottom: -4px;
 }
 
 .card__desc {
@@ -480,47 +380,10 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
   line-height: 1.85;
 }
 
-.card__formula {
-  border-radius: 9px;
-  background: var(--bg-subtle);
-  padding: 10px 13px;
-  font-size: 12.5px;
-}
-
-.card__facts {
-  display: grid;
-  gap: 8px;
-  font-size: 11.5px;
-}
-
-.card__facts > div {
-  display: flex;
-  gap: 12px;
-}
-
-.card__facts dt {
-  width: 66px;
-  flex: none;
-  color: var(--ink-3);
-}
-
-.card__facts dd {
-  margin: 0;
-  color: var(--ink);
-}
-
-.card__foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+.card__note {
   color: var(--ink-3);
   font-size: 11.5px;
-}
-
-.card__foot b {
-  color: var(--accent);
-  font-weight: 600;
+  line-height: 1.6;
 }
 
 /* --- legend + replay --- */
@@ -698,6 +561,15 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
   color: var(--ink-3);
   font-size: 11px;
   font-weight: 400;
+  line-height: 1.55;
+}
+
+.domains__note {
+  max-width: 76ch;
+  margin-top: 16px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.9;
 }
 
 /* --- disambiguation --- */
@@ -762,7 +634,7 @@ const cycle = ['Claude Code', 'ARR', 'Phase II trial', 'liquidation preference']
     top: auto;
     right: auto;
     width: auto;
-    min-height: 360px;
+    min-height: 230px;
     margin-top: 4px;
   }
 

@@ -2,6 +2,7 @@ import { startContentDigest } from './contentDigest'
 import { startForumDigest } from './forumDigest'
 import { startGitHubDigest } from './githubDigest'
 import { startPageEnhancer } from './pageEnhancer'
+import { startPageEntities } from './pageEntities'
 import type { PageStats } from './pageEnhancer'
 
 const fallbackStats: PageStats = {
@@ -32,6 +33,7 @@ export function ensurePageEnhancer() {
     startContentDigest()
     startGitHubDigest()
     startForumDigest()
+    startPageEntities()
   }
   if (document.body)
     startTopFrameFeatures()

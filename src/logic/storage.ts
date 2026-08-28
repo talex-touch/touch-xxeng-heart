@@ -1,6 +1,6 @@
 import { defaultSettings, mergeSettings } from './defaults'
-import { aiCallLogsStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
-import type { AiCallLog, ContentDigestCache, ForumDigestCache, GitHubDigestCache, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
+import { aiCallLogsStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageEntitiesStorageKey, pageVisitLogsStorageKey, settingsStorageKey, vocabularyStorageKey } from './storageKeys'
+import type { AiCallLog, ContentDigestCache, EntityCache, ForumDigestCache, GitHubDigestCache, LexiSettings, PageVisitLog, VocabularyRecord } from './types'
 import { useWebExtensionStorage } from '~/composables/useWebExtensionStorage'
 
 // The `dataReady` promises these used to export were never awaited anywhere.
@@ -47,6 +47,12 @@ export const { data: githubDigestCache } = useWebExtensionStorage<GitHubDigestCa
 
 export const { data: forumDigestCache } = useWebExtensionStorage<ForumDigestCache>(
   forumDigestStorageKey,
+  {},
+  { writeDefaults: false },
+)
+
+export const { data: pageEntityCache } = useWebExtensionStorage<EntityCache>(
+  pageEntitiesStorageKey,
   {},
   { writeDefaults: false },
 )

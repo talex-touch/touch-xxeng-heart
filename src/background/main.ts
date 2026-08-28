@@ -12,7 +12,7 @@ import { enqueueTranslation, reserveTranslationQuota } from '~/logic/translation
 import type { PageTranslationCache, TranslationDirection, TranslationEngineConfig } from '~/logic/types'
 import { mergeDigestCacheEntry, pruneDigestCacheBySize } from '~/logic/digestCache'
 import { readJsonValue } from '~/logic/storageJson'
-import { contentDigestLeaseStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageTranslationsStorageKey } from '~/logic/storageKeys'
+import { contentDigestLeaseStorageKey, contentDigestStorageKey, forumDigestStorageKey, githubDigestStorageKey, pageEntitiesStorageKey, pageTranslationsStorageKey } from '~/logic/storageKeys'
 
 // only on dev mode
 if (import.meta.hot) {
@@ -168,7 +168,7 @@ listenRuntimeMessage<{ key?: unknown, cache?: unknown }>('lexi-write-page-transl
   })
 })
 
-const digestStorageKeys = new Set([githubDigestStorageKey, forumDigestStorageKey, contentDigestStorageKey])
+const digestStorageKeys = new Set([githubDigestStorageKey, forumDigestStorageKey, contentDigestStorageKey, pageEntitiesStorageKey])
 let digestCacheWrite: Promise<void> = Promise.resolve()
 
 function readDigestCache(value: unknown): DigestCache {

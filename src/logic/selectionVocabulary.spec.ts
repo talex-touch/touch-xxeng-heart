@@ -64,6 +64,16 @@ describe('selection vocabulary filters', () => {
     }), '')).toMatchObject({ original: 'OAuth2' })
   })
 
+  it('does not treat Japanese kanji as Chinese', () => {
+    // 配置 is written the same in both languages but means "arrangement" in Japanese, so
+    // the plain ideograph test used to replace it with "configuration" on Japanese pages.
+    const japanese = candidate({ original: '設定を配置する', replacement: 'configuration' })
+
+    expect(canAutoReplaceCandidate(japanese)).toBe(false)
+    expect(shouldRecordSelectionCandidate(japanese, '設定を配置する')).toBe(false)
+    expect(isLowValueShortChineseCandidate(candidate({ original: '配置を' }))).toBe(false)
+  })
+
   it('records only useful terms returned from detail response', () => {
     const base = translation({
       original: 'The UI applies an optimistic update.',

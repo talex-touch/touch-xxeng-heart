@@ -39,7 +39,7 @@ describe('traditional translation engines', () => {
     })
   })
 
-  it('sends Microsoft subscription credentials, region, source language, and translation payload', async () => {
+  it('sends Microsoft subscription credentials, region, and translation payload without asserting a source', async () => {
     const requests: Array<{ url: URL, init?: RequestInit }> = []
     const fetchImpl = async (url: RequestInfo | URL, init?: RequestInit) => {
       requests.push({ url: requestUrl(url), init })
@@ -63,9 +63,10 @@ describe('traditional translation engines', () => {
       .toBe('https://api.cognitive.microsofttranslator.com/translate')
     expect(Object.fromEntries(requests[0].url.searchParams)).toMatchObject({
       'api-version': '3.0',
-      'from': 'en',
       'to': 'zh-Hans',
     })
+    // Asserting `from` broke the moment an `en-to-zh` page turned out to be Japanese.
+    expect(requests[0].url.searchParams.has('from')).toBe(false)
     expect(requests[0].init).toMatchObject({
       method: 'POST',
       headers: {
@@ -152,5 +153,16 @@ describe('traditional translation engines', () => {
   it('uses engine-specific Chinese target tags', () => {
     expect(getTranslationTarget('en-to-zh', 'microsoft', 'hello')).toBe('zh-Hans')
     expect(getTranslationTarget('en-to-zh', 'google-web', 'hello')).toBe('zh-CN')
+  })
+
+  it('sends Japanese and Korean to Chinese rather than to English', () => {
+    // Both carry Han characters, and a bare ideograph test used to read them as Chinese
+    // and translate them out to English — away from the reader's own language.
+    expect(getTranslationTarget('auto', 'microsoft', 'これは日本語の技術文書です。')).toBe('zh-Hans')
+    expect(getTranslationTarget('auto', 'google-web', '設定を配置する')).toBe('zh-CN')
+    expect(getTranslationTarget('auto', 'microsoft', '이것은 한국어 문서입니다.')).toBe('zh-Hans')
+
+    // Chinese still goes the other way.
+    expect(getTranslationTarget('auto', 'microsoft', '这是一份中文技术文档。')).toBe('en')
   })
 })

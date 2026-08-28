@@ -1,3 +1,4 @@
+import { confidentEnough, detectLanguage } from './languageDetection'
 import type { PageTranslationActivation, PageTranslationAutoSite, PageTranslationAutoSites, PageTranslationDirection } from './types'
 import type { SiteDetectionHints } from './siteRules'
 
@@ -82,10 +83,11 @@ function pageTextLooksEnglish(document: Document, site: PageTranslationAutoSite)
     .filter(text => text.length >= 24)
     .join(' ')
     .slice(0, 6000)
-  const latin = (text.match(/[a-z]/gi) ?? []).length
-  const cjk = (text.match(/[\u3400-\u9FFF]/g) ?? []).length
 
-  return latin >= 80 && latin > cjk * 2
+  // Counting Latin characters alone passed Spanish, French and German too, and the auto
+  // path then translated them with a hardcoded English source.
+  const { language, confidence, counts } = detectLanguage(text)
+  return counts.latin >= 80 && language === 'en' && confidence >= confidentEnough
 }
 
 export function findEnabledEnglishAutoPageTranslationSite(

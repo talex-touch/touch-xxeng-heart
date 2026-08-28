@@ -1,3 +1,5 @@
+import { isChineseText } from './languageDetection'
+import { protectTerms, restoreTerms } from './termProtection'
 import type { TranslationDirection, TranslationEngineConfig, TranslationEngineKind } from './types'
 
 export interface TranslationRequest {
@@ -13,12 +15,14 @@ export interface TranslationResult {
 
 type FetchLike = typeof fetch
 
-function hasCjk(text: string) {
-  return /[\u3400-\u9FFF]/.test(text)
-}
+/** No provider should hold a slot longer than this; none of them stream. */
+const engineTimeoutMs = 20_000
 
 export function getTranslationTarget(direction: TranslationDirection, kind: TranslationEngineKind, text: string) {
-  const target = direction === 'zh-to-en' || (direction === 'auto' && hasCjk(text)) ? 'en' : 'zh'
+  // Under `auto`, only Chinese translates out to English. Japanese and Korean carry Han
+  // characters too, and a bare ideograph test read them as Chinese \u2014 which sent a reader
+  // who wanted a Japanese page in Chinese an English translation instead.
+  const target = direction === 'zh-to-en' || (direction === 'auto' && isChineseText(text)) ? 'en' : 'zh'
   return kind === 'microsoft' && target === 'zh' ? 'zh-Hans' : target === 'zh' ? 'zh-CN' : target
 }
 
@@ -36,8 +40,10 @@ async function translateMicrosoft(engine: TranslationEngineConfig, request: Tran
   const url = new URL('https://api.cognitive.microsofttranslator.com/translate')
   url.searchParams.set('api-version', '3.0')
   url.searchParams.set('to', target)
-  if (request.direction !== 'auto')
-    url.searchParams.set('from', request.direction === 'zh-to-en' ? 'zh-Hans' : 'en')
+  // Source stays unset on purpose. `en-to-zh` used to assert `from=en`, which broke the
+  // moment the page was Japanese or Korean rather than English — the engine was told a
+  // source language the text did not have. Engines detect this better than we can, per
+  // request rather than per page, and it costs nothing.
 
   const response = await fetchImpl(url, {
     method: 'POST',
@@ -47,7 +53,7 @@ async function translateMicrosoft(engine: TranslationEngineConfig, request: Tran
       'Ocp-Apim-Subscription-Region': region,
     },
     body: JSON.stringify([{ Text: request.text }]),
-    signal: undefined,
+    signal: AbortSignal.timeout(engineTimeoutMs),
   })
   if (!response.ok)
     throw toError(response, engine.label)
@@ -63,12 +69,12 @@ async function translateGoogleWeb(engine: TranslationEngineConfig, request: Tran
   const target = getTranslationTarget(request.direction, 'google-web', request.text)
   const url = new URL('https://translate.googleapis.com/translate_a/single')
   url.searchParams.set('client', 'gtx')
-  url.searchParams.set('sl', request.direction === 'auto' ? 'auto' : request.direction === 'zh-to-en' ? 'zh-CN' : 'en')
+  url.searchParams.set('sl', 'auto')
   url.searchParams.set('tl', target)
   url.searchParams.set('dt', 't')
   url.searchParams.set('q', request.text)
 
-  const response = await fetchImpl(url)
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(engineTimeoutMs) })
   if (!response.ok)
     throw toError(response, engine.label)
 
@@ -103,12 +109,7 @@ export async function translateWithEngines(
   fetchImpl: FetchLike = fetch,
   beforeEngine?: (engine: TranslationEngineConfig) => Promise<void>,
 ): Promise<TranslationResult> {
-  const protectedTerms: string[] = []
-  const protectedText = request.text.replace(/`[^`]+`|https?:\/\/\S+|\b(?:[A-Z]{2,}|[A-Za-z]*[a-z][A-Z][A-Za-z0-9]*)\b/g, (term) => {
-    const token = `__LEXI_TERM_${protectedTerms.length}__`
-    protectedTerms.push(term)
-    return token
-  })
+  const { text: protectedText, terms: protectedTerms } = protectTerms(request.text)
   const protectedRequest = { ...request, text: protectedText }
   const candidates = normalizeTranslationEngines(engines)
     .filter(engine => engine.enabled && (engine.kind !== 'google-web' || engine.acceptedRisk))
@@ -123,8 +124,7 @@ export async function translateWithEngines(
       const translated = engine.kind === 'microsoft'
         ? await translateMicrosoft(engine, protectedRequest, fetchImpl)
         : await translateGoogleWeb(engine, protectedRequest, fetchImpl)
-      const text = protectedTerms.reduce((value, term, index) => value.replaceAll(`__LEXI_TERM_${index}__`, term), translated)
-      return { text, engineId: engine.id, engineLabel: engine.label }
+      return { text: restoreTerms(translated, protectedTerms), engineId: engine.id, engineLabel: engine.label }
     }
     catch (error) {
       failures.push(error instanceof Error ? error.message : String(error))

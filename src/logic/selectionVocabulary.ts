@@ -1,4 +1,5 @@
 import { isProductVocabularyCandidate } from './vocabularyRecords'
+import { isChineseText } from './languageDetection'
 import type { SelectionTranslation, VocabularyCandidate } from './types'
 
 const commonEnglishWords = new Set([
@@ -48,6 +49,11 @@ const commonEnglishWords = new Set([
   'your',
 ])
 
+/**
+ * Any CJK ideograph, regardless of language. Use {@link isChineseText} for anything that
+ * feeds the vocabulary layer \u2014 that layer replaces Chinese words with English ones, and
+ * kanji and hanja look identical to this test while meaning something else.
+ */
 export function hasCjkText(text: string) {
   return /[\u3400-\u9FFF]/.test(text)
 }
@@ -106,7 +112,7 @@ export function isLikelyTechnicalSelectionTerm(text: string) {
 
 export function isLowValueShortChineseCandidate(candidate: Pick<VocabularyCandidate, 'difficulty' | 'original'>) {
   return candidate.difficulty <= 2
-    && hasCjkText(candidate.original)
+    && isChineseText(candidate.original)
     && countCjkCharacters(candidate.original) <= 3
 }
 
@@ -117,7 +123,7 @@ export function canAutoReplaceCandidate(candidate: VocabularyCandidate) {
   if (isAmbiguousSingleCharacterTerm(candidate.original))
     return false
 
-  return hasCjkText(candidate.original) && isConciseEnglishReplacement(candidate.original, candidate.replacement)
+  return isChineseText(candidate.original) && isConciseEnglishReplacement(candidate.original, candidate.replacement)
 }
 
 export function shouldRecordSelectionCandidate(candidate: VocabularyCandidate, selectedText: string) {
@@ -133,7 +139,8 @@ export function shouldRecordSelectionCandidate(candidate: VocabularyCandidate, s
     return false
 
   if (hasCjkText(original)) {
-    return countCjkCharacters(original) >= 4
+    return isChineseText(original)
+      && countCjkCharacters(original) >= 4
       && isConciseEnglishReplacement(original, candidate.replacement)
   }
 
@@ -171,7 +178,7 @@ export function createTechnicalCandidate(translation: SelectionTranslation, expl
 }
 
 export function createCandidateFromTerm(translation: SelectionTranslation, term: { term: string, explanation: string }): VocabularyCandidate | undefined {
-  const isChineseTerm = hasCjkText(term.term)
+  const isChineseTerm = isChineseText(term.term)
   const replacement = isChineseTerm ? translation.translation : term.term
   const candidate: VocabularyCandidate = {
     original: term.term,

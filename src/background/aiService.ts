@@ -8,6 +8,8 @@ import { enqueueTranslation, reserveTranslationQuota } from '~/logic/translation
 import { readLocalSettings } from '~/logic/settingsSync'
 
 const keepAliveIntervalMs = 20_000
+/** Ceiling for one request, counted from the moment it leaves the queue. */
+const maxKeepAliveMs = 180_000
 const maxConcurrentAiRequests = 3
 const enqueueAiRequest = createConcurrentTaskQueue(maxConcurrentAiRequests)
 
@@ -18,9 +20,20 @@ const enqueueAiRequest = createConcurrentTaskQueue(maxConcurrentAiRequests)
  * extension API calls reset the 30s idle timer. A reasoning model answering without
  * streaming can easily take longer than that, and the worker going down mid-request would
  * drop the answer, so tick a trivial API until the request settles.
+ *
+ * The tick stops on its own after `maxKeepAliveMs`. Without that bound a request that
+ * never settles — a provider that accepts the connection and then goes quiet — would keep
+ * the worker alive for as long as the browser runs.
  */
-function startKeepAlive() {
+function startKeepAlive(onExpire: () => void) {
+  const startedAt = Date.now()
   const timer = setInterval(() => {
+    if (Date.now() - startedAt >= maxKeepAliveMs) {
+      clearInterval(timer)
+      onExpire()
+      return
+    }
+
     void browser.runtime.getPlatformInfo().catch(() => {})
   }, keepAliveIntervalMs)
 
@@ -77,13 +90,23 @@ async function execute(port: Runtime.Port, command: AiCommand, signal: AbortSign
   post(port, { type: 'done', text: result.text, streamed: result.streamed })
 }
 
-async function handle(port: Runtime.Port, command: AiCommand, signal: AbortSignal) {
-  const stopKeepAlive = startKeepAlive()
+async function handle(port: Runtime.Port, command: AiCommand, controller: AbortController) {
+  const { signal } = controller
+  let expired = false
+  const stopKeepAlive = startKeepAlive(() => {
+    expired = true
+    controller.abort()
+  })
 
   try {
     await execute(port, command, signal)
   }
   catch (error) {
+    if (expired) {
+      post(port, { type: 'error', message: 'AI 服务无响应，请稍后重试。', name: 'TimeoutError' })
+      return
+    }
+
     if (signal.aborted || isAbortError(error))
       return
 
@@ -120,13 +143,29 @@ export function startAiService() {
 
     const controller = new AbortController()
     let started = false
+    let settled = false
+
+    port.onDisconnect.addListener(() => {
+      // The client hangs up on success too, so only an early hangup means work is still
+      // running: the tab navigated away, or the caller aborted. Without this the request
+      // keeps its queue slot — and its keep-alive tick — until the browser closes.
+      if (!settled)
+        controller.abort()
+    })
 
     port.onMessage.addListener((raw: unknown) => {
       if (started || !isAiCommand(raw))
         return
 
       started = true
-      const work = () => handle(port, raw, controller.signal)
+      const work = async () => {
+        try {
+          await handle(port, raw, controller)
+        }
+        finally {
+          settled = true
+        }
+      }
       void (raw.type === 'run' && raw.translation ? enqueueTranslation(work) : enqueueAiRequest(work))
     })
   })

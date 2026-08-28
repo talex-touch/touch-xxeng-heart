@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.0 - 2026-08-28
+
+Changes since v0.2.14.
+
+### Features
+- mark named entities and resolve them against the page's domain (d6bbcb2)
+- reserve the subtitle source contract (21c7ffa)
+- classify translation failures so they can be reported once (fb64318)
+- detect the page language and serve Japanese and Korean (8670cb6)
+
+### Fixes
+- keep vocabulary in restored translations and explain failures (d481111)
+- release the worker when a request is cancelled or hangs (cdb0192)
+
+### Docs
+- add a user-facing feature guide (04ab19d)
+
 ## v0.2.14 - 2026-08-27
 
 Changes since v0.2.13.
@@ -182,6 +199,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

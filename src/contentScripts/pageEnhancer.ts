@@ -27,7 +27,7 @@ import { listenRuntimeMessage, sendRuntimeMessage } from '~/logic/runtimeMessagi
 import { canAutoReplaceCandidate, createCandidateFromTerm, createManualCandidate, createTechnicalCandidate, hasCjkText, isLikelyTechnicalSelectionTerm, isLowValueShortChineseCandidate, shouldRecordSelectionCandidate } from '~/logic/selectionVocabulary'
 import { findSpecialSiteProfile, isPageEnabled, isSceneEnabled } from '~/logic/siteRules'
 import type { SiteDetectionHints } from '~/logic/siteRules'
-import { pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
+import { dialogHistorySessionStorageKey, pageTranslationMemoryStorageKey, pageTranslationsStorageKey, settingsStorageKey, vocabularyStorageKey } from '~/logic/storageKeys'
 import { deletePageTranslationActivation, findMatchingPageTranslationActivation as findActivationMatchingUrl, getPageTranslationActivationKey, normalizePageTranslationUrl as normalizeTranslationRuleUrl, upsertPageTranslationActivation } from '~/logic/pageTranslationRules'
 import { programmerVocabulary } from '~/logic/vocabularyBank'
 import { getVocabularyId, isProductVocabularyCandidate, isReplacementSuppressed, setVocabularyArchived, upsertVocabularyRecord } from '~/logic/vocabularyRecords'
@@ -202,6 +202,50 @@ interface DialogHistoryMessage {
   content: string
   /** Excerpt ids sent with this turn, so later turns can skip resending them. */
   segmentIds?: string[]
+}
+
+interface DialogHistorySnapshot {
+  url: string
+  messages: DialogHistoryMessage[]
+}
+
+const maxPersistedDialogTurns = 20
+
+function getDialogHistoryUrl() {
+  return `${location.origin}${location.pathname}${location.search}`
+}
+
+/** Keeps a page conversation through panel close/reopen and reload, but only in this tab. */
+function readDialogHistory(): DialogHistoryMessage[] {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(dialogHistorySessionStorageKey) ?? 'null') as Partial<DialogHistorySnapshot> | null
+    if (stored?.url !== getDialogHistoryUrl() || !Array.isArray(stored.messages))
+      return []
+
+    return stored.messages.flatMap((message): DialogHistoryMessage[] => {
+      if (!message || typeof message !== 'object' || (message.role !== 'user' && message.role !== 'assistant') || typeof message.content !== 'string' || !message.content.trim())
+        return []
+
+      const segmentIds = Array.isArray(message.segmentIds)
+        ? message.segmentIds.filter((id): id is string => typeof id === 'string').slice(0, 24)
+        : undefined
+      return [{ role: message.role, content: message.content, segmentIds }]
+    }).slice(-maxPersistedDialogTurns)
+  }
+  catch {
+    return []
+  }
+}
+
+function persistDialogHistory(history: DialogHistoryMessage[]) {
+  try {
+    const snapshot: DialogHistorySnapshot = {
+      url: getDialogHistoryUrl(),
+      messages: history.slice(-maxPersistedDialogTurns),
+    }
+    sessionStorage.setItem(dialogHistorySessionStorageKey, JSON.stringify(snapshot))
+  }
+  catch {}
 }
 
 interface MediaTargetInfo {
@@ -3112,7 +3156,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   }
 
   let context = createDialogContext(lastTranslation)
-  const history: DialogHistoryMessage[] = []
+  const history = readDialogHistory()
   let dialogAbortController: AbortController | undefined
   const anchor = getCurrentDialogAnchor()
 
@@ -3154,6 +3198,8 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
   appendDialogMessage(messages, 'system', context.selection?.text
     ? '会结合选区、译文和检索到的页面片段回答，可连续追问。'
     : '已为本页正文建立索引，提问时只检索相关片段作答。')
+  for (const message of history)
+    appendDialogMessage(messages, message.role, message.content)
   input.placeholder = context.selection?.text ? '解释这段内容，或继续追问' : '基于当前页面提问'
   input.rows = 1
   send.type = 'button'
@@ -3285,6 +3331,7 @@ function createLexiDialog(settings: LexiSettings, lastTranslation?: LastTranslat
 
       turn.segmentIds = segmentIds
       history.push(turn, { role: 'assistant', content: answerText })
+      persistDialogHistory(history)
       if (segmentIds?.length)
         appendDialogSources(assistantBubble, page, segmentIds, () => collapsible.setCollapsed(true))
     }

@@ -142,6 +142,33 @@ describe('dialog page search', () => {
     expect(painted.at(-1)).toBe('这个项目使用 MIT 许可证。')
   })
 
+  it('withholds cumulative search control fragments before streaming the retrieved answer', async () => {
+    const painted: string[] = []
+    const searched: string[] = []
+    const finalAnswer = 'Whisper 模型会保存到本地缓存目录。'
+
+    mocks.runAiScene.mockImplementation(async (_request: unknown, onText?: (text: string) => void) => {
+      if (mocks.runAiScene.mock.calls.length === 1) {
+        onText?.('```\n')
+        onText?.('```\n<search>Whisper model storage local')
+        onText?.('```\n<search>Whisper model storage local</search>\n```')
+        return { text: '```\n<search>Whisper model storage local</search>\n```', streamed: true }
+      }
+
+      onText?.(finalAnswer)
+      return { text: finalAnswer, streamed: true }
+    })
+
+    await requestLexiDialogAnswer(mergeSettings(), { question: 'Whisper 模型保存在哪里？', page }, {
+      onText: text => painted.push(text),
+      onSearch: query => searched.push(query),
+    })
+
+    expect(searched).toEqual(['Whisper model storage local'])
+    expect(painted).toEqual([finalAnswer])
+    expect(mocks.runAiScene).toHaveBeenCalledTimes(2)
+  })
+
   it('only searches once, so a looping model still terminates', async () => {
     mocks.runAiScene.mockResolvedValue({ text: '<search>许可证</search>', streamed: false })
 

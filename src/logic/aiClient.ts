@@ -144,8 +144,24 @@ function readSearchRequest(text: string) {
   return text.replace(searchRequestPattern, '').trim().length <= 24 ? match[1].trim() : undefined
 }
 
+function trimSearchControlPrefix(partial: string) {
+  return partial
+    .trimStart()
+    .replace(/^[\u200B-\u200D\uFEFF]+/, '')
+}
+
+function isSearchFencePrefix(partial: string) {
+  return /^```[\w-]*[ \t]*\r?\n?$/.test(trimSearchControlPrefix(partial))
+}
+
 function looksLikeSearchRequest(partial: string) {
-  return /^<\s*search/i.test(partial.trimStart())
+  // Some providers wrap the control turn in a Markdown fence or prepend a zero-width
+  // character. It is still protocol machinery, so keep it out of the transcript.
+  const content = trimSearchControlPrefix(partial)
+    .replace(/^```[\w-]*[ \t]*\r?\n?/, '')
+    .trimStart()
+
+  return /^<\s*search(?:\s|>|$)/i.test(content)
 }
 
 /**
@@ -173,6 +189,11 @@ export async function requestLexiDialogAnswer(
       'selection',
       harness.messages,
       (partial) => {
+        // A bare Markdown fence can become a wrapped tool call. Hold it until the next
+        // cumulative chunk resolves whether it is a control turn or real Markdown.
+        if (searchable && !suppressed && isSearchFencePrefix(partial))
+          return
+
         // A tool call is machinery, not an answer: never paint it into the transcript.
         if (searchable && (suppressed || looksLikeSearchRequest(partial))) {
           suppressed = true

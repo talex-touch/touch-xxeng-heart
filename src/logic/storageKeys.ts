@@ -12,6 +12,8 @@ export const forumDigestStorageKey = 'touch-xxeng-heart-forum-digests'
 export const contentDigestStorageKey = 'touch-xxeng-heart-content-digests'
 export const pageEntitiesStorageKey = 'touch-xxeng-heart-page-entities'
 export const contentDigestLeaseStorageKey = 'touch-xxeng-heart-content-digest-leases'
+/** Per-tab page-dialog conversation snapshots; never synchronized across devices. */
+export const dialogHistorySessionStorageKey = 'touch-xxeng-heart-dialog-history'
 /** Sync-area keys; the mirror is chunked because one sync item is capped at 8 KB. */
 export const syncSettingsMetaKey = 'lexi-sync-settings-meta'
 export const syncSettingsChunkPrefix = 'lexi-sync-settings-chunk-'

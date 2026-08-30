@@ -323,6 +323,23 @@ export function clampVocabularyLimit(value?: number) {
   return Math.min(maxVocabularyLimit, Math.max(minVocabularyLimit, Math.round(value)))
 }
 
+/**
+ * The card-style presets used to emit one theme's literal colours, and that CSS lands
+ * after the theme block in the injected sheet — so a stored preset pinned the translation
+ * card to a white surface with a light border on every dark page. The presets now move
+ * design tokens instead; these two exact strings are the retired output and are dropped on
+ * read. Matching is exact so hand-written CSS is never touched.
+ */
+const retiredCardPresetCss = new Set([
+  '.lexi-selection-translation { background: #fff; border-color: #d4d9e2; }',
+  '.lexi-selection-translation { background: #111827; color: #f9fafb; border-color: #60a5fa; }',
+])
+
+export function dropRetiredCardPresetCss(value?: string) {
+  const css = typeof value === 'string' ? value : ''
+  return retiredCardPresetCss.has(css.trim()) ? '' : css
+}
+
 function hasConnection(value?: Partial<AiConnectionConfig>) {
   return Boolean(value?.endpoint?.trim() || value?.model?.trim() || value?.apiKey?.trim())
 }
@@ -478,6 +495,7 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       ...defaultSettings.ui,
       ...value?.ui,
       dialogShortcut: uiDialogShortcut,
+      customCss: dropRetiredCardPresetCss(value?.ui?.customCss),
       festivalTheme: normalizeFestivalThemePreference(value?.ui?.festivalTheme),
     },
     contentDigest: {

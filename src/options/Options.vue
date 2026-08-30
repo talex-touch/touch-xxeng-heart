@@ -65,6 +65,23 @@ const translationCardStyleOptions = [
   { value: 'contrast', label: '高对比' },
   { value: 'compact', label: '紧凑' },
 ]
+/**
+ * Presets move the card's design tokens, never its literal colours.
+ *
+ * The old presets wrote `background: #fff; border-color: #d4d9e2` straight onto the card,
+ * which sits after the theme block in the injected sheet and so pinned every page — dark
+ * ones included — to the light surface. Retiring those exact strings is handled in
+ * `normalizeSettings`.
+ */
+const translationCardPresetCss: Record<string, string> = {
+  // The built-in tokens already are the calm blue; anything extra only fights them.
+  calm: '',
+  contrast: [
+    '.lexi-selection-translation { --lexi-glass-bg: #ffffff; --lexi-ink: #111827; --lexi-accent-ink: #1d4ed8; }',
+    '[data-lexi-theme="dark"] .lexi-selection-translation { --lexi-glass-bg: #111827; --lexi-ink: #f9fafb; --lexi-accent-ink: #93c5fd; }',
+  ].join('\n'),
+  compact: '.lexi-selection-translation { max-width: 30rem; padding: 10px 12px; }',
+}
 const vocabularyAiSearchLoading = ref(false)
 const vocabularyAiSearchResult = ref('')
 const activeVocabularyTab = ref<VocabularyTab>('overview')
@@ -83,7 +100,11 @@ const activeAiSection = ref<AiSection>('special')
 const isCompactLayout = useMediaQuery('(max-width: 860px)')
 const activeTabMeta = computed(() => tabs.find(tab => tab.id === activeTab.value) ?? tabs[0])
 const newSceneRuleDomain = ref('')
-const translationCardStyle = ref('calm')
+/** Read back from the stored CSS, so hand-written CSS does not show up as a preset. */
+const translationCardStyle = computed(() => {
+  const css = lexiSettings.value.ui.customCss.trim()
+  return Object.entries(translationCardPresetCss).find(([, preset]) => preset.trim() === css)?.[0] ?? ''
+})
 const vocabularySearchQuery = ref('')
 const effectiveFestivalTheme = computed(() => resolveFestivalTheme(undefined, lexiSettings.value.ui.festivalTheme))
 const festivalThemeDetail = computed(() => festivalThemeDetails[effectiveFestivalTheme.value])
@@ -257,13 +278,7 @@ function setDensityTier(id: DensityTierId) {
 }
 
 function applyTranslationCardStyle(style: string) {
-  translationCardStyle.value = style
-  const css = style === 'contrast'
-    ? '.lexi-selection-translation { background: #111827; color: #f9fafb; border-color: #60a5fa; }'
-    : style === 'compact'
-      ? '.lexi-selection-translation { max-width: 30rem; padding: 10px 12px; }'
-      : '.lexi-selection-translation { background: #fff; border-color: #d4d9e2; }'
-  lexiSettings.value.ui.customCss = css
+  lexiSettings.value.ui.customCss = translationCardPresetCss[style] ?? ''
 }
 
 function ensureSpecialProfiles() {

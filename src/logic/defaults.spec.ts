@@ -194,4 +194,24 @@ describe('settings compatibility', () => {
     })
     expect(Object.values(settings.selection.pageTranslation.autoSites)).not.toContain(true)
   })
+
+  it('drops the retired card presets that pinned the translation card to one theme', () => {
+    const light = mergeSettings({
+      ui: { customCss: '.lexi-selection-translation { background: #fff; border-color: #d4d9e2; }' } as LexiSettings['ui'],
+    })
+    const dark = mergeSettings({
+      ui: { customCss: '.lexi-selection-translation { background: #111827; color: #f9fafb; border-color: #60a5fa; }' } as LexiSettings['ui'],
+    })
+
+    expect(light.ui.customCss).toBe('')
+    expect(dark.ui.customCss).toBe('')
+  })
+
+  it('keeps hand-written custom CSS, including the still-supported compact preset', () => {
+    const handWritten = '.lexi-token { color: #2563eb; }'
+    const compact = '.lexi-selection-translation { max-width: 30rem; padding: 10px 12px; }'
+
+    expect(mergeSettings({ ui: { customCss: handWritten } as LexiSettings['ui'] }).ui.customCss).toBe(handWritten)
+    expect(mergeSettings({ ui: { customCss: compact } as LexiSettings['ui'] }).ui.customCss).toBe(compact)
+  })
 })

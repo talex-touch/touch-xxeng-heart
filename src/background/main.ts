@@ -83,12 +83,40 @@ browser.runtime.onInstalled.addListener((): void => {
         title: '使用 Lexi 翻译',
         contexts: ['selection'],
       })
+      browser.contextMenus.create({
+        id: 'lexi-translate-page',
+        title: '使用 Lexi 翻译整页',
+        contexts: ['page', 'selection'],
+      })
     })
     .catch((error: unknown) => console.warn('[Lexi] context menu setup failed', error))
 })
 
+/**
+ * One menu entry both ways. A second "stop translating" item would sit there greyed out on
+ * every page that is not running, so ask the tab what it is doing and flip it.
+ */
+async function togglePageTranslation(tabId: number) {
+  const status = await sendTabRuntimeMessage<{ running?: boolean } | undefined>(tabId, 'lexi-page-translate-status', {})
+  if (status?.running) {
+    await sendTabRuntimeMessage(tabId, 'lexi-page-translate-stop', { notify: true })
+    return
+  }
+
+  await sendTabRuntimeMessage(tabId, 'lexi-page-translate-start', { persist: false, notify: true })
+}
+
 browser.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== 'lexi-translate-selection' || !tab?.id || !info.selectionText)
+  if (!tab?.id)
+    return
+
+  if (info.menuItemId === 'lexi-translate-page') {
+    togglePageTranslation(tab.id)
+      .catch((error: unknown) => console.warn('[Lexi] page translation toggle failed', error))
+    return
+  }
+
+  if (info.menuItemId !== 'lexi-translate-selection' || !info.selectionText)
     return
 
   sendTabRuntimeMessage(tab.id, 'lexi-context-translate', {

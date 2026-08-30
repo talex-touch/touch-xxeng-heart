@@ -1,6 +1,8 @@
 import browser from 'webextension-polyfill'
 
 import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
+import { getPageContentRoot, getPageTranslationRegion } from './pageTranslationRegions'
+import type { PageTranslationRegion } from './pageTranslationRegions'
 import { getPageTranslationAutoSiteSelectors, resolveAutoPageTranslationSite } from '~/logic/pageTranslationSites'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
@@ -17,7 +19,7 @@ import { renderMarkdown } from '~/contentScripts/ui/markdown'
 import { overlayRect, positionAgainstAnchor } from '~/contentScripts/ui/position'
 import { startVideoSpeedControl } from '~/contentScripts/ui/videoSpeed'
 import { getStoredState, primeStoredRecords } from '~/logic/settingsCache'
-import { createSerializedTaskQueue } from '~/logic/asyncQueue'
+import { createConcurrentTaskQueue, createSerializedTaskQueue } from '~/logic/asyncQueue'
 import { createOperationEpoch } from '~/logic/operationEpoch'
 import type { OperationEpochHandle } from '~/logic/operationEpoch'
 import { classifyTranslationFailure, createFailureReporter, describeTranslationFailure, isTerminalTranslationFailure } from '~/logic/translationFailure'
@@ -143,6 +145,10 @@ const replacementFreshnessWindowMs = 7 * 24 * 60 * 60 * 1000
 const maxSelectionTranslationLength = 5000
 /** Traversal budget, not a translation budget — how many blocks actually get translated is a separate limit. */
 const maxPageTranslationScanElements = 2000
+/** Matches the worker's own AI request ceiling; more in-flight batches would just queue there. */
+const maxPageTranslationBatchConcurrency = 3
+/** Keeps a very long document's prefetch distance from overflowing into the next priority rank. */
+const maxPageTranslationDistance = 90_000
 
 interface ReplacementSeed {
   text: string
@@ -636,6 +642,10 @@ function getPageStyleContent(customCss = '') {
       --lexi-glass-shadow: 0 16px 40px -8px rgba(13, 13, 13, 0.17);
       --lexi-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
       --lexi-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      /* Overwritten per card from the anchored paragraph's computed type, so an injected
+         block reads at the page's own size and face instead of a fixed 14px. */
+      --lexi-card-font-family: var(--lexi-font-sans);
+      --lexi-card-font-size: 14px;
     }
 
     /* Dark pages get the iOS dark material: same structure, inverted surfaces. */
@@ -914,15 +924,19 @@ function getPageStyleContent(customCss = '') {
       position: relative;
       max-width: min(100%, 64rem);
       margin: 0.85em 0;
-      border: 1px solid var(--lexi-line);
+      border: 0;
       border-radius: 12px;
       background: var(--lexi-glass-bg);
-      box-shadow: 0 16px 40px -12px rgba(13, 13, 13, 0.14);
+      box-shadow: var(--lexi-glass-shadow);
       backdrop-filter: var(--lexi-glass-blur);
       -webkit-backdrop-filter: var(--lexi-glass-blur);
       padding: 0.7em 0.85em;
       color: var(--lexi-ink);
-      font: 14px/1.65 var(--lexi-font-sans);
+      /* Longhands, not the font shorthand: the family is copied from the page and one
+         odd value there would otherwise invalidate the size and line-height with it. */
+      font-family: var(--lexi-card-font-family);
+      font-size: var(--lexi-card-font-size);
+      line-height: 1.65;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       opacity: 1;
@@ -941,7 +955,7 @@ function getPageStyleContent(customCss = '') {
       display: inline-flex;
       width: fit-content;
       max-width: min(100%, 22rem);
-      border: 1px solid var(--lexi-line);
+      border: 0;
       border-radius: 999px;
       background: var(--lexi-accent-soft);
       padding: 0;
@@ -1032,7 +1046,9 @@ function getPageStyleContent(customCss = '') {
       all: initial;
       display: inline;
       color: var(--lexi-ink);
-      font: 14px/1.65 var(--lexi-font-sans);
+      font-family: var(--lexi-card-font-family);
+      font-size: var(--lexi-card-font-size);
+      line-height: 1.65;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       opacity: 1;
@@ -1239,7 +1255,10 @@ function getPageStyleContent(customCss = '') {
       background: var(--lexi-accent-soft);
       padding: 0.55em 0.7em;
       color: var(--lexi-ink);
-      font: 13px/1.55 var(--lexi-font-sans);
+      /* A footnote to the source paragraph: same face, one notch down in size. */
+      font-family: var(--lexi-card-font-family);
+      font-size: calc(var(--lexi-card-font-size) * 0.92);
+      line-height: 1.6;
       white-space: pre-wrap;
       overflow: hidden;
       overflow-wrap: anywhere;
@@ -1834,7 +1853,19 @@ function parseCssColor(value: string): [number, number, number, number] | undefi
   return [parts[0], parts[1], parts[2], Number.isNaN(parts[3]) ? 1 : parts[3] ?? 1]
 }
 
-/** Injected UI follows the page's own theme, not the OS preference. */
+function prefersDarkColorScheme() {
+  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+/**
+ * Injected UI follows the page's own theme first, and the system theme when the page has
+ * no opinion.
+ *
+ * Plenty of pages paint their background on a wrapper instead of `html`/`body`, so the
+ * luminance walk finds nothing but transparency; defaulting those to light put a white
+ * card on a black page. `color-scheme` is the page's own declaration and beats the OS
+ * preference, but only when it names a single scheme — `light dark` means "follow the OS".
+ */
 function detectPageTheme(): 'light' | 'dark' {
   let element: Element | null = document.body ?? document.documentElement
   while (element) {
@@ -1848,11 +1879,54 @@ function detectPageTheme(): 'light' | 'dark' {
     element = element.parentElement
   }
 
-  return 'light'
+  const declared = getComputedStyle(document.documentElement).colorScheme ?? ''
+  if (declared.includes('dark') && !declared.includes('light'))
+    return 'dark'
+  if (declared.includes('light') && !declared.includes('dark'))
+    return 'light'
+
+  return prefersDarkColorScheme() ? 'dark' : 'light'
+}
+
+/**
+ * Injected blocks sit inside the page's own prose, so they have to be set in the page's
+ * type. A fixed 14px stack read as a foreign widget on any site whose body copy is not
+ * 14px — which is most of them. Clamped so a hero heading or a footnote cannot drag the
+ * card to an unreadable size.
+ */
+function applyAnchorTypography(element: HTMLElement, anchor?: Element | null) {
+  const source = anchor ?? document.body
+  if (!source)
+    return
+
+  const style = getComputedStyle(source)
+  const size = Number.parseFloat(style.fontSize)
+  if (Number.isFinite(size) && size > 0)
+    element.style.setProperty('--lexi-card-font-size', `${Math.min(20, Math.max(13, size))}px`)
+  if (style.fontFamily)
+    element.style.setProperty('--lexi-card-font-family', style.fontFamily)
+}
+
+function refreshPageTheme() {
+  const theme = detectPageTheme()
+  if (document.documentElement.dataset.lexiTheme !== theme)
+    document.documentElement.dataset.lexiTheme = theme
+}
+
+let systemColorSchemeWatched = false
+
+/** An OS theme flip has to reach already-open cards, not just the next one. */
+function watchSystemColorScheme() {
+  if (systemColorSchemeWatched || typeof window.matchMedia !== 'function')
+    return
+
+  systemColorSchemeWatched = true
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refreshPageTheme)
 }
 
 function ensurePageStyles(customCss = '') {
-  document.documentElement.dataset.lexiTheme = detectPageTheme()
+  refreshPageTheme()
+  watchSystemColorScheme()
 
   const content = getPageStyleContent(customCss)
   const current = document.getElementById('lexi-page-style')
@@ -2178,6 +2252,7 @@ interface PageTranslationTarget {
   text: string
   id: string
   memoryKey: string
+  region: PageTranslationRegion
   priority: PageTranslationPriority
   distance: number
   score: number
@@ -2419,6 +2494,7 @@ function insertPageTranslationElement(
     return existing
 
   const element = createPageTranslationElement(block, options)
+  applyAnchorTypography(element, target)
   if (options.loading)
     element.setAttribute('aria-busy', 'true')
   target.insertAdjacentElement('afterend', element)
@@ -2431,7 +2507,7 @@ function removePageTranslationElements() {
     .forEach(element => element.remove())
 }
 
-function getPageTranslationPriority(element: HTMLElement): Pick<PageTranslationTarget, 'priority' | 'distance' | 'score'> {
+function getPageTranslationPriority(element: HTMLElement, contentRoot?: HTMLElement): Pick<PageTranslationTarget, 'region' | 'priority' | 'distance' | 'score'> {
   const rect = element.getBoundingClientRect()
   const viewportHeight = Math.max(1, window.innerHeight)
   const inViewport = rect.bottom >= 0 && rect.top <= viewportHeight
@@ -2447,11 +2523,18 @@ function getPageTranslationPriority(element: HTMLElement): Pick<PageTranslationT
       : 'prefetch'
   const priorityRank = priority === 'viewport' ? 0 : priority === 'near' ? 1 : 2
   const topTieBreaker = inViewport ? Math.max(0, rect.top) / 10000 : 0
+  // Region outranks geometry: a reader wants the article finished before the sidebar
+  // starts, even when the sidebar is the part currently on screen.
+  const region = getPageTranslationRegion(element, contentRoot)
 
   return {
+    region,
     priority,
     distance,
-    score: priorityRank * 100000 + distance + topTieBreaker,
+    score: (region === 'content' ? 0 : 1) * 1_000_000
+    + priorityRank * 100_000
+    + Math.min(distance, maxPageTranslationDistance)
+    + topTieBreaker,
   }
 }
 
@@ -2467,6 +2550,7 @@ function getPageTranslationTargets(settings: LexiSettings, limit = 12, autoSite?
   // scrolled past that point. Every rect read below happens without an interleaved write,
   // so the whole pass costs one layout regardless of how many elements it walks.
   const elements = Array.from(document.querySelectorAll<HTMLElement>(selectors)).slice(0, maxPageTranslationScanElements)
+  const contentRoot = getPageContentRoot()
   const seen = new Set<string>()
   const targets: PageTranslationTarget[] = []
 
@@ -2483,7 +2567,7 @@ function getPageTranslationTargets(settings: LexiSettings, limit = 12, autoSite?
       continue
 
     seen.add(text)
-    const priority = getPageTranslationPriority(element)
+    const priority = getPageTranslationPriority(element, contentRoot)
     targets.push({
       element,
       text,
@@ -2721,6 +2805,7 @@ function createSelectionTranslationBlock(settings: LexiSettings, selected: strin
   block.dataset.lexiSelectionKey = requestKey
   block.dataset.lexiLoading = 'true'
   block.className = 'lexi-selection-translation'
+  applyAnchorTypography(block, anchor)
   header.className = 'lexi-selection-translation__header'
   label.className = 'lexi-selection-translation__label'
   actions.className = 'lexi-selection-translation__actions'
@@ -3869,6 +3954,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
     ensurePageStyles(settings.ui.customCss)
     pageTranslationRunningId = runId
     pageTranslationScanPending = false
+    // Restoring blocks from the cache or from cross-page memory counts as progress too:
+    // a fully cached article would otherwise stall after the first batch of restores.
+    const translatedBefore = pageTranslationSources.size
+    let madeProgress = false
 
     try {
       const remainingPageBudget = Math.max(0, settings.selection.pageTranslation.maxBlocksPerPage - pageTranslationSources.size - pageTranslationInFlight.size)
@@ -3910,35 +3999,49 @@ export function startPageEnhancer(events: EnhancerEvents) {
         uncachedTargets.push(target)
       }
 
+      // `getPageTranslationTargets` already sorted by content-then-viewport score, so the
+      // reading order is the queue order; only the per-run budget is applied here.
       const pageSettings = settings.selection.pageTranslation
-      const viewportTargets = uncachedTargets.filter(target => target.priority === 'viewport')
-      const nearTargets = uncachedTargets.filter(target => target.priority === 'near')
-      const prefetchTargets = uncachedTargets.filter(target => target.priority === 'prefetch')
-      const orderedTargets = [
-        ...viewportTargets,
-        ...nearTargets.slice(0, Math.max(0, pageSettings.batchSize - viewportTargets.length)),
-        ...prefetchTargets.slice(0, Math.max(0, pageSettings.prefetchBlocks)),
-      ].slice(0, Math.max(1, pageSettings.batchSize + pageSettings.prefetchBlocks))
-
+      const orderedTargets = uncachedTargets.slice(0, Math.max(1, pageSettings.batchSize + pageSettings.prefetchBlocks))
       if (!orderedTargets.length)
         return
 
       const batchSize = Math.max(1, pageSettings.batchSize)
-      for (let index = 0; index < orderedTargets.length; index += batchSize) {
-        if (!pageTranslationEnabled || runId !== pageTranslationRunId)
-          break
+      const batches: PageTranslationTarget[][] = []
+      for (let index = 0; index < orderedTargets.length; index += batchSize)
+        batches.push(orderedTargets.slice(index, index + batchSize))
 
-        const batch = orderedTargets.slice(index, index + batchSize)
+      // Batches are admitted in priority order but run several at a time. Awaiting one
+      // batch before starting the next made a page cost (blocks / batchSize) round trips
+      // end to end, which on a slow provider is minutes of a half-translated article.
+      const enqueueBatch = createConcurrentTaskQueue(maxPageTranslationBatchConcurrency)
+      const settled = await Promise.allSettled(batches.map(batch => enqueueBatch(async () => {
+        if (!pageTranslationEnabled || runId !== pageTranslationRunId)
+          return
+
         await translatePageTargetBatch(settings, batch, memory, operation)
-      }
+      })))
+
+      const failed = settled.find(result => result.status === 'rejected')
+      if (failed?.status === 'rejected')
+        throw failed.reason
     }
     finally {
+      // Keep draining the rest of the page, but only while a run still commits something:
+      // a target that keeps failing leaves no translation behind, and rescheduling on it
+      // would loop against the provider for as long as the tab stays open.
+      madeProgress = pageTranslationSources.size > translatedBefore
       if (pageTranslationRunningId === runId)
         pageTranslationRunningId = undefined
     }
 
-    if (pageTranslationScanPending && pageTranslationEnabled && operation.isCurrent())
+    if (!pageTranslationEnabled || !operation.isCurrent())
+      return
+
+    if (pageTranslationScanPending)
       schedulePageTranslationScan(settings, 260)
+    else if (madeProgress)
+      schedulePageTranslationScan(settings, 400)
   }
 
   function schedulePageTranslationScan(settings: LexiSettings, delay = 700) {
@@ -4906,14 +5009,26 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const removePageTranslateStartListener = mediaPlaybackOnly
     ? () => {}
-    : listenRuntimeMessage<{ persist?: unknown, scope?: unknown, regex?: unknown, direction?: unknown } | undefined>('lexi-page-translate-start', (data) => {
-      return startPageTranslation({
+    : listenRuntimeMessage<{ persist?: unknown, scope?: unknown, regex?: unknown, direction?: unknown, notify?: unknown } | undefined>('lexi-page-translate-start', async (data) => {
+      const result = await startPageTranslation({
         persist: data?.persist === true,
         scope: data?.scope === 'url' || data?.scope === 'site' || data?.scope === 'regex' ? data.scope : undefined,
         regex: typeof data?.regex === 'string' ? data.regex : undefined,
         direction: data?.direction === 'en-to-zh' || data?.direction === 'zh-to-en' ? data.direction : undefined,
       })
+      // The context menu has nowhere to show a result, so the page says it instead.
+      if (data?.notify === true)
+        await notifyPageTranslationResult(result.message)
+      return result
     })
+
+  async function notifyPageTranslationResult(message: string) {
+    if (!message)
+      return
+
+    const { settings } = await getStoredState()
+    showLexiToast(message, settings.ui.customCss)
+  }
 
   const onQuickTranslate = () => {
     startPageTranslation().catch(error => console.warn('[Lexi] quick translation failed', error))
@@ -4921,8 +5036,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
   const removePageTranslateStopListener = mediaPlaybackOnly
     ? () => {}
-    : listenRuntimeMessage('lexi-page-translate-stop', () => {
-      return stopPageTranslation()
+    : listenRuntimeMessage<{ notify?: unknown } | undefined>('lexi-page-translate-stop', async (data) => {
+      const result = await stopPageTranslation()
+      if (data?.notify === true)
+        await notifyPageTranslationResult(result.message)
+      return result
     })
 
   const removePageTranslatePauseListener = mediaPlaybackOnly

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.1 - 2026-08-30
+
+Changes since v0.3.0.
+
+### Features
+- translate the main column first and drain the page in batches (e6407eb)
+
+### Fixes
+- retain Lexi dialog context (5e6c657)
+
 ## v0.3.0 - 2026-08-28
 
 Changes since v0.2.14.
@@ -199,6 +209,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

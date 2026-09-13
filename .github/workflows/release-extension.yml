@@ -264,14 +264,18 @@ jobs:
               console.error(`::error::The store does not report version ${version}; it reports ${reported.join(", ") || "nothing"}.`)
               process.exit(1)
             }
-            console.log(`The store holds version ${version} (upload state ${status.uploadState ?? "unknown"}).`)
+            const state = status.uploadState === "NOT_FOUND"
+              ? "no draft remains after the publish request"
+              : `draft state ${status.uploadState ?? "unknown"}`
+            console.log(`The store holds version ${version}; ${state}.`)
           ' "$VERSION"; then
             exit 1
           fi
           {
             echo "### Chrome Web Store: uploaded"
             echo
-            echo "\`${ASSET_NAME}\` matches the store version \`${VERSION}\`."
+            echo "\`${ASSET_NAME}\` matches the store version \`${VERSION}\`; the publish step has advanced it beyond its upload draft."
+            echo "Read the preceding publish-step output for the store's review or public-release state."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record the store outcome

@@ -37,6 +37,22 @@ describe('selection vocabulary filters', () => {
     }))).toBeUndefined()
   })
 
+  it('rejects a bare general Chinese term from unattended inline replacement', () => {
+    // A two-character headword such as 验证 maps to both "validate" and "validation",
+    // so substituting it in a sentence with no context picks the wrong English role.
+    const bare = candidate({ original: '验证', replacement: 'validation', tags: ['general'] })
+
+    expect(canAutoReplaceCandidate(bare)).toBe(false)
+  })
+
+  it('keeps contextual general phrases and short technical terms eligible', () => {
+    const phrase = candidate({ original: '验证您的身份', replacement: 'validate your identity', tags: ['general'] })
+    const technical = candidate({ original: '并发', replacement: 'concurrency', tags: ['technical'] })
+
+    expect(canAutoReplaceCandidate(phrase)).toBe(true)
+    expect(canAutoReplaceCandidate(technical)).toBe(true)
+  })
+
   it('keeps longer Chinese technical terms with concise English replacement', () => {
     const item = candidate({ original: '上下文工程', replacement: 'context engineering' })
 

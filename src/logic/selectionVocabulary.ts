@@ -123,7 +123,14 @@ export function canAutoReplaceCandidate(candidate: VocabularyCandidate) {
   if (isAmbiguousSingleCharacterTerm(candidate.original))
     return false
 
-  return isChineseText(candidate.original) && isConciseEnglishReplacement(candidate.original, candidate.replacement)
+  if (!isChineseText(candidate.original) || !isConciseEnglishReplacement(candidate.original, candidate.replacement))
+    return false
+
+  // General Chinese headwords such as 验证 do not encode the English role the
+  // sentence needs (validate versus validation). They need a context-bearing
+  // phrase; technical terms keep their narrower, reusable vocabulary boundary.
+  const isGeneral = candidate.tags.some(tag => tag.trim().toLowerCase() === 'general')
+  return !isGeneral || countCjkCharacters(candidate.original) >= 4
 }
 
 export function shouldRecordSelectionCandidate(candidate: VocabularyCandidate, selectedText: string) {

@@ -25,7 +25,7 @@ const emptyAiConnection = {
 export const promptDefaults: Record<FeatureScene, string> = {
   replacement: [
     '从网页文本中提取少量适合程序员英语学习的词库项。',
-    '中文技术词给出自然英文替换词。',
+    '中文技术词给出自然英文替换词。普通日常词必须保留原句里的词性：当英文形式依赖语境时，original 使用最短但足够的上下文短语（至少 4 个汉字），replacement 必须能直接替换整个短语。例如“验证您的身份”应为“validate your identity”，不能把动词“验证”写成名词“validation”。',
     '产品、品牌、模型、平台、库、框架、CLI 或服务名（如 Codex、ChatGPT、Claude、GitHub Actions、Vite、React、Next.js）只记录知识，不翻译不改名；这类条目的 original 和 replacement 都使用页面里的原始名称，并在 tags 中加入 product。',
     '不要提取或替换单个汉字/单字词，避免页面中出现歧义；中文术语至少 2 个汉字。',
     '普通技术词在 tags 中加入 technical。',

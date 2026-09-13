@@ -3,6 +3,7 @@ import { startForumDigest } from './forumDigest'
 import { startGitHubDigest } from './githubDigest'
 import { startPageEnhancer } from './pageEnhancer'
 import { startPageEntities } from './pageEntities'
+import { startSubtitleEnhancer } from './subtitles'
 import type { PageStats } from './pageEnhancer'
 
 const fallbackStats: PageStats = {
@@ -34,6 +35,7 @@ export function ensurePageEnhancer() {
     startGitHubDigest()
     startForumDigest()
     startPageEntities()
+    startSubtitleEnhancer()
   }
   if (document.body)
     startTopFrameFeatures()

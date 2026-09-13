@@ -3,6 +3,7 @@ import { onMessage } from 'webext-bridge/background'
 import { startAiService } from './aiService'
 import { isAnalyticsLogPayload, persistAnalyticsLog } from './analyticsStore'
 import { startSettingsSync } from './settingsSync'
+import { fetchSubtitleResource } from './subtitleResources'
 import { setAnalyticsSink } from '~/logic/analytics'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
 import { createSerializedTaskQueue } from '~/logic/asyncQueue'
@@ -146,8 +147,18 @@ listenRuntimeMessage<{ url?: unknown, filename?: unknown } | undefined>('lexi-do
   }
 })
 
-type DigestCache = Record<string, { sourceHash: string, updatedAt: number }>
+// Apple Events subtitles: the worker owns the cross-origin read so page cookies never
+// travel and no content script can point it at an arbitrary origin.
+listenRuntimeMessage<{ url?: unknown, maxBytes?: unknown }>('lexi-fetch-subtitle-resource', (payload) => {
+  const url = typeof payload?.url === 'string' ? payload.url : ''
+  const maxBytes = Number(payload?.maxBytes)
+  if (!url)
+    return { ok: false, error: '缺少字幕资源 URL' }
 
+  return fetchSubtitleResource(url, { maxBytes: Number.isFinite(maxBytes) ? maxBytes : undefined })
+})
+
+type DigestCache = Record<string, { sourceHash: string, updatedAt: number }>
 const pageTranslationCacheWrite = createSerializedTaskQueue()
 
 listenRuntimeMessage<unknown>('lexi-record-analytics', async (payload) => {

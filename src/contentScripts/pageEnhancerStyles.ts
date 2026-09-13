@@ -9,6 +9,7 @@ function getPageStyleContent(customCss = '') {
     .lexi-toast,
     .lexi-selection-translation,
     .lexi-page-translation,
+    .lexi-chat-translation,
     .lexi-media-highlight,
     .lexi-media-toolbar,
     .lexi-dialog {
@@ -42,6 +43,7 @@ function getPageStyleContent(customCss = '') {
     [data-lexi-theme="dark"] .lexi-toast,
     [data-lexi-theme="dark"] .lexi-selection-translation,
     [data-lexi-theme="dark"] .lexi-page-translation,
+    [data-lexi-theme="dark"] .lexi-chat-translation,
     [data-lexi-theme="dark"] .lexi-media-highlight,
     [data-lexi-theme="dark"] .lexi-media-toolbar {
       --lexi-ink: #f2f2f4;
@@ -670,6 +672,24 @@ function getPageStyleContent(customCss = '') {
         animation: none;
         transition: none;
       }
+    }
+
+    /* Live chat translations sit under the message they belong to: a quiet tinted
+       footnote that inherits the chat's own type. No card, no shadow, no motion —
+       chat streams messages continuously and every animation there is noise. */
+    .lexi-chat-translation {
+      all: initial;
+      display: block;
+      margin: 2px 0 4px;
+      border-radius: 6px;
+      background: var(--lexi-accent-soft);
+      padding: 3px 8px;
+      color: var(--lexi-ink);
+      font: inherit;
+      font-size: 0.94em;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
     }
 
     .lexi-media-highlight {

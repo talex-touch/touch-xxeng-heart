@@ -116,18 +116,75 @@ function getForumAuthor() {
   )
 }
 
-function getPostTexts() {
+interface ForumPostEntry {
+  /** Discourse post id when the DOM exposes one; a positional marker otherwise. */
+  id: string
+  text: string
+}
+
+function getForumPostEntries(): ForumPostEntry[] {
   const selectors = [
     '.topic-post .cooked',
     'article[data-post-id] .cooked',
     '[itemprop="articleBody"]',
     '.post-stream .regular .cooked',
   ].join(',')
-  const posts = Array.from(document.querySelectorAll<HTMLElement>(selectors))
-    .map(element => normalizeText(element.textContent))
-    .filter(text => text.length >= 20)
 
-  return uniq(posts).slice(0, 12)
+  // Every loaded qualifying post stays in the waterline. Bounding here — by text dedupe or
+  // a count — made a thirteenth reply (or an identical one) invisible to the source
+  // identity, so the card kept claiming a summary was current. The summarised payload is
+  // bounded separately; this list is only what "loaded" means.
+  return Array.from(document.querySelectorAll<HTMLElement>(selectors)).flatMap((element, index) => {
+    const text = normalizeText(element.textContent)
+    return text.length < 20 ? [] : [{ id: getForumPostId(element, index), text }]
+  })
+}
+
+function getForumPostId(element: HTMLElement, index: number) {
+  const container = element.closest<HTMLElement>('[data-post-id]') ?? element.closest<HTMLElement>('[id^="post_"]')
+  const attribute = container?.getAttribute('data-post-id')?.trim()
+  if (attribute)
+    return attribute
+
+  const domId = container?.id.match(/^post_?(\d+)$/)?.[1]
+  return domId || `#${index + 1}`
+}
+
+export function collectForumInfo(): ForumDigestInfo | undefined {
+  const title = getForumTitle()
+  const entries = getForumPostEntries()
+  const pageText = getPageText()
+  if (!title || (!entries.length && pageText.length < 120))
+    return undefined
+
+  // The summary stays bounded to the leading posts — chat and a long thread must not be
+  // paid for in full. Freshness, however, is the whole loaded waterline: a ninth reply is
+  // a different topic even though it is not itself summarized, and the card has to say so.
+  const digestEntries = entries.slice(0, maxDigestPosts)
+  const digestPosts = digestEntries.map(entry => entry.text)
+  const loadedIdentity = simpleHash(entries.map(entry => `${entry.id}:${entry.text}`).join('\n'))
+  const source = JSON.stringify({
+    title,
+    posts: digestPosts,
+    url: normalizeUrl(),
+    loadedPostCount: entries.length,
+    firstPostId: entries[0]?.id ?? '',
+    lastPostId: entries[entries.length - 1]?.id ?? '',
+    loadedIdentity,
+  })
+  const sourceHash = simpleHash(source)
+  return {
+    key: `${location.hostname}:${normalizeUrl()}`.toLowerCase(),
+    host: location.hostname,
+    title,
+    author: getForumAuthor(),
+    category: getForumCategory(),
+    tags: getForumTags(),
+    posts: digestPosts,
+    pageText: digestPosts.join('\n\n') || pageText.slice(0, 2200),
+    url: normalizeUrl(),
+    sourceHash,
+  }
 }
 
 function getPageText() {
@@ -147,30 +204,6 @@ function normalizeUrl(url = location.href) {
   }
   catch {
     return url.split('#')[0].split('?')[0]
-  }
-}
-
-function collectForumInfo(): ForumDigestInfo | undefined {
-  const title = getForumTitle()
-  const posts = getPostTexts()
-  const pageText = getPageText()
-  if (!title || (!posts.length && pageText.length < 120))
-    return undefined
-
-  const digestPosts = posts.slice(0, maxDigestPosts)
-  const source = JSON.stringify({ title, posts: digestPosts, url: normalizeUrl() })
-  const sourceHash = simpleHash(source)
-  return {
-    key: `${location.hostname}:${normalizeUrl()}`.toLowerCase(),
-    host: location.hostname,
-    title,
-    author: getForumAuthor(),
-    category: getForumCategory(),
-    tags: getForumTags(),
-    posts: digestPosts,
-    pageText: digestPosts.join('\n\n') || pageText.slice(0, 2200),
-    url: normalizeUrl(),
-    sourceHash,
   }
 }
 
@@ -308,9 +341,13 @@ function renderCard() {
   const activeDigest = selectedVersion?.digest ?? cardState.digest
   const hasCurrentVersion = cardState.history.some(item => item.sourceHash === info.sourceHash)
   const showingHistoricalVersion = Boolean(selectedVersion && selectedVersion.sourceHash !== info.sourceHash)
-  const stale = Boolean(cardState.history.length && !hasCurrentVersion)
+  // Anything the reader is being shown that no longer matches the loaded topic is stale —
+  // including the summary kept in place when new replies arrived but regeneration has not
+  // happened yet. Nothing is cleared for that: the previous answer beats a blank card.
+  const stale = Boolean(activeDigest && !hasCurrentVersion)
   element.className = `lexi-forum-digest${cardState.collapsed ? ' lexi-forum-digest--collapsed' : ''}`
   element.dataset.lexiCollapsed = cardState.collapsed ? 'true' : 'false'
+  element.dataset.lexiForumStale = stale || showingHistoricalVersion ? 'true' : 'false'
   const statusLabel = status === 'loading'
     ? '速读中...'
     : status === 'error'
@@ -617,10 +654,11 @@ async function refresh() {
     current.info = info
     current.status = 'ready'
     current.error = undefined
-    current.cached = false
-    current.digest = undefined
-    current.history = []
-    current.selectedHistoryIndex = -1
+    current.cached = Boolean(current.digest || current.history.length)
+    // New replies arrived (or the loaded waterline moved) while a summary is already on
+    // screen. It described the previous source, not this one, so it stays visible and
+    // `renderCard` marks it stale until regeneration replaces it — clearing here would
+    // trade a slightly old summary for no summary.
     renderCard()
   }
   else {

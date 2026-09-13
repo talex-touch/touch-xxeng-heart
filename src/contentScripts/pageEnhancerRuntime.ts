@@ -1,4 +1,5 @@
 import { startContentDigest } from './contentDigest'
+import { startDiscourseLiveChat } from './discourseLiveChat'
 import { startForumDigest } from './forumDigest'
 import { startGitHubDigest } from './githubDigest'
 import { startPageEnhancer } from './pageEnhancer'
@@ -34,6 +35,7 @@ export function ensurePageEnhancer() {
     startContentDigest()
     startGitHubDigest()
     startForumDigest()
+    startDiscourseLiveChat()
     startPageEntities()
     startSubtitleEnhancer()
   }

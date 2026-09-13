@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.2 - 2026-09-13
+
+Changes since v0.3.1.
+
+### Features
+- decide per page region and per block whether to translate (9f1ce7e)
+
+### Docs
+- record the competitive review and the convergence decisions (625796a)
+
 ## v0.3.1 - 2026-08-30
 
 Changes since v0.3.0.
@@ -209,6 +219,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

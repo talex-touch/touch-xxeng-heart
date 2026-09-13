@@ -234,22 +234,31 @@ jobs:
         shell: bash
         run: |
           VERSION="${RELEASE_TAG#v}"
-          ACCESS_TOKEN=$(curl -sSf -X POST https://oauth2.googleapis.com/token \
+          curl -sS -X POST https://oauth2.googleapis.com/token \
             -d "client_id=${CLIENT_ID}" \
             -d "client_secret=${CLIENT_SECRET}" \
             -d "refresh_token=${REFRESH_TOKEN}" \
-            -d grant_type=refresh_token | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).access_token")
-          if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "undefined" ]]; then
-            echo "::error::The Chrome Web Store OAuth refresh token did not return an access token." >&2
-            exit 1
-          fi
-          curl -sSf -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            -d grant_type=refresh_token > token.json
+          ACCESS_TOKEN=$(node -e '
+            const response = require("./token.json")
+            if (!response.access_token) {
+              const reason = [response.error, response.error_description].filter(Boolean).join(": ")
+              console.error(`::error::The Chrome Web Store OAuth refresh token did not return an access token — ${reason || "no error reported"}. A refresh token minted without the chromewebstore scope fails here.`)
+              process.exit(1)
+            }
+            process.stdout.write(response.access_token)
+          ')
+          curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             "https://www.googleapis.com/chromewebstore/v1.1/items/${EXTENSION_ID}?projection=DRAFT" \
             > store-status.json
           echo "Store reports: $(cat store-status.json)"
           if ! node -e '
             const status = require("./store-status.json")
             const version = process.argv[1]
+            if (status.error) {
+              console.error(`::error::The Web Store API rejected reading item ${process.env.EXTENSION_ID}: ${JSON.stringify(status.error)}`)
+              process.exit(1)
+            }
             const reported = [status.crxVersion, status.publishedItemRevisionStatus?.crxVersion].filter(Boolean)
             if (!reported.includes(version)) {
               console.error(`::error::The store does not report version ${version}; it reports ${reported.join(", ") || "nothing"}.`)

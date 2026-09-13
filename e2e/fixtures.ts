@@ -1,4 +1,5 @@
 import path from 'node:path'
+import process from 'node:process'
 import { type BrowserContext, type Page, test as base, chromium } from '@playwright/test'
 import { startMockAiServer } from './mockAiServer'
 import type { MockAiProtocol, MockAiServer } from './mockAiServer'
@@ -16,8 +17,12 @@ export const test = base.extend<{
   aiServer: MockAiServer
 }>({
   context: async ({ headless }, use) => {
+    // Playwright's own Chromium build is not always downloadable (restricted networks),
+    // so a machine can point the suite at a browser it already has.
+    const executablePath = process.env.LEXI_E2E_CHROMIUM_PATH
     const context = await chromium.launchPersistentContext('', {
       headless,
+      ...(executablePath ? { executablePath } : {}),
       args: [
         ...(headless ? ['--headless=new'] : []),
         `--disable-extensions-except=${extensionPath}`,

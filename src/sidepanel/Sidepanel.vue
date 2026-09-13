@@ -6,6 +6,7 @@ import { openOptionsPage } from '~/logic/browserActions'
 import { festivalThemeDetails, resolveFestivalTheme } from '~/logic/festivalTheme'
 import { lexiSettings, vocabularyRecords } from '~/logic/storage'
 import { pageTranslationAutoSiteOptions } from '~/logic/pageTranslationSites'
+import { pageTranslationLanguageLabel } from '~/logic/pageTranslationLanguage'
 import { densityTiers, formatDensityPercent, getEffectiveDensity, maxReplacementLevel, minReplacementLevel, resolveDensityTier, resolveReplacementLevel } from '~/logic/replacementLevels'
 import type { DensityTierId } from '~/logic/replacementLevels'
 import { getDueRecords, getProgressDifficulty, getTodayRecommendations, getTodayReviewCount, reviewVocabularyRecord } from '~/logic/vocabularyRecords'
@@ -15,6 +16,7 @@ import type { VocabularyReviewResult } from '~/logic/vocabularyRecords'
 import { entityDomainColors } from '~/logic/entityDomains'
 import type { PageStats } from '~/contentScripts/pageEnhancer'
 import type { PageEntitySummary } from '~/contentScripts/pageEntities'
+import type { DetectedLanguage } from '~/logic/languageDetection'
 import type { EntityDomain, PageTranslationAutoSite, PageTranslationDirection, PageTranslationScope, TranslationDirection } from '~/logic/types'
 
 type SidepanelTab = 'common' | 'advanced' | 'history'
@@ -54,6 +56,9 @@ const pageTranslationStatus = ref({
   origin: undefined as 'manual' | 'restored' | 'auto' | undefined,
   scope: undefined as PageTranslationScope | undefined,
   autoSite: undefined as PageTranslationAutoSite | undefined,
+  skipped: undefined as 'target-language' | undefined,
+  pageLanguage: undefined as DetectedLanguage | undefined,
+  targetLanguage: undefined as DetectedLanguage | undefined,
   blocks: 0,
   cached: false,
   bytes: 0,
@@ -171,6 +176,19 @@ const pageTranslationScopeDescription = computed(() => {
 
   return '当前链接'
 })
+// Both lines quote the reading the content script made, so a skip explains itself
+// instead of leaving the panel guessing at a language verdict.
+const pageTranslationTargetLine = computed(() => {
+  const { pageLanguage, targetLanguage } = pageTranslationStatus.value
+  if (!pageLanguage || !targetLanguage || pageLanguage === 'other')
+    return '本页正文已是目标语言，'
+
+  return `本页正文是${pageTranslationLanguageLabel(pageLanguage)}，正是「译成${pageTranslationLanguageLabel(targetLanguage)}」的目标，`
+})
+const pageTranslationFoundNothing = computed(() => {
+  const { blocks, pageLanguage, targetLanguage } = pageTranslationStatus.value
+  return blocks === 0 && Boolean(pageLanguage) && pageLanguage === targetLanguage
+})
 const pageTranslationImpactLine = computed(() => {
   const mode = pageTranslationMode.value
   if (mode === 'auto')
@@ -183,6 +201,9 @@ const pageTranslationImpactLine = computed(() => {
       : '仅本次翻译；关闭或刷新后不再恢复。'
   }
 
+  if (pageTranslationStatus.value.skipped === 'target-language')
+    return `${pageTranslationTargetLine.value}已跳过自动翻译；需要时可在下方手动开始。`
+
   return '不会自动翻译任何页面；启动时可选择仅本次或保存为规则。'
 })
 const pageTranslationFeedbackLine = computed(() => {
@@ -190,7 +211,14 @@ const pageTranslationFeedbackLine = computed(() => {
     return ''
 
   const blocks = pageTranslationStatus.value.blocks
-  return blocks > 0 ? `已翻译 ${blocks} 段` : '正在处理可见内容…'
+  if (blocks > 0)
+    return `已翻译 ${blocks} 段`
+  if (!pageTranslationFoundNothing.value)
+    return '正在处理可见内容…'
+
+  // A run with nothing to translate is not "in progress" — say what it read instead of
+  // leaving a spinner spinning on a page the reader can already read.
+  return `${pageTranslationTargetLine.value}没有需要翻译的段落。`
 })
 const dailyRecommendations = computed(() => getTodayRecommendations(
   vocabularyRecords.value,
@@ -263,6 +291,9 @@ function resetPageContextState() {
     origin: undefined,
     scope: undefined,
     autoSite: undefined,
+    skipped: undefined,
+    pageLanguage: undefined,
+    targetLanguage: undefined,
     blocks: 0,
     cached: false,
     bytes: 0,

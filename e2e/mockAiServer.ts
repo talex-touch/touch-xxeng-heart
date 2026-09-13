@@ -24,6 +24,12 @@ export interface MockAiServer {
   answerWith: (text: string) => void
   /** Assistant replies for successive chat requests. */
   answerWithSequence: (texts: string[]) => void
+  /**
+   * Assistant replies derived from the request body, for prompts whose answer has to
+   * quote the request back — page translation is addressed by block id, so a fixed reply
+   * cannot be routed to the block that asked for it.
+   */
+  answerWithResolver: (resolve: (rawBody: string) => string) => void
   close: () => Promise<void>
 }
 
@@ -150,6 +156,7 @@ export async function startMockAiServer(): Promise<MockAiServer> {
   const requests: MockAiRequest[] = []
   let answer = ''
   let orderedAnswers: string[] = []
+  let resolver: ((rawBody: string) => string) | undefined
 
   async function handle(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -205,7 +212,7 @@ export async function startMockAiServer(): Promise<MockAiServer> {
       return
     }
 
-    const reply = orderedAnswers.shift() ?? answer
+    const reply = orderedAnswers.shift() ?? (resolver ? resolver(raw) : answer)
     if (!streamed) {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(buildJsonBody(route, reply))
@@ -239,9 +246,15 @@ export async function startMockAiServer(): Promise<MockAiServer> {
     answerWith: (text: string) => {
       answer = text
       orderedAnswers = []
+      resolver = undefined
     },
     answerWithSequence: (texts: string[]) => {
       orderedAnswers = [...texts]
+      resolver = undefined
+    },
+    answerWithResolver: (resolve: (rawBody: string) => string) => {
+      resolver = resolve
+      orderedAnswers = []
     },
     close: () => new Promise<void>((resolve, reject) => {
       server.closeAllConnections()

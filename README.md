@@ -99,6 +99,8 @@ pnpm run package:beta     # 构建 beta ZIP
 pnpm run package:all      # 顺序生成全部平台制品
 ```
 
+e2e 默认使用 Playwright 自带的 Chromium；装不上它（或下载被网络挡住）时，用 `LEXI_E2E_CHROMIUM_PATH="/path/to/chrome" pnpm test:e2e` 指向本机已有的 Chromium 即可。
+
 ## 项目结构
 
 ```text

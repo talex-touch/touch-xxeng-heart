@@ -1,9 +1,12 @@
 import browser from 'webextension-polyfill'
 
 import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
-import { getPageContentRoot, getPageTranslationRegion } from './pageTranslationRegions'
-import type { PageTranslationRegion } from './pageTranslationRegions'
-import { getPageTranslationAutoSiteSelectors, resolveAutoPageTranslationSite } from '~/logic/pageTranslationSites'
+import { getPageContentRoot, getPageTranslationRegion } from '~/logic/pageTranslationRegions'
+import type { PageTranslationRegion } from '~/logic/pageTranslationRegions'
+import { blockIsTranslationTarget, pageLanguageIsTranslationTarget, pageTranslationLanguageSelectors, readPageLanguage, resolvePageTranslationTarget } from '~/logic/pageTranslationLanguage'
+import type { DetectedLanguage } from '~/logic/languageDetection'
+import type { PageLanguageReading, PageTranslationLanguageScope } from '~/logic/pageTranslationLanguage'
+import { resolveAutoPageTranslationSite } from '~/logic/pageTranslationSites'
 import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
@@ -2263,6 +2266,12 @@ interface PageTranslationStartOptions {
   scope?: PageTranslationScope
   regex?: string
   direction?: PageTranslationDirection
+  /**
+   * A keyboard gesture, not a chosen page: the reader pressed the shortcut, so
+   * there may be nothing in the target language to translate. A start from the
+   * panel or the context menu is a request about *this* page and is never refused.
+   */
+  gesture?: boolean
 }
 
 const enqueuePageTranslationActivationWrite = createSerializedTaskQueue()
@@ -2538,12 +2547,61 @@ function getPageTranslationPriority(element: HTMLElement, contentRoot?: HTMLElem
   }
 }
 
+/**
+ * One language reading per scope per document, plus the per-block verdicts it implies.
+ *
+ * Detection is cheap, but a second reading can disagree with the first, and this is what
+ * the rule path and the platform path did before: two samples, two selector sets, two
+ * verdicts about the same page. Scans are scroll-driven, so the per-block verdicts are
+ * remembered — a page re-detecting the same paragraphs on every scroll would be work
+ * nobody asked for.
+ */
+let pageLanguageUrl = ''
+let pageBlockTarget: DetectedLanguage | undefined
+const pageLanguageReadings = new Map<PageTranslationLanguageScope, PageLanguageReading>()
+const pageBlockIsTarget = new Map<string, boolean>()
+const maxBlockLanguageVerdicts = 400
+
+function readCurrentPageLanguage(scope: PageTranslationLanguageScope = 'generic') {
+  if (pageLanguageUrl !== location.href) {
+    pageLanguageUrl = location.href
+    pageLanguageReadings.clear()
+    pageBlockIsTarget.clear()
+    pageBlockTarget = undefined
+  }
+
+  const cached = pageLanguageReadings.get(scope)
+  if (cached)
+    return cached
+
+  const reading = readPageLanguage(document, scope)
+  pageLanguageReadings.set(scope, reading)
+  return reading
+}
+
+function blockIsTargetLanguage(text: string, target: DetectedLanguage) {
+  if (pageBlockTarget !== target) {
+    pageBlockTarget = target
+    pageBlockIsTarget.clear()
+  }
+
+  const cached = pageBlockIsTarget.get(text)
+  if (cached !== undefined)
+    return cached
+
+  const verdict = blockIsTranslationTarget(text, target)
+  if (pageBlockIsTarget.size >= maxBlockLanguageVerdicts)
+    pageBlockIsTarget.clear()
+
+  pageBlockIsTarget.set(text, verdict)
+  return verdict
+}
+
 function getPageTranslationTargets(settings: LexiSettings, limit = 12, autoSite?: PageTranslationAutoSite) {
-  const selectors = autoSite
-    ? getPageTranslationAutoSiteSelectors(autoSite)
-    : location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
-      ? '[data-testid="tweetText"], article div[lang]'
-      : 'article p, article div[lang], main p, main li, p, li'
+  const selectors = location.hostname.includes('x.com') || location.hostname.includes('twitter.com')
+    ? '[data-testid="tweetText"], article div[lang]'
+    : pageTranslationLanguageSelectors(autoSite ?? 'generic')
+  const target = resolvePageTranslationTarget(settings.selection.pageTranslation.direction)
   // Scanning is bounded, but the bound cannot be applied here in DOM order: the priority
   // sort at the bottom is what puts the viewport first, and cutting at 420 beforehand
   // meant a long document simply had no viewport candidates left to sort once the reader
@@ -2564,6 +2622,13 @@ function getPageTranslationTargets(settings: LexiSettings, limit = 12, autoSite?
 
     const id = createPageTranslationBlockId(text)
     if (getPageTranslationElementAfter(element, id))
+      continue
+
+    // A page can mix languages — an English article quoting Chinese, a forum thread with
+    // replies in both. The page-level verdict covers the whole document, so it cannot see
+    // that half of this one is already in the reader's language; the collector is the only
+    // place that knows which blocks would be work.
+    if (blockIsTargetLanguage(text, target))
       continue
 
     seen.add(text)
@@ -3675,6 +3740,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let pageTranslationOperation: OperationEpochHandle | undefined
   let pageTranslationActivation: PageTranslationActivation | undefined
   let pageTranslationAutoSite: PageTranslationAutoSite | undefined
+  // Why an unattended run was refused. Cleared by any manual start or stop.
+  let pageTranslationSkipped: 'target-language' | undefined
   const pageTranslationSources = new Map<string, PageTranslationBlock>()
   const pageTranslationInFlight = new Map<string, number>()
   const recentSelectionKeys = new Set<string>()
@@ -3966,8 +4033,15 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
       const limit = Math.min(getPageTranslationLimit(settings), remainingPageBudget)
       const targets = getPageTranslationTargets(settings, limit, pageTranslationAutoSite)
-      if (!targets.length)
+      if (!targets.length) {
+        // Finding nothing is itself a verdict worth publishing: a manual start on a page
+        // that is already in the target language would otherwise leave the panel claiming
+        // it is working while every block was filtered out.
+        if (!pageTranslationSources.size && pageLanguageIsTranslationTarget(readCurrentPageLanguage(), settings.selection.pageTranslation.direction))
+          pageTranslationSkipped = 'target-language'
+
         return
+      }
 
       const memory = await readPageTranslationMemory()
       const uncachedTargets: PageTranslationTarget[] = []
@@ -4131,6 +4205,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!isSceneEnabled(settings, 'selection', location.href, siteHints) || !settings.selection.enabled)
       return failStart('划词翻译场景未启用。')
 
+    if (options.gesture && pageLanguageIsTranslationTarget(readCurrentPageLanguage(), settings.selection.pageTranslation.direction)) {
+      pageTranslationSkipped = 'target-language'
+      return failStart('本页正文已是目标语言，已跳过自动翻译。')
+    }
+
     pageTranslationAutoSite = undefined
     const activation = options.persist ? createPageTranslationActivation(settings) : undefined
     if (options.persist && !activation)
@@ -4150,6 +4229,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationFailureReporter.reset()
     pageTranslationOrigin = 'manual'
     pageTranslationSuppressed = false
+    pageTranslationSkipped = undefined
     if (activation)
       await savePageTranslationActivation(activation)
     if (disposed || !operation.isCurrent())
@@ -4209,6 +4289,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationActivation = undefined
     pageTranslationAutoSite = undefined
     pageTranslationOrigin = undefined
+    pageTranslationSkipped = undefined
 
     return {
       ok: true,
@@ -4223,6 +4304,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   async function getPageTranslationStatus() {
     const cache = await readPageTranslationCache()
     const activation = pageTranslationActivation ?? await findMatchingPageTranslationActivation()
+    const reading = readCurrentPageLanguage()
+    const { settings } = await getStoredState()
     return {
       ok: true,
       enabled: Boolean(pageTranslationEnabled || activation || cache?.enabled),
@@ -4230,6 +4313,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
       origin: pageTranslationOrigin,
       scope: pageTranslationEnabled ? pageTranslationActivation?.scope : activation?.scope,
       autoSite: pageTranslationEnabled ? pageTranslationAutoSite : undefined,
+      skipped: pageTranslationEnabled ? undefined : pageTranslationSkipped,
+      // The verdict behind a skip — or behind a run that found nothing to translate — is
+      // worth showing: "已跳过" without the language it read reads like a bug.
+      pageLanguage: reading.textLength ? reading.language : undefined,
+      targetLanguage: resolvePageTranslationTarget(settings.selection.pageTranslation.direction),
       blocks: pageTranslationSources.size || cache?.blocks.length || 0,
       cached: Boolean(pageTranslationSources.size || cache?.blocks.length),
       bytes: cache ? new Blob([JSON.stringify(cache)]).size : 0,
@@ -4237,6 +4325,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   }
 
   async function restoreSavedPageTranslation() {
+    pageTranslationSkipped = undefined
     const { settings } = await getStoredState()
     if (disposed)
       return
@@ -4261,6 +4350,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
     )
     if (!activation && !autoSite)
       return
+
+    // A saved rule restores translation on every page it matches, including the ones
+    // whose text is already what the direction translates into. Refuse those: the run
+    // would pay to paraphrase the reader's own language back at them.
+    if (activation && pageLanguageIsTranslationTarget(readCurrentPageLanguage(), settings.selection.pageTranslation.direction)) {
+      pageTranslationSkipped = 'target-language'
+      return
+    }
 
     const cache = await restorePageTranslationCache(settings, true, () => !disposed, autoSite)
     if (disposed)
@@ -4760,10 +4857,14 @@ export function startPageEnhancer(events: EnhancerEvents) {
       const now = performance.now()
       if (now - lastModifierTapAt <= 360) {
         lastModifierTapAt = 0
-        if (getSelectionSnapshot())
+        if (getSelectionSnapshot()) {
           handleSelection().catch(error => console.warn('[Lexi] double modifier selection translation failed', error))
-        else
-          startPageTranslation().catch(error => console.warn('[Lexi] double modifier page translation failed', error))
+        }
+        else {
+          startPageTranslation({ gesture: true })
+            .then(result => notifyPageTranslationResult(result.ok ? '' : result.message))
+            .catch(error => console.warn('[Lexi] double modifier page translation failed', error))
+        }
         return
       }
       lastModifierTapAt = now
@@ -5085,7 +5186,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
         return
       }
 
-      if (!pageTranslationEnabled && autoSite)
+      // Nothing is running: re-evaluate the restore path, so a rule that starts or
+      // stops applying (or a direction that turns the page into the target language)
+      // is reflected in the side panel immediately instead of on the next load.
+      if (!pageTranslationEnabled)
         await restoreSavedPageTranslation()
     }).catch(handleEnhancerError)
   }

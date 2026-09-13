@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.3 - 2026-09-13
+
+Changes since v0.3.2.
+
+### Fixes
+- require context for general Chinese substitutions (1268baa)
+
+### Maintenance
+- explain web store credential failures instead of a bare curl error (ad745d5)
+- verify and isolate the chrome web store publish (d49ac65)
+
 ## v0.3.2 - 2026-09-13
 
 Changes since v0.3.1.
@@ -219,6 +230,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 

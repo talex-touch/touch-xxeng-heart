@@ -21,6 +21,8 @@ jobs:
   build-and-release:
     name: Build and publish extension package
     runs-on: ubuntu-latest
+    outputs:
+      asset_name: ${{ steps.asset.outputs.asset_name }}
 
     steps:
       - name: Checkout
@@ -106,24 +108,174 @@ jobs:
           files: ${{ steps.asset.outputs.asset_name }}
           generate_release_notes: true
 
-      # Runs last so a Web Store outage or a rejected package never blocks the
-      # GitHub Release. The store only accepts the zip and signs it itself; the
-      # local extension.crx is signed with our own key.pem and is for
-      # self-hosted installs, so it is deliberately not uploaded here.
-      - name: Publish to Chrome Web Store
+  # The store is an external service with its own review queue, its own credentials and
+  # its own outage modes, so it gets its own job: a store problem never marks the GitHub
+  # Release as failed, and the two outcomes stay readable separately in the run summary.
+  # The store only accepts the zip and signs it itself; the local extension.crx is signed
+  # with our own key.pem and is for self-hosted installs, so it is deliberately not
+  # uploaded here.
+  publish-store:
+    name: Publish to Chrome Web Store
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    concurrency:
+      group: chrome-web-store
+      cancel-in-progress: false
+    env:
+      CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
+      CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
+      REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
+      PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
+      EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
+      ASSET_NAME: ${{ needs.build-and-release.outputs.asset_name }}
+
+    # A missing secret is a configuration gap, not a broken release: report exactly which
+    # names are unset and skip, so the run stays green and the reason is on the summary.
+    # A real store failure below still fails this job loudly.
+    steps:
+      - name: Check the store credentials
+        id: credentials
         shell: bash
-        env:
-          CLIENT_ID: ${{ secrets.CWS_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.CWS_CLIENT_SECRET }}
-          REFRESH_TOKEN: ${{ secrets.CWS_REFRESH_TOKEN }}
-          PUBLISHER_ID: ${{ secrets.CWS_PUBLISHER_ID }}
-          EXTENSION_ID: ${{ secrets.CWS_EXTENSION_ID }}
-          ASSET_NAME: ${{ steps.asset.outputs.asset_name }}
         run: |
+          missing=()
           for name in CLIENT_ID CLIENT_SECRET REFRESH_TOKEN PUBLISHER_ID EXTENSION_ID; do
             if [[ -z "${!name}" ]]; then
-              echo "Missing repository secret CWS_${name}." >&2
-              exit 1
+              missing+=("CWS_${name}")
             fi
           done
-          pnpm dlx chrome-webstore-upload-cli@4.0.1 --source "$ASSET_NAME"
+          if (( ${#missing[@]} > 0 )); then
+            UNLESS_VERB="is"
+            if (( ${#missing[@]} > 1 )); then
+              UNLESS_VERB="are"
+            fi
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Chrome Web Store upload skipped: ${missing[*]} ${UNLESS_VERB} unset. The GitHub Release for ${RELEASE_TAG} is published and unaffected." >&2
+            {
+              echo "### Chrome Web Store: skipped"
+              echo
+              echo "Unset repository secrets: ${missing[*]}."
+              echo
+              echo "The GitHub Release for \`${RELEASE_TAG}\` is published. Add the secrets and re-run this"
+              echo "workflow for the same tag — no new tag or version is needed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pnpm
+        if: steps.credentials.outputs.ready == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.7.1
+
+      - name: Setup Node.js
+        if: steps.credentials.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download the release package
+        if: steps.credentials.outputs.ready == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+
+      # Whatever the store rejects, it rejects minutes later and behind an opaque error;
+      # checking the tag the package declares first keeps that round trip out of the loop.
+      - name: Verify the package matches the tag
+        if: steps.credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          unzip -p "$ASSET_NAME" manifest.json > packaged-manifest.json
+          NAME=$(node -p "require('./packaged-manifest.json').name")
+          MANIFEST_VERSION=$(node -p "require('./packaged-manifest.json').version")
+          MANIFEST_KIND=$(node -p "require('./packaged-manifest.json').manifest_version")
+          if [[ "$MANIFEST_KIND" != "3" ]]; then
+            echo "::error::$ASSET_NAME is not a Manifest V3 package." >&2
+            exit 1
+          fi
+          if [[ "$MANIFEST_VERSION" != "$VERSION" ]]; then
+            echo "::error::$ASSET_NAME declares version $MANIFEST_VERSION but the release tag is $RELEASE_TAG." >&2
+            exit 1
+          fi
+          echo "Packaged for the store: $NAME $MANIFEST_VERSION (Manifest V$MANIFEST_KIND)"
+
+      - name: Upload the new version
+        if: steps.credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          upload() {
+            pnpm dlx chrome-webstore-upload-cli@4.0.1 upload \
+              --source "$ASSET_NAME" \
+              --extension-id "$EXTENSION_ID" \
+              --max-await-in-progress 900
+          }
+          if upload; then
+            exit 0
+          fi
+          echo "::warning::The first upload attempt failed; retrying once in 30s. The upload is a draft until it is published." >&2
+          sleep 30
+          upload
+
+      - name: Publish the uploaded version
+        if: steps.credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          pnpm dlx chrome-webstore-upload-cli@4.0.1 publish \
+            --extension-id "$EXTENSION_ID" \
+            --deploy-percentage 100
+
+      # Independent read of what the store actually holds: the upload command exits 0 even
+      # when the revision is still being processed, so the version is read back from the
+      # API instead of trusted from the previous step's exit code.
+      - name: Read the store version back
+        if: steps.credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          ACCESS_TOKEN=$(curl -sSf -X POST https://oauth2.googleapis.com/token \
+            -d "client_id=${CLIENT_ID}" \
+            -d "client_secret=${CLIENT_SECRET}" \
+            -d "refresh_token=${REFRESH_TOKEN}" \
+            -d grant_type=refresh_token | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8')).access_token")
+          if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "undefined" ]]; then
+            echo "::error::The Chrome Web Store OAuth refresh token did not return an access token." >&2
+            exit 1
+          fi
+          curl -sSf -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+            "https://www.googleapis.com/chromewebstore/v1.1/items/${EXTENSION_ID}?projection=DRAFT" \
+            > store-status.json
+          echo "Store reports: $(cat store-status.json)"
+          if ! node -e '
+            const status = require("./store-status.json")
+            const version = process.argv[1]
+            const reported = [status.crxVersion, status.publishedItemRevisionStatus?.crxVersion].filter(Boolean)
+            if (!reported.includes(version)) {
+              console.error(`::error::The store does not report version ${version}; it reports ${reported.join(", ") || "nothing"}.`)
+              process.exit(1)
+            }
+            console.log(`The store holds version ${version} (upload state ${status.uploadState ?? "unknown"}).`)
+          ' "$VERSION"; then
+            exit 1
+          fi
+          {
+            echo "### Chrome Web Store: uploaded"
+            echo
+            echo "\`${ASSET_NAME}\` matches the store version \`${VERSION}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record the store outcome
+        if: always() && steps.credentials.outputs.ready == 'true'
+        shell: bash
+        run: |
+          if [[ "${{ job.status }}" == "success" ]]; then
+            exit 0
+          fi
+          {
+            echo "### Chrome Web Store: not published"
+            echo
+            echo "The store step failed for \`${RELEASE_TAG}\`. The GitHub Release and its zip are"
+            echo "published and unaffected. Fix the store error and re-run this workflow for the"
+            echo "same tag."
+          } >> "$GITHUB_STEP_SUMMARY"

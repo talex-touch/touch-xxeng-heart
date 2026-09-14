@@ -18,6 +18,7 @@ Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变�
 - 悬浮释义：被替换词汇带虚线，hover 可查看原文、含义和英文例句。
 - 划词翻译：选中网页文本后显示翻译说明，并记录手动划选词汇。
 - 页面翻译：按当前链接、站点或 Regex 分段翻译，优先处理可视区域并在本地恢复缓存；可显式启用 Discourse 主题帖、GitHub README、Reddit 帖子的英文正文自动翻译。
+- Discourse 直播聊天：仅翻译进入可视区并稳定停留的英文消息；按频道、消息版本和目标语言缓存，编辑、删除或虚拟列表复用节点时不会串译。
 - 语言覆盖：中英互译，日语与韩语页面可译成中文；源语言交由引擎检测，方向按目标语言命名。词汇学习仍只覆盖英语。
 - 实体检测：识别正文中的专有名词并标注所属领域（技术工程、金融商业、产品与公司、医学生物、法律合规、学术论文），按页面领域消解同词多义；内置种子词典，可选 AI 补充。
 - 节日外观：可跟随本机日期自动切换春节、情人节、万圣节主题，也可手动固定默认或指定主题；正式 Crystal Jellyfish 图标保持不变。
@@ -27,8 +28,10 @@ Lexi 是一个面向程序员的 Chrome WebExtension。它会把真实网页变�
 - 场景化速读：为 GitHub 仓库、Discourse 主题以及 Reddit、X、YouTube、Bilibili、小红书、知乎生成带读取范围的可缓存摘要。
 - 敏感内容保护：NSFW 内容速读默认关闭；关闭时不会提取、缓存或发送检测到的内容。
 - 媒体工具：支持媒体下载、AI Omni 图片 Prompt 提取和跨 frame 视频倍速。
-- 场景化 AI：替换、划词、每日推荐、内容速读、AI Omni 分别绑定 Provider；HTTP Endpoint 需逐地址确认。
-- 多协议 Provider：支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 与 Google Gemini，可自动识别协议、拉取模型列表并逐个测试。
+- 视频双语字幕：优先使用页面原生字幕、Bilibili 字幕和 YouTube 播放器字幕；单语字幕只有在你显式打开“单语字幕自动补成双语”后才会按播放位置附近的小窗口翻译。ASR/音频捕获暂不启用。
+- Apple Events 官方字幕：在 Apple 官网活动回放里读取官方英文与简体中文 HLS/WebVTT 轨道，按时间重叠生成全屏可用的双语字幕，不调用 AI。
+- 场景化 AI：替换、划词、每日推荐、内容速读、AI Omni 分别绑定 Provider；既可登录 Tuff Nexus 使用固定账号通道，也可继续自备 Provider，HTTP Endpoint 仍需逐地址确认。
+- 多协议 Provider：支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Gemini 与固定的 Nexus Intelligence 协议，可自动识别通用协议、拉取模型列表并逐个测试。
 - 设置同步：可选把设置镜像到浏览器账号同步区（约 100KB 配额），词库仍保存在本机并支持 JSON 导入导出。
 - 站点配置：支持全部网页、白名单、黑名单、特殊站点策略和总开关。
 
@@ -161,10 +164,13 @@ Worker 在请求期间会周期性调用一次扩展 API 保活：MV3 中在途�
 | `openai-responses` | `POST {base}/v1/responses` | `Authorization: Bearer` |
 | `anthropic-messages` | `POST {base}/v1/messages` | `x-api-key` + `anthropic-version` |
 | `gemini` | `POST {base}/v1beta/models/{model}:generateContent` | `x-goog-api-key` |
+| `nexus-intelligence` | `POST /api/v1/intelligence/invoke`，按能力发送 `text.chat` 或 `text.translate` | Nexus 设备授权；Bearer 只由后台附加 |
 
 协议选择“自动识别”时，先看 Endpoint 是否已写明完整路由，其次看域名，最后看模型名前缀（`claude-` / `gemini-`），都不匹配时按 OpenAI Chat 处理。系统提示词在 Responses 走 `instructions`、在 Anthropic 走 `system`、在 Gemini 走 `systemInstruction`。
 
 HTTPS 地址可直接使用；HTTP 地址会在设置页逐个弹框确认，许可仅对规范化后的完整地址生效，可随时撤销，且不参与账号同步。
+
+Nexus 是不可编辑的固定账号通道：设置页完成设备授权后自动建立 `Tuff Nexus` Provider，模型由服务端路由；用户仍需在各功能卡片里明确绑定它。访问与刷新令牌只在扩展后台和 `storage.session` 中存在，页面、设置对象、同步快照和调用日志都拿不到令牌；关闭浏览器后需要重新登录。
 
 替换场景期望返回：
 
@@ -248,13 +254,14 @@ HTTPS 地址可直接使用；HTTP 地址会在设置页逐个弹框确认，许
 
 ## 数据存放与同步
 
-运行时真源始终是 `storage.local`。在设置页开启「同步到 Google 账号」后，设置会额外镜像一份到浏览器账号同步区（`storage.sync`）：
+普通设置的运行时真源是 `storage.local`。在设置页开启「同步到 Google 账号」后，设置会额外镜像一份到浏览器账号同步区（`storage.sync`）；Nexus 会话凭据不属于设置：
 
-- 同步：站点规则、替换强度、划词与页面翻译、速读、界面、词库上限、Provider 与提示词。
-- 不同步：词库记录、AI 调用日志、访问日志、速读缓存（体积远超 100KB 配额），以及已确认的 HTTP Endpoint（属于本机授权）。
-- API Key 默认随设置一起同步，可在同一张卡片里单独关掉；开启时 Key 会随浏览器同步上传到 Google 服务器，建议同时启用 Chrome 同步密码短语。
+- 同步：站点规则、替换强度、划词与页面翻译、速读、界面、词库上限、通用 Provider 配置与提示词。
+- 不同步：词库记录、AI 调用日志、访问日志、速读缓存（体积远超 100KB 配额）、已确认的 HTTP Endpoint，以及 Nexus 访问/刷新令牌。
+- API Key 默认不参与同步；只有在你开启同步并通过再次确认后，自备 Provider 密钥才会随浏览器同步上传。建议同时启用 Chrome 同步密码短语。关闭时其他设备需要重新填写 Key。
+字幕译文缓存由后台串行合并，键只包含 Provider、媒体 ID、语言、源内容哈希和 cue 哈希；只保存译文，不保存字幕原文、音频或视频地址。
 
-关于凭据的可见范围，有一点需要明确：**content script 对 `storage.local` 有完整读权限**。AI 请求链路保证了页面世界不会*使用*凭据，但只要 Key 存放在 `storage.local`，content script 自行读取仍然可行，这不是客户端代码能封住的。若后续引入登录态令牌，应存放在 content script 读不到的区域（Chrome 的 `storage.session` 默认访问级别即为受信任上下文），而不是继续放在 `storage.local`。
+关于凭据的可见范围，有一点需要明确：**content script 对 `storage.local` 有完整读权限**。通用 Provider 的 API Key 仍位于 `storage.local`，后台请求链路只保证页面世界不会直接使用它；Nexus 设备授权令牌因此采用更窄的边界，只存 `storage.session` 并将访问级别固定为 trusted contexts，同时保留后台进程内镜像以应对浏览器不支持或暂时拒绝 session storage 的情况。Nexus 令牌不会落入 `storage.local`、设置同步或 UI 返回值。
 
 同步区单项上限 8KB，因此设置被切成 `lexi-sync-settings-chunk-*` 分片写入，并由 `lexi-sync-settings-meta` 记录分片数与长度；分片没凑齐时整份快照会被忽略，等下次改动重新同步。设备之间按写入时间取新，另一台设备的快照到达时才会覆盖本机。
 

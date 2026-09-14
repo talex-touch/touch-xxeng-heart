@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- add a fixed Tuff Nexus Provider with device authorization, session-only credential custody, account credit visibility, automatic model routing, and direct `text.translate` settlement
+- add zero-AI bilingual subtitle tracks for Apple Events official English and Simplified Chinese HLS/WebVTT renditions
+- add native HTML5, Bilibili, and Chromium YouTube subtitle providers with bounded playback-window translation
+- translate visible persisted Discourse Livestream / Chat messages with revision-safe caching while keeping chat out of forum summaries
+
+### Fixes
+- preserve stale Discourse forum summaries while loaded-post watermarks change
+- accept payload-less runtime commands after Chromium structured cloning drops an `undefined` data field
+- migrate legacy API-key sync opt-in safely and scrub stale remote keys before requiring fresh consent
+
+### Maintenance
+- extract page enhancer media tools and animated text rendering into focused modules
+- converge content-script mutation observation onto one per-document hub and merge subtitle cache writes in the background
+- cover the native bilingual subtitle track, late-arriving Discourse Livestream messages, and the API-key sync migration with real-Chromium end-to-end tests
+
 ## v0.3.3 - 2026-09-13
 
 Changes since v0.3.2.

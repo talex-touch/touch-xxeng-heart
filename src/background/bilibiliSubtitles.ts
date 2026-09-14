@@ -188,7 +188,9 @@ export async function resolveBilibiliSubtitles(
   if (!identity)
     return { ok: false, error: '不是受支持的 Bilibili 视频页' }
 
-  const fetchImpl = options.fetchImpl ?? fetch
+  // A bare `fetch` reference loses its global `this` inside the service worker, where the
+  // call then throws "Illegal invocation" before any request is made.
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
   try {
     const viewUrl = new URL('/x/web-interface/view', bilibiliApiOrigin)
     if (identity.bvid)

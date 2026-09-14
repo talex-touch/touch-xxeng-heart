@@ -21,7 +21,7 @@ export async function fetchYoutubeCaptionTrack(
 
   const url = new URL(value)
   url.searchParams.set('fmt', 'json3')
-  const fetchImpl = options.fetchImpl ?? fetch
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
   try {
     const response = await fetchImpl(url.href, {
       credentials: 'omit',

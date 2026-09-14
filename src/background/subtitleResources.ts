@@ -85,7 +85,7 @@ export async function fetchSubtitleResource(
     return { ok: false, error: '字幕资源地址不允许' }
 
   const maxBytes = clampMaxBytes(options.maxBytes)
-  const fetchImpl = options.fetchImpl ?? fetch
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis)
 
   try {
     const response = await fetchImpl(url, {

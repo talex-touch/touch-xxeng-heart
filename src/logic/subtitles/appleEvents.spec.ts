@@ -8,6 +8,7 @@ import {
   isAslAppleEventsLink,
 } from './appleEvents'
 import { resolveSubtitleSource } from './registry'
+import { simpleHash } from '~/logic/text'
 
 const masterUrl = 'https://events-delivery.apple.com/2026/keynote/master.m3u8'
 const masterWithSubtitles = `#EXTM3U
@@ -120,7 +121,9 @@ describe('apple events subtitle provider', () => {
     const source = await provider.resolve(new URL('https://www.apple.com/cn/apple-events/'))
 
     expect(source?.media).toBe(media)
-    expect(source?.mediaId).toBe(`apple-events:${masterUrl}`)
+    // The unified subtitle cache must never persist a media URL, so the id is a hash.
+    expect(source?.mediaId).toBe(`apple-events:${simpleHash(masterUrl)}`)
+    expect(source?.mediaId).not.toContain(masterUrl)
 
     const tracks = await source!.listTracks()
     expect(tracks.map(track => ({ language: track.language, label: track.label, kind: track.kind }))).toEqual([

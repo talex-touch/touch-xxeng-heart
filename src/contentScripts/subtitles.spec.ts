@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { attachBilingualTextTrack, startSubtitleEnhancer } from './subtitles'
+import { mergeSettings } from '~/logic/defaults'
+import { createSubtitleCueKey, hashSubtitleCues, subtitleCacheVersion } from '~/logic/subtitles/cache'
+import { simpleHash } from '~/logic/text'
 
 // Importing the controller pulls in the runtime-messaging module, which expects a real
 // extension context; the DOM primitives it writes to are stubbed below.
@@ -9,6 +12,14 @@ const mocks = vi.hoisted(() => ({ sendMessage: vi.fn() }))
 vi.mock('webextension-polyfill', () => ({
   default: { runtime: { sendMessage: mocks.sendMessage } },
 }))
+
+const subtitleMocks = vi.hoisted(() => ({
+  getStoredState: vi.fn(),
+  requestPageTranslationBatch: vi.fn(),
+}))
+
+vi.mock('~/logic/settingsCache', () => ({ getStoredState: subtitleMocks.getStoredState }))
+vi.mock('~/logic/aiClient', () => ({ requestPageTranslationBatch: subtitleMocks.requestPageTranslationBatch }))
 
 class FakeVTTCue {
   startTime: number
@@ -195,6 +206,31 @@ function mountPlayer() {
   return video
 }
 
+interface NativeCue {
+  startTime: number
+  endTime: number
+  text: string
+}
+
+interface NativeTrack {
+  kind: string
+  label: string
+  language: string
+  mode: string
+  cues: NativeCue[]
+}
+
+/** jsdom has no `<track>` support, so the media element's track list is defined directly. */
+function nativeTrack(kind: string, label: string, language: string, cues: NativeCue[]): NativeTrack {
+  return { kind, label, language, mode: 'hidden', cues }
+}
+
+function mountPlayerWithTracks(tracks: NativeTrack[]): HTMLVideoElement {
+  const video = mountPlayer()
+  Object.defineProperty(video, 'textTracks', { value: tracks, configurable: true })
+  return video
+}
+
 function clickWatchLink(href: string, className: string) {
   const anchor = document.createElement('a')
   anchor.setAttribute('films-modal', '')
@@ -273,5 +309,199 @@ describe('startSubtitleEnhancer', () => {
 
     expect(created[0]!.cues).toHaveLength(0)
     expect(created[0]!.mode).toBe('disabled')
+  })
+})
+
+function submittedSubtitleTexts(): string[] {
+  return subtitleMocks.requestPageTranslationBatch.mock.calls
+    .flatMap(call => (call[1] as Array<{ text: string }>).map(item => item.text))
+}
+
+function cueIndexFromText(text: string): number {
+  return Number(/^line-(\d+)$/.exec(text)?.[1])
+}
+
+/** Drains the resolve → load → translate → attach chain without touching the route interval. */
+async function settleSourceWork() {
+  for (let tick = 0; tick < 60; tick += 1)
+    await Promise.resolve()
+  await vi.advanceTimersByTimeAsync(100)
+  for (let tick = 0; tick < 60; tick += 1)
+    await Promise.resolve()
+}
+
+describe('startSubtitleEnhancer source handling', () => {
+  let stopEnhancer: (() => void) | undefined
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    mocks.sendMessage.mockReset()
+    mocks.sendMessage.mockResolvedValue({ ok: true, text: '', contentType: 'text/vtt' })
+    subtitleMocks.getStoredState.mockReset()
+    subtitleMocks.getStoredState.mockResolvedValue({ settings: mergeSettings(), records: [] })
+    subtitleMocks.requestPageTranslationBatch.mockReset()
+    subtitleMocks.requestPageTranslationBatch.mockImplementation(
+      async (_settings: unknown, items: Array<{ id: string, text: string }>) =>
+        items.map(item => ({ id: item.id, translation: `译-${item.text}` })),
+    )
+  })
+
+  afterEach(() => {
+    stopEnhancer?.()
+    stopEnhancer = undefined
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
+  it('pairs official native en+zh tracks without reading settings or calling translation', async () => {
+    const created = installMediaStubs()
+    mountPlayerWithTracks([
+      nativeTrack('subtitles', 'English', 'en', [
+        { startTime: 0, endTime: 1, text: 'Hello' },
+        { startTime: 1, endTime: 2, text: 'Bye' },
+      ]),
+      nativeTrack('subtitles', '简体中文', 'zh-Hans', [
+        { startTime: 0, endTime: 1, text: '你好' },
+        { startTime: 1, endTime: 2, text: '再见' },
+      ]),
+    ])
+    stopEnhancer = startSubtitleEnhancer({ readPageUrl: () => eventsUrl })
+    await settleSourceWork()
+
+    expect(created).toHaveLength(1)
+    expect(created[0]!.mode).toBe('showing')
+    expect(created[0]!.cues.map(cue => cue.text)).toEqual(['Hello\n你好', 'Bye\n再见'])
+    expect(subtitleMocks.getStoredState).not.toHaveBeenCalled()
+    expect(subtitleMocks.requestPageTranslationBatch).not.toHaveBeenCalled()
+  })
+
+  it('leaves a lone native track alone while autoTranslate is at its default', async () => {
+    const created = installMediaStubs()
+    mountPlayerWithTracks([
+      nativeTrack('subtitles', 'English', 'en', [{ startTime: 0, endTime: 1, text: 'Hello' }]),
+    ])
+    stopEnhancer = startSubtitleEnhancer({ readPageUrl: () => eventsUrl })
+    await settleSourceWork()
+
+    expect(subtitleMocks.requestPageTranslationBatch).not.toHaveBeenCalled()
+    expect(created).toHaveLength(0)
+  })
+
+  it('translates a lone native track only once autoTranslate is on, with the inferred direction', async () => {
+    const created = installMediaStubs()
+    const settings = mergeSettings({ subtitles: { autoTranslate: true } })
+    subtitleMocks.getStoredState.mockResolvedValue({ settings, records: [] })
+    mountPlayerWithTracks([
+      nativeTrack('subtitles', 'English', 'en', [
+        { startTime: 0, endTime: 1, text: 'Hello' },
+        { startTime: 1, endTime: 2, text: 'Bye' },
+      ]),
+    ])
+    stopEnhancer = startSubtitleEnhancer({ readPageUrl: () => eventsUrl })
+    await settleSourceWork()
+
+    expect(subtitleMocks.requestPageTranslationBatch).toHaveBeenCalledTimes(1)
+    const [calledSettings, items, , , direction] = subtitleMocks.requestPageTranslationBatch.mock.calls[0]!
+    expect(calledSettings).toBe(settings)
+    expect((items as Array<{ text: string }>).map(item => item.text)).toEqual(['Hello', 'Bye'])
+    expect(direction).toBe('en-to-zh')
+    expect(created).toHaveLength(1)
+    expect(created[0]!.cues.map(cue => cue.text)).toEqual(['Hello\n译-Hello', 'Bye\n译-Bye'])
+  })
+
+  it('infers zh-to-en for a lone Chinese track', async () => {
+    const created = installMediaStubs()
+    subtitleMocks.getStoredState.mockResolvedValue({ settings: mergeSettings({ subtitles: { autoTranslate: true } }), records: [] })
+    mountPlayerWithTracks([
+      nativeTrack('subtitles', '简体中文', 'zh-Hans', [{ startTime: 0, endTime: 1, text: '你好' }]),
+    ])
+    stopEnhancer = startSubtitleEnhancer({ readPageUrl: () => eventsUrl })
+    await settleSourceWork()
+
+    expect(subtitleMocks.requestPageTranslationBatch.mock.calls[0]![4]).toBe('zh-to-en')
+    expect(created[0]!.cues.map(cue => cue.text)).toEqual(['你好\n译-你好'])
+  })
+
+  it('caps translation to the cues around playback and refreshes after seeking outside the window', async () => {
+    const created = installMediaStubs()
+    subtitleMocks.getStoredState.mockResolvedValue({ settings: mergeSettings({ subtitles: { autoTranslate: true } }), records: [] })
+    const cues = Array.from({ length: 201 }, (_, index) => ({
+      startTime: index * 2,
+      endTime: index * 2 + 1.5,
+      text: `line-${index}`,
+    }))
+    const video = mountPlayerWithTracks([nativeTrack('subtitles', 'English', 'en', cues)])
+    Object.defineProperty(video, 'currentTime', { value: 0, writable: true, configurable: true })
+
+    stopEnhancer = startSubtitleEnhancer({ readPageUrl: () => eventsUrl })
+    await settleSourceWork()
+
+    expect(submittedSubtitleTexts()).toHaveLength(36)
+    expect(submittedSubtitleTexts().every(text => cueIndexFromText(text) * 2 <= 120)).toBe(true)
+
+    // A seek inside the translated window must not rebuild anything.
+    video.currentTime = 30
+    video.dispatchEvent(new Event('seeked'))
+    await settleSourceWork()
+    expect(submittedSubtitleTexts()).toHaveLength(36)
+
+    // A seek beyond the window drops the stale cues and translates the new neighbourhood.
+    video.currentTime = 300
+    video.dispatchEvent(new Event('seeked'))
+    await settleSourceWork()
+    expect(submittedSubtitleTexts()).toHaveLength(72)
+    const secondWindow = submittedSubtitleTexts().slice(36).map(cueIndexFromText)
+    expect(Math.min(...secondWindow)).toBeGreaterThanOrEqual(142)
+    expect(Math.max(...secondWindow)).toBeLessThanOrEqual(210)
+    expect(created).toHaveLength(2)
+  })
+
+  it('reuses the persisted runtime cache after a seek instead of calling the AI again', async () => {
+    const created = installMediaStubs()
+    subtitleMocks.getStoredState.mockResolvedValue({ settings: mergeSettings({ subtitles: { autoTranslate: true } }), records: [] })
+    const cues: NativeCue[] = [
+      { startTime: 0, endTime: 1, text: 'Hello' },
+      { startTime: 10, endTime: 11, text: 'Again' },
+      { startTime: 200, endTime: 201, text: 'Later' },
+    ]
+    const video = mountPlayerWithTracks([nativeTrack('subtitles', 'English', 'en', cues)])
+    Object.defineProperty(video, 'currentTime', { value: 0, writable: true, configurable: true })
+
+    const translations: Record<string, string> = {}
+    for (const cue of cues)
+      translations[createSubtitleCueKey({ start: cue.startTime, end: cue.endTime, text: cue.text })] = `缓存-${cue.text}`
+
+    mocks.sendMessage.mockImplementation(async (message: { type?: string }) => {
+      if (message?.type === 'lexi-read-subtitle-cache') {
+        return {
+          version: subtitleCacheVersion,
+          entries: [{
+            providerId: 'html5-track',
+            mediaId: `html5:${simpleHash(eventsUrl)}`,
+            sourceLang: 'en',
+            targetLang: 'zh',
+            sourceHash: hashSubtitleCues(cues.map(cue => ({ start: cue.startTime, end: cue.endTime, text: cue.text }))),
+            translations,
+            updatedAt: Date.now(),
+          }],
+        }
+      }
+
+      return { ok: true, text: '', contentType: 'text/vtt' }
+    })
+
+    stopEnhancer = startSubtitleEnhancer({ readPageUrl: () => eventsUrl })
+    await settleSourceWork()
+
+    expect(subtitleMocks.requestPageTranslationBatch).not.toHaveBeenCalled()
+    expect(created[0]!.cues.map(cue => cue.text)).toEqual(['Hello\n缓存-Hello', 'Again\n缓存-Again'])
+
+    // Seeking past the window must serve the cached neighbourhood instead of re-translating.
+    video.currentTime = 200
+    video.dispatchEvent(new Event('seeked'))
+    await settleSourceWork()
+
+    expect(subtitleMocks.requestPageTranslationBatch).not.toHaveBeenCalled()
+    expect(created[1]!.cues.map(cue => cue.text)).toEqual(['Later\n缓存-Later'])
   })
 })

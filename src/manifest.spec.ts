@@ -47,4 +47,31 @@ describe('extension manifest variants', () => {
     expect(manifest).not.toHaveProperty('minimum_chrome_version')
     expect(manifest).not.toHaveProperty('side_panel')
   })
+
+  it('injects the MAIN-world YouTube caption bridge in Chromium only', async () => {
+    const manifest = await getManifestFor('chromium')
+    const scripts = manifest.content_scripts ?? []
+
+    const bridgeEntry = {
+      matches: ['https://youtube.com/*', 'https://*.youtube.com/*'],
+      run_at: 'document_start',
+      world: 'MAIN',
+      js: ['dist/contentScripts/youtube-main.global.js'],
+    }
+
+    expect(scripts.filter(entry => entry.js?.includes('dist/contentScripts/youtube-main.global.js'))).toEqual([bridgeEntry])
+    expect(scripts.filter(entry => entry.world === 'MAIN')).toEqual([bridgeEntry])
+  })
+
+  it('never injects the MAIN-world YouTube bridge in Firefox', async () => {
+    const manifest = await getManifestFor('firefox')
+    const scripts = manifest.content_scripts ?? []
+
+    expect(scripts.some(entry => entry.js?.includes('dist/contentScripts/youtube-main.global.js'))).toBe(false)
+    expect(scripts.some(entry => entry.world === 'MAIN')).toBe(false)
+    expect(scripts.map(entry => entry.js)).toEqual([
+      ['dist/contentScripts/index.global.js'],
+      ['dist/contentScripts/frame.global.js'],
+    ])
+  })
 })

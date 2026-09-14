@@ -1,5 +1,5 @@
 import { clampReplacementDensity, clampReplacementLevel, defaultReplacementLevel, densityTiers, levelFromLegacyDifficulty } from './replacementLevels'
-import type { AiConnectionConfig, AiProviderConfig, AiSceneConfig, AiSettings, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings, TranslationSettings } from './types'
+import type { AiConnectionConfig, AiProviderConfig, AiSceneConfig, AiSettings, FeatureScene, LexiSettings, PageTranslationSettings, ReplacementSettings, SyncSettings, TranslationSettings } from './types'
 import { normalizeTranslationEngines } from './translationEngines'
 import { normalizeFestivalThemePreference } from './festivalTheme'
 
@@ -13,6 +13,9 @@ type LegacyAiSettings = Partial<Record<FeatureScene, LegacySceneConfig>> & {
   providers?: Array<Partial<AiProviderConfig>>
   approvedHttpEndpoints?: string[]
 }
+
+/** Bump only when the warning or meaning of syncing a credential materially changes. */
+export const currentApiKeySyncConsentVersion = 1
 
 export const featureScenes: FeatureScene[] = ['replacement', 'selection', 'daily', 'digest', 'omni', 'vocabulary', 'entity']
 
@@ -240,6 +243,9 @@ export const defaultSettings: LexiSettings = {
     pageTranslation: defaultPageTranslationSettings,
   },
   translation: defaultTranslationSettings,
+  subtitles: {
+    autoTranslate: false,
+  },
   study: {
     dailyGoal: 8,
     programmerMode: true,
@@ -295,7 +301,9 @@ export const defaultSettings: LexiSettings = {
   },
   sync: {
     enabled: false,
-    includeApiKeys: true,
+    includeApiKeys: false,
+    apiKeySyncConsentVersion: 0,
+    apiKeySyncMigrationNotice: false,
     lastSyncedAt: 0,
     lastPulledAt: 0,
     lastError: '',
@@ -440,6 +448,25 @@ function normalizeReplacement(value?: StoredReplacementSettings): ReplacementSet
   }
 }
 
+function normalizeSyncSettings(value?: Partial<SyncSettings>): SyncSettings {
+  const rawVersion = value?.apiKeySyncConsentVersion
+  const consentVersion = typeof rawVersion === 'number' && Number.isFinite(rawVersion)
+    ? Math.max(0, Math.floor(rawVersion))
+    : 0
+  const legacyImplicitOptIn = value?.includeApiKeys === true
+    && consentVersion !== currentApiKeySyncConsentVersion
+  const hasCurrentConsent = value?.includeApiKeys === true
+    && consentVersion === currentApiKeySyncConsentVersion
+
+  return {
+    ...defaultSettings.sync,
+    ...value,
+    includeApiKeys: hasCurrentConsent,
+    apiKeySyncConsentVersion: hasCurrentConsent ? currentApiKeySyncConsentVersion : 0,
+    apiKeySyncMigrationNotice: value?.apiKeySyncMigrationNotice === true || legacyImplicitOptIn,
+  }
+}
+
 export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
   const uiDialogShortcut = !value?.ui?.dialogShortcut || value.ui.dialogShortcut === 'mod+k'
     ? defaultSettings.ui.dialogShortcut
@@ -482,6 +509,11 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       },
       engines: normalizeTranslationEngines(value?.translation?.engines ?? defaultTranslationSettings.engines),
     },
+    subtitles: {
+      ...defaultSettings.subtitles,
+      ...value?.subtitles,
+      autoTranslate: value?.subtitles?.autoTranslate === true,
+    },
     study: {
       ...defaultSettings.study,
       ...value?.study,
@@ -517,9 +549,6 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
       maxPerPage: clampEntityLimit(value?.entityDetection?.maxPerPage),
     },
     ai: mergeAiSettings(value?.ai as LegacyAiSettings | undefined),
-    sync: {
-      ...defaultSettings.sync,
-      ...value?.sync,
-    },
+    sync: normalizeSyncSettings(value?.sync),
   }
 }

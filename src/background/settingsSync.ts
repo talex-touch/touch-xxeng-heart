@@ -1,5 +1,6 @@
 import browser from 'webextension-polyfill'
 import {
+  enforceApiKeySyncPolicy,
   getDeviceId,
   mergeRemoteSettings,
   pushSettingsToSync,
@@ -96,6 +97,11 @@ export function startSettingsSync() {
       void applyRemote()
   })
 
-  // A profile that was offline while another device changed settings catches up here.
-  void applyRemote().then(push).catch((error: unknown) => console.warn('[Lexi] settings sync startup failed', error))
+  // Enforce the credential policy before the normal pull/push cycle. A failed scrub is
+  // retried on the next startup and must not prevent ordinary settings sync meanwhile.
+  void enforceApiKeySyncPolicy()
+    .catch((error: unknown) => console.warn('[Lexi] API key sync migration failed', error))
+    .then(applyRemote)
+    .then(push)
+    .catch((error: unknown) => console.warn('[Lexi] settings sync startup failed', error))
 }

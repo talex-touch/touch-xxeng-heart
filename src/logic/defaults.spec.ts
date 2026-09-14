@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { LexiSettings, SiteSceneRule } from './types'
-import { defaultSettings, maxEntityLimit, mergeSettings, minEntityLimit } from './defaults'
+import { currentApiKeySyncConsentVersion, defaultSettings, maxEntityLimit, mergeSettings, minEntityLimit } from './defaults'
 
 describe('settings compatibility', () => {
   it('promotes a legacy global AI connection to the default provider', () => {
@@ -213,5 +213,50 @@ describe('settings compatibility', () => {
 
     expect(mergeSettings({ ui: { customCss: handWritten } as LexiSettings['ui'] }).ui.customCss).toBe(handWritten)
     expect(mergeSettings({ ui: { customCss: compact } as LexiSettings['ui'] }).ui.customCss).toBe(compact)
+  })
+})
+
+describe('aPI key sync consent', () => {
+  it('downgrades the historical default-on key policy and flags the notice', () => {
+    const sync = mergeSettings({
+      sync: { includeApiKeys: true } as LexiSettings['sync'],
+    }).sync
+
+    expect(sync.includeApiKeys).toBe(false)
+    expect(sync.apiKeySyncConsentVersion).toBe(0)
+    expect(sync.apiKeySyncMigrationNotice).toBe(true)
+  })
+
+  it('honours an opt-in recorded at the current warning version', () => {
+    const sync = mergeSettings({
+      sync: {
+        includeApiKeys: true,
+        apiKeySyncConsentVersion: currentApiKeySyncConsentVersion,
+      } as LexiSettings['sync'],
+    }).sync
+
+    expect(sync.includeApiKeys).toBe(true)
+    expect(sync.apiKeySyncConsentVersion).toBe(currentApiKeySyncConsentVersion)
+    expect(sync.apiKeySyncMigrationNotice).toBe(false)
+  })
+
+  it('survives a round-trip with a pending migration notice until the user dismisses it', () => {
+    const sync = mergeSettings({
+      sync: {
+        includeApiKeys: false,
+        apiKeySyncConsentVersion: 0,
+        apiKeySyncMigrationNotice: true,
+      } as LexiSettings['sync'],
+    }).sync
+
+    expect(sync.apiKeySyncMigrationNotice).toBe(true)
+  })
+
+  it('does not raise the migration notice for a profile that never opted in', () => {
+    const sync = mergeSettings({
+      sync: { includeApiKeys: false } as LexiSettings['sync'],
+    }).sync
+
+    expect(sync.apiKeySyncMigrationNotice).toBe(false)
   })
 })

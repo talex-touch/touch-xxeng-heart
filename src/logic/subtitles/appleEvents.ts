@@ -3,6 +3,7 @@ import { parseHlsMasterPlaylist, parseHlsMediaPlaylist, resolveHlsUrl } from './
 import type { HlsSubtitleRendition } from './hls'
 import { normalizeSubtitleCues, parseWebVtt } from './webvtt'
 import type { SubtitleCue, SubtitleProvider, SubtitleSource, SubtitleTrackHandle } from './types'
+import { simpleHash } from '~/logic/text'
 
 /** Fetches one allowed resource as text. Supplied by the caller so the provider is testable. */
 export type SubtitleResourceFetcher = (url: string, options?: { signal?: AbortSignal }) => Promise<string>
@@ -142,7 +143,7 @@ export async function createAppleEventsSubtitleSource(
   }))
 
   return {
-    mediaId: options.mediaId ?? `apple-events:${options.masterUrl}`,
+    mediaId: options.mediaId ?? `apple-events:${simpleHash(options.masterUrl)}`,
     media: options.media,
     listTracks: async (signal) => {
       if (signal?.aborted)

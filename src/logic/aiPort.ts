@@ -1,5 +1,5 @@
 import type { AiChatMessage, ChatMessageContent, ProviderModel } from './providers'
-import type { AiProviderConfig, AiTestResult, FeatureScene } from './types'
+import type { AiProviderConfig, AiTestResult, FeatureScene, TranslationDirection } from './types'
 
 /**
  * The one channel between a page's world and the AI backends.
@@ -10,6 +10,26 @@ import type { AiProviderConfig, AiTestResult, FeatureScene } from './types'
  */
 export const aiPortName = 'lexi-ai'
 
+/** One unit of direct translation work: the text and the id its answer must keep. */
+export interface DirectTranslationItem {
+  id: string
+  text: string
+}
+
+/**
+ * Marks a turn as translation of known items rather than a free-form prompt.
+ *
+ * A Nexus provider must answer this through the translation capability, item by item, and
+ * return only the items it actually translated. Callers that cannot satisfy the descriptor
+ * fall back to the ordinary prompt path, which is why the messages stay attached.
+ */
+export interface DirectTranslationDescriptor {
+  items: DirectTranslationItem[]
+  direction: TranslationDirection
+  /** `text` returns the single item's translation; `items-json` returns `{"items":[…]}`. */
+  output: 'text' | 'items-json'
+}
+
 export interface AiRunCommand {
   type: 'run'
   scene: FeatureScene
@@ -18,6 +38,8 @@ export interface AiRunCommand {
   system?: string
   /** Translation work uses the shared translation queue rather than the generic AI queue. */
   translation?: boolean
+  /** Set when the turn is direct translation; the worker may answer per item. */
+  directTranslation?: DirectTranslationDescriptor
 }
 
 /**

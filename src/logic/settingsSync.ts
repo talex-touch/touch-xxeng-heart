@@ -1,8 +1,8 @@
 import browser from 'webextension-polyfill'
-import { mergeSettings } from './defaults'
+import { currentApiKeySyncConsentVersion, mergeSettings } from './defaults'
 import { readJsonValue, toStoredJson } from './storageJson'
 import { settingsStorageKey, syncDeviceIdStorageKey, syncSettingsChunkPrefix, syncSettingsMetaKey } from './storageKeys'
-import type { LexiSettings } from './types'
+import type { LexiSettings, SyncSettings } from './types'
 
 export const syncPayloadVersion = 1
 /** chrome.storage.sync: 100 KB overall, 8 KB per item. */
@@ -10,6 +10,24 @@ export const syncQuotaBytes = 102400
 const maxPayloadBytes = 92000
 /** Worst-case UTF-8 is 3 bytes per BMP character, so 2000 chars stays under 8 KB. */
 const maxChunkChars = 2000
+
+export function apiKeySyncIsConsented(sync: Pick<SyncSettings, 'includeApiKeys' | 'apiKeySyncConsentVersion'>) {
+  return sync.includeApiKeys === true
+    && sync.apiKeySyncConsentVersion === currentApiKeySyncConsentVersion
+}
+
+function stripRemoteApiKeys(settings: Partial<LexiSettings>): Partial<LexiSettings> {
+  if (!settings.ai?.providers)
+    return settings
+
+  return {
+    ...settings,
+    ai: {
+      ...settings.ai,
+      providers: settings.ai.providers.map(provider => ({ ...provider, apiKey: '' })),
+    },
+  }
+}
 
 interface SyncMeta {
   v: number
@@ -71,7 +89,7 @@ export function toSyncPayload(settings: LexiSettings) {
       ...ai,
       approvedHttpEndpoints: [],
       providers: ai.providers.map(provider => (
-        sync.includeApiKeys ? provider : { ...provider, apiKey: '' }
+        apiKeySyncIsConsented(sync) ? provider : { ...provider, apiKey: '' }
       )),
     },
   }
@@ -83,8 +101,8 @@ export function toSyncPayload(settings: LexiSettings) {
  */
 export function mergeRemoteSettings(local: LexiSettings, remote: Partial<LexiSettings>): LexiSettings {
   const localProviders = new Map(local.ai.providers.map(provider => [provider.id, provider]))
-  const merged = mergeSettings({ ...remote, sync: local.sync })
-
+  const safeRemote = apiKeySyncIsConsented(local.sync) ? remote : stripRemoteApiKeys(remote)
+  const merged = mergeSettings({ ...safeRemote, sync: local.sync })
   return {
     ...merged,
     ai: {
@@ -104,6 +122,44 @@ export async function readLocalSettings(): Promise<LexiSettings> {
 
 export async function writeLocalSettings(settings: LexiSettings) {
   await browser.storage.local.set({ [settingsStorageKey]: toStoredJson(settings) })
+}
+
+/**
+ * Migrates the historical default-on key policy and removes stale keys already mirrored
+ * to browser sync. An enabled sync profile is scrubbed by the normal pull-then-push cycle;
+ * a disabled profile is scrubbed here without importing the remote settings locally.
+ */
+export async function enforceApiKeySyncPolicy(): Promise<{ migrated: boolean, scrubbed: boolean }> {
+  const stored = await browser.storage.local.get(settingsStorageKey)
+  const raw = readJsonValue<Partial<LexiSettings> | undefined>(stored[settingsStorageKey], undefined)
+  let local = mergeSettings(raw)
+  const legacyImplicitOptIn = raw?.sync?.includeApiKeys === true
+    && raw.sync.apiKeySyncConsentVersion !== currentApiKeySyncConsentVersion
+
+  if (apiKeySyncIsConsented(local.sync))
+    return { migrated: false, scrubbed: false }
+
+  const snapshot = await readSyncSnapshot()
+  const remoteContainsKeys = snapshot?.settings.ai?.providers?.some(provider => Boolean(provider.apiKey?.trim())) === true
+  if (legacyImplicitOptIn || remoteContainsKeys) {
+    local = {
+      ...local,
+      sync: {
+        ...local.sync,
+        includeApiKeys: false,
+        apiKeySyncConsentVersion: 0,
+        apiKeySyncMigrationNotice: true,
+      },
+    }
+    await writeLocalSettings(local)
+  }
+
+  if (!snapshot || !remoteContainsKeys || local.sync.enabled)
+    return { migrated: legacyImplicitOptIn, scrubbed: false }
+
+  const sanitizedRemote = mergeRemoteSettings(local, snapshot.settings)
+  await pushSettingsToSync(sanitizedRemote)
+  return { migrated: legacyImplicitOptIn, scrubbed: true }
 }
 
 export async function getDeviceId() {

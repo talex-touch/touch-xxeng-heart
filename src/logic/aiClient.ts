@@ -4,6 +4,7 @@ import { parseEntityDetectionResponse } from './entityDetection'
 import { getDifficultyWindow } from './replacementLevels'
 import { normalizeMarkdownAnswerText, normalizeTranslationText, parseJsonContent } from './aiText'
 import { requestProviderModels, runAiScene, testAiConnection } from './aiTransport'
+import type { DirectTranslationDescriptor } from './aiPort'
 import { buildDialogMessages } from './dialogHarness'
 import type { DialogHarnessInput, DialogHarnessResult } from './dialogHarness'
 import type { AiChatMessage, ChatMessageContent } from './providers'
@@ -67,11 +68,13 @@ async function postAiJson<T>(
   system?: string,
   signal?: AbortSignal,
   translation = false,
+  directTranslation?: DirectTranslationDescriptor,
 ): Promise<T | undefined> {
   const result = await runAiScene({
     scene,
     system,
     translation,
+    directTranslation,
     messages: [{ role: 'user', content: JSON.stringify({ scene, ...payload }) }],
   }, undefined, signal)
 
@@ -86,8 +89,9 @@ async function postAiText(
   signal?: AbortSignal,
   normalizeText = normalizeTranslationText,
   translation = false,
+  directTranslation?: DirectTranslationDescriptor,
 ): Promise<string | undefined> {
-  const result = await runAiScene({ scene, messages, translation }, (partial) => {
+  const result = await runAiScene({ scene, messages, translation, directTranslation }, (partial) => {
     const visible = normalizeText(partial)
     if (visible)
       onText?.(visible)
@@ -307,6 +311,11 @@ export async function requestSelectionTranslation(
     undefined,
     undefined,
     true,
+    {
+      items: [{ id: 'selection', text }],
+      direction: settings.selection.translationDirection,
+      output: 'text',
+    },
   )
 
   if (typeof translated !== 'string' || !translated)
@@ -355,7 +364,11 @@ export async function requestPageTranslationBatch(
   }, [
     'You are Lexi page auto-translator. Return only compact JSON matching the requested schema.',
     'Translations must be natural, concise and human-sounding. No markdown, no hidden reasoning.',
-  ].join(' '), signal, true)
+  ].join(' '), signal, true, {
+    items: items.map(item => ({ id: item.id, text: item.text.slice(0, 900) })),
+    direction,
+    output: 'items-json',
+  })
 
   return data?.items
     ?.filter(item => item.id && item.translation)

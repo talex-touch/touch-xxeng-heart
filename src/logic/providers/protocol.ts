@@ -1,4 +1,4 @@
-export type AiProtocol = 'auto' | 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'gemini'
+export type AiProtocol = 'auto' | 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'gemini' | 'nexus-intelligence'
 /** Every protocol except `auto`, which is resolved before a request is built. */
 export type ResolvedAiProtocol = Exclude<AiProtocol, 'auto'>
 

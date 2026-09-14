@@ -1,25 +1,33 @@
 import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
 import { createListenerGroup } from '~/contentScripts/ui/listenerGroup'
 import { startRouteWatcher } from '~/contentScripts/ui/routeWatcher'
+import { requestPageTranslationBatch } from '~/logic/aiClient'
 import { sendRuntimeMessage } from '~/logic/runtimeMessaging'
+import { getStoredState } from '~/logic/settingsCache'
 import { alignBilingualCues } from '~/logic/subtitles/alignment'
+import { createSubtitleCueKey, createSubtitleTranslationCache, hashSubtitleCues } from '~/logic/subtitles/cache'
 import type { BilingualSubtitleCue } from '~/logic/subtitles/alignment'
-import { createAppleEventsSubtitleProvider, isAppleEventsPage, isAslAppleEventsLink } from '~/logic/subtitles/appleEvents'
+import type { SubtitleCacheIdentity, SubtitleCacheSnapshot, SubtitleTranslationCache } from '~/logic/subtitles/cache'
+import { createAppleEventsSubtitleProvider, isAslAppleEventsLink } from '~/logic/subtitles/appleEvents'
+import { createBilibiliSubtitleProvider } from '~/logic/subtitles/bilibili'
+import { createHtml5SubtitleProvider } from '~/logic/subtitles/html5'
 import { resolveHlsUrl } from '~/logic/subtitles/hls'
+import { createYoutubeSubtitleProvider } from '~/logic/subtitles/youtube'
 import { isAllowedSubtitleResourceUrl } from '~/logic/subtitles/resourcePolicy'
+import { resolveSubtitleSource } from '~/logic/subtitles/registry'
+import type { ResolvedSubtitleSource } from '~/logic/subtitles/registry'
+import type { SubtitleCue, SubtitleProvider, SubtitleTrackHandle } from '~/logic/subtitles/types'
+import type { LexiSettings, PageTranslationDirection } from '~/logic/types'
 
 const lexiBilingualTrackLabel = 'Lexi 双语'
-/** How many mutation-triggered passes may wait for the modal player before giving up. */
 const maxPlayerWaitAttempts = 24
+const translatedWindowBeforeSeconds = 15
+const translatedWindowAfterSeconds = 120
+const translatedWindowCueLimit = 36
+const retryDeclinedSourceAfterMs = 15_000
 
-/** Shape of the worker's reply to `lexi-fetch-subtitle-resource` (kept local: no background import). */
 type SubtitleResourceResponse = { ok: true, text: string } | { ok: false, error?: string }
 
-/**
- * A Lexi session must release the media element when it is removed or the page swaps in a
- * different player — even when no replacement video is visible yet. Exported so that
- * decision is exercisable without a browser navigation.
- */
 export function shouldReleaseSubtitleSession(
   activeMedia: HTMLVideoElement | undefined,
   currentMedia: HTMLVideoElement | undefined,
@@ -29,17 +37,10 @@ export function shouldReleaseSubtitleSession(
 
 export interface AttachedBilingualTrack {
   track: TextTrack
-  /** Every cue Lexi added, so cleanup removes exactly its own and nothing else. */
   cues: VTTCue[]
   detach: () => void
 }
 
-/**
- * The only DOM writer in the subtitle path. It appends one HTML `TextTrack` to the video
- * so the cues survive fullscreen (a DOM overlay would not), and it keeps a handle to the
- * track and every cue it inserted. Detaching disables that track and removes those cues —
- * it never touches tracks the page owns.
- */
 export function attachBilingualTextTrack(
   media: HTMLVideoElement,
   cues: BilingualSubtitleCue[],
@@ -53,7 +54,6 @@ export function attachBilingualTextTrack(
     return undefined
 
   track.mode = 'showing'
-
   const added: VTTCue[] = []
   try {
     for (const cue of cues) {
@@ -64,10 +64,8 @@ export function attachBilingualTextTrack(
     }
   }
   catch {
-    // A rejected cue must not leave a half-populated Lexi track behind.
     for (const inserted of added)
       track.removeCue(inserted)
-    added.length = 0
     track.mode = 'disabled'
     return undefined
   }
@@ -81,8 +79,8 @@ export function attachBilingualTextTrack(
         return
 
       detached = true
-      for (const cue of added)
-        track.removeCue(cue)
+      for (const inserted of added)
+        track.removeCue(inserted)
       added.length = 0
       track.mode = 'disabled'
     },
@@ -91,11 +89,11 @@ export function attachBilingualTextTrack(
 
 interface ActiveSession {
   media: HTMLVideoElement
-  masterUrl: string
+  attemptIdentity: string
   detachTrack: () => void
   disposeListeners: () => void
+  translatedWindow?: { start: number, end: number }
 }
-
 function isVisibleVideo(video: HTMLVideoElement) {
   if (!video.isConnected)
     return false
@@ -108,8 +106,7 @@ function isVisibleVideo(video: HTMLVideoElement) {
   return style.display !== 'none' && style.visibility !== 'hidden'
 }
 
-/** The Watch modal creates its player late; the largest visible video is the one it built. */
-function findAppleEventsVideo(): HTMLVideoElement | undefined {
+function findVisibleVideo(): HTMLVideoElement | undefined {
   return Array.from(document.querySelectorAll('video'))
     .filter(isVisibleVideo)
     .sort((a, b) => {
@@ -144,43 +141,175 @@ function runtimeSubtitleFetcher(url: string, options?: { signal?: AbortSignal })
     .then((result) => {
       if (options?.signal?.aborted)
         throw new Error('字幕资源请求已取消')
-
       if (!result?.ok)
         throw new Error(result?.error ?? '字幕资源获取失败')
-
       return result.text
     })
 }
 
-/**
- * Watches Apple Events pages for the official bilingual track. It only recognises the
- * `films-modal` Watch links (ASL links are excluded), and when both official languages
- * are present it renders them directly — no translation engine is ever invoked here.
- */
+function baseLanguage(language: string) {
+  const normalized = language.toLowerCase().replace(/_/g, '-').replace(/^ai-/, '')
+  if (normalized === 'zh' || normalized.startsWith('zh-') || normalized === 'cn')
+    return 'zh'
+  if (normalized === 'en' || normalized.startsWith('en-'))
+    return 'en'
+  return normalized.split('-')[0] || 'und'
+}
+interface SubtitleTranslationPlan {
+  source: SubtitleTrackHandle
+  translation?: SubtitleTrackHandle
+  direction: PageTranslationDirection
+}
+
+function preferredTrack(tracks: SubtitleTrackHandle[], language: 'en' | 'zh') {
+  return tracks
+    .filter(track => baseLanguage(track.language) === language)
+    .sort((a, b) => Number(a.kind === 'auto') - Number(b.kind === 'auto'))[0]
+}
+
+function translationPlan(tracks: SubtitleTrackHandle[]): SubtitleTranslationPlan | undefined {
+  const english = preferredTrack(tracks, 'en')
+  const chinese = preferredTrack(tracks, 'zh')
+  if (english && chinese)
+    return { source: english, translation: chinese, direction: 'en-to-zh' }
+
+  const source = english ?? chinese ?? tracks
+    .filter(track => track.kind !== 'asr')
+    .sort((a, b) => Number(a.kind === 'auto') - Number(b.kind === 'auto'))[0]
+  if (!source)
+    return undefined
+
+  return {
+    source,
+    direction: baseLanguage(source.language) === 'zh' ? 'zh-to-en' : 'en-to-zh',
+  }
+}
+
+function cuesNearPlayback(media: HTMLVideoElement, cues: SubtitleCue[]) {
+  const currentTime = Number.isFinite(media.currentTime) ? media.currentTime : 0
+  const start = Math.max(0, currentTime - translatedWindowBeforeSeconds)
+  const end = currentTime + translatedWindowAfterSeconds
+  const selected = cues
+    .filter(cue => cue.end >= start && cue.start <= end)
+    .slice(0, translatedWindowCueLimit)
+  return { start, end, cues: selected }
+}
+
+async function translateSubtitleWindow(
+  media: HTMLVideoElement,
+  cues: SubtitleCue[],
+  settings: LexiSettings,
+  direction: PageTranslationDirection,
+  signal: AbortSignal,
+  cache: SubtitleTranslationCache,
+  identity: SubtitleCacheIdentity,
+): Promise<{ cues: BilingualSubtitleCue[], start: number, end: number }> {
+  const window = cuesNearPlayback(media, cues)
+  if (!window.cues.length)
+    return { ...window, cues: [] }
+
+  await cache.load()
+  const translated = new Map<string, string>()
+  const missing: Array<{ id: string, text: string }> = []
+  const items = window.cues.map(cue => ({
+    id: createSubtitleCueKey(cue),
+    text: cue.text,
+  }))
+  const ttlDays = settings.selection.pageTranslation.cacheDays
+
+  for (const item of items) {
+    const cached = cache.lookup(identity, item.id, ttlDays)
+    if (cached)
+      translated.set(item.id, cached)
+    else if (!missing.some(candidate => candidate.id === item.id))
+      missing.push(item)
+  }
+
+  const batchSize = Math.min(8, Math.max(1, settings.selection.pageTranslation.batchSize))
+  const newTranslations: Record<string, string> = {}
+  for (let index = 0; index < missing.length; index += batchSize) {
+    if (signal.aborted)
+      return { ...window, cues: [] }
+
+    const batch = missing.slice(index, index + batchSize)
+    const result = await requestPageTranslationBatch(
+      settings,
+      batch,
+      `视频字幕：${document.title}`,
+      signal,
+      direction,
+    )
+    for (const item of result) {
+      const translation = item.translation.trim()
+      if (!translation)
+        continue
+      translated.set(item.id, translation)
+      newTranslations[item.id] = translation
+    }
+  }
+
+  if (Object.keys(newTranslations).length) {
+    cache.merge(identity, newTranslations, ttlDays)
+    await cache.flush()
+  }
+
+  const bilingual = window.cues.flatMap((cue, index): BilingualSubtitleCue[] => {
+    const translation = translated.get(items[index].id)?.trim()
+    return translation
+      ? [{ start: cue.start, end: cue.end, source: cue.text, translation }]
+      : []
+  })
+  return { ...window, cues: bilingual }
+}
+
 export interface SubtitleEnhancerOptions {
-  /**
-   * Page identity/base-URL source. Defaults to `location.href`; injectable so the real
-   * lifecycle can run where the location object cannot be replaced.
-   */
   readPageUrl?: () => string
+}
+
+function createRuntimeSubtitleCache() {
+  return createSubtitleTranslationCache({
+    storage: {
+      read: () => sendRuntimeMessage<SubtitleCacheSnapshot>('lexi-read-subtitle-cache', undefined),
+      write: async (snapshot) => {
+        const result = await sendRuntimeMessage<{ ok?: boolean, error?: string }>('lexi-write-subtitle-cache', snapshot)
+        if (!result?.ok)
+          throw new Error(result?.error || '字幕缓存写入失败')
+      },
+    },
+  })
 }
 
 export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): () => void {
   const readPageUrl = options.readPageUrl ?? (() => location.href)
-
-  if (window.top !== window || !isAppleEventsPage(readPageUrl()))
+  if (window.top !== window)
     return () => {}
 
   let active: ActiveSession | undefined
   let activating: Promise<void> | undefined
+  let activatingIdentity = ''
   let abortController: AbortController | undefined
   let pendingMasterUrl: string | undefined
+  let currentMedia: HTMLVideoElement | undefined
   let pageUrl = readPageUrl()
   let waitAttempts = 0
   let retryTimer: number | undefined
   let stopWatcher: (() => void) | undefined
   let disposed = false
+  let declinedIdentity = ''
+  let declinedAt = 0
   const listeners = createListenerGroup()
+  const subtitleCache = createRuntimeSubtitleCache()
+
+  const providers: SubtitleProvider[] = [
+    createAppleEventsSubtitleProvider({
+      fetchResource: runtimeSubtitleFetcher,
+      getMedia: () => currentMedia,
+      getMasterUrl: url => pendingMasterUrl ?? (currentMedia ? masterUrlFromVideo(currentMedia, url.href) : undefined),
+    }),
+    createYoutubeSubtitleProvider({ getMedia: () => currentMedia }),
+    createBilibiliSubtitleProvider({ getMedia: () => currentMedia }),
+    createHtml5SubtitleProvider({ getMedia: () => currentMedia }),
+  ]
 
   const stopActive = () => {
     abortController?.abort()
@@ -208,37 +337,27 @@ export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): ()
 
   const scheduleSync = (delay: number) => {
     window.clearTimeout(retryTimer)
-    retryTimer = window.setTimeout(() => {
-      void sync()
-    }, delay)
+    retryTimer = window.setTimeout(() => void sync(), delay)
   }
 
   async function sync() {
     if (disposed)
       return
 
-    if (!isAppleEventsPage(readPageUrl())) {
-      teardown()
-      return
-    }
-
-    // A new URL means a different event: the previous cues and captured link no longer apply.
-    if (readPageUrl() !== pageUrl) {
-      pageUrl = readPageUrl()
+    const nextPageUrl = readPageUrl()
+    if (nextPageUrl !== pageUrl) {
+      pageUrl = nextPageUrl
       pendingMasterUrl = undefined
+      declinedIdentity = ''
       stopActive()
     }
 
-    const media = findAppleEventsVideo()
-    // The modal can close (or swap players) with nothing in its place; the Lexi cues and
-    // listeners must still go, which the no-media return below would otherwise skip.
+    const media = findVisibleVideo()
     if (shouldReleaseSubtitleSession(active?.media, media))
       stopActive()
+    currentMedia = media
 
-    const masterUrl = pendingMasterUrl ?? (media ? masterUrlFromVideo(media, readPageUrl()) : undefined)
-
-    if (!media || !masterUrl) {
-      // The player mounts after the click; keep looking for a bounded number of passes.
+    if (!media) {
       if (waitAttempts > 0) {
         waitAttempts -= 1
         scheduleSync(500)
@@ -246,49 +365,59 @@ export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): ()
       return
     }
 
-    if (active && active.media === media && active.masterUrl === masterUrl && media.isConnected)
+    const attemptIdentity = `${pageUrl}|${media.currentSrc || media.src}|${pendingMasterUrl ?? ''}`
+    if (active?.media === media && active.media.isConnected && active.attemptIdentity === attemptIdentity)
       return
 
-    await activate(media, masterUrl)
+    if (declinedIdentity === attemptIdentity && Date.now() - declinedAt < retryDeclinedSourceAfterMs)
+      return
+
+    if (activating) {
+      if (activatingIdentity === attemptIdentity) {
+        await activating
+        return
+      }
+
+      abortController?.abort()
+      await activating
+      if (disposed)
+        return
+    }
+
+    await activate(media, new URL(pageUrl), attemptIdentity)
   }
 
-  async function activate(media: HTMLVideoElement, masterUrl: string) {
-    if (activating)
-      return activating
-
-    // Clear any previous Lexi track before starting; the old controller is aborted here,
-    // never the new one.
+  async function activate(media: HTMLVideoElement, url: URL, attemptIdentity: string) {
     stopActive()
     waitAttempts = 0
     const controller = new AbortController()
     abortController = controller
+    activatingIdentity = attemptIdentity
 
     activating = (async () => {
-      const provider = createAppleEventsSubtitleProvider({
-        fetchResource: runtimeSubtitleFetcher,
-        getMedia: () => media,
-        getMasterUrl: () => masterUrl,
-        mediaId: `apple-events:${masterUrl}`,
-      })
-
-      const source = await provider.resolve(new URL(readPageUrl()), controller.signal)
-      if (!source || controller.signal.aborted)
+      const resolved = await resolveSubtitleSource(providers, url, { signal: controller.signal, allowBillable: false })
+      if (!resolved || controller.signal.aborted) {
+        declinedIdentity = attemptIdentity
+        declinedAt = Date.now()
         return
+      }
 
-      const tracks = await source.listTracks(controller.signal)
-      const sourceTrack = tracks.find(track => track.language.toLowerCase().startsWith('en'))
-      const translationTrack = tracks.find(track => track.language.toLowerCase().startsWith('zh'))
-      if (!sourceTrack || !translationTrack || controller.signal.aborted)
+      const tracks = await resolved.source.listTracks(controller.signal)
+      const plan = translationPlan(tracks)
+      if (!plan || controller.signal.aborted) {
+        declinedIdentity = attemptIdentity
+        declinedAt = Date.now()
         return
+      }
 
-      const [sourceCues, translationCues] = await Promise.all([
-        sourceTrack.load({ signal: controller.signal }),
-        translationTrack.load({ signal: controller.signal }),
-      ])
-      if (controller.signal.aborted)
+      const result = await loadBilingualResult(resolved, plan, controller.signal, subtitleCache)
+      if (!result.cues.length || controller.signal.aborted) {
+        declinedIdentity = attemptIdentity
+        declinedAt = Date.now()
         return
+      }
 
-      const attached = attachBilingualTextTrack(media, alignBilingualCues(sourceCues, translationCues))
+      const attached = attachBilingualTextTrack(media, result.cues)
       if (!attached || controller.signal.aborted)
         return
 
@@ -301,12 +430,27 @@ export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): ()
       mediaListeners.add(media, 'emptied', onMediaReset)
       mediaListeners.add(media, 'loadstart', onMediaReset)
 
+      const translatedWindow = result.translatedWindow
+      if (translatedWindow) {
+        const refreshTranslatedWindow = () => {
+          const currentTime = media.currentTime
+          if (currentTime >= translatedWindow.end - 15 || currentTime < translatedWindow.start) {
+            stopActive()
+            scheduleSync(0)
+          }
+        }
+        mediaListeners.add(media, 'seeked', refreshTranslatedWindow)
+        mediaListeners.add(media, 'timeupdate', refreshTranslatedWindow)
+      }
+
       active = {
         media,
-        masterUrl,
+        attemptIdentity,
         detachTrack: attached.detach,
         disposeListeners: mediaListeners.removeAll,
+        translatedWindow: result.translatedWindow,
       }
+      declinedIdentity = ''
     })()
       .catch((error) => {
         if (!isExtensionContextInvalidated(error))
@@ -314,9 +458,53 @@ export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): ()
       })
       .finally(() => {
         activating = undefined
+        activatingIdentity = ''
       })
 
     return activating
+  }
+
+  async function loadBilingualResult(
+    resolved: ResolvedSubtitleSource,
+    plan: SubtitleTranslationPlan,
+    signal: AbortSignal,
+    cache: SubtitleTranslationCache,
+  ): Promise<{ cues: BilingualSubtitleCue[], translatedWindow?: { start: number, end: number } }> {
+    const sourceCues = await plan.source.load({ signal })
+    if (signal.aborted)
+      return { cues: [] }
+
+    if (plan.translation) {
+      const translatedCues = await plan.translation.load({ signal })
+      return { cues: signal.aborted ? [] : alignBilingualCues(sourceCues, translatedCues) }
+    }
+
+    const { settings } = await getStoredState()
+    if (!settings.subtitles.autoTranslate)
+      return { cues: [] }
+
+    const sourceLang = baseLanguage(plan.source.language)
+    const targetLang = plan.direction === 'zh-to-en' ? 'en' : 'zh'
+    const identity: SubtitleCacheIdentity = {
+      providerId: resolved.provider.id,
+      mediaId: resolved.source.mediaId,
+      sourceLang,
+      targetLang,
+      sourceHash: hashSubtitleCues(sourceCues),
+    }
+    const translated = await translateSubtitleWindow(
+      resolved.source.media,
+      sourceCues,
+      settings,
+      plan.direction,
+      signal,
+      cache,
+      identity,
+    )
+    return {
+      cues: translated.cues,
+      translatedWindow: { start: translated.start, end: translated.end },
+    }
   }
 
   listeners.add(document, 'click', (event) => {
@@ -335,6 +523,7 @@ export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): ()
 
     pendingMasterUrl = resolved
     waitAttempts = maxPlayerWaitAttempts
+    declinedIdentity = ''
     scheduleSync(300)
   }, true)
 
@@ -344,6 +533,5 @@ export function startSubtitleEnhancer(options: SubtitleEnhancerOptions = {}): ()
     onDispose: teardown,
   })
   stopWatcher = watcher.stop
-
   return () => watcher.stop()
 }

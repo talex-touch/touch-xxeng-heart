@@ -1,5 +1,6 @@
 import { anthropicAdapter } from './anthropic'
 import { geminiAdapter } from './gemini'
+import { nexusAdapter } from './nexus'
 import { openAiChatAdapter } from './openaiChat'
 import { openAiResponsesAdapter } from './openaiResponses'
 import { trimEndpoint } from './protocol'
@@ -13,6 +14,7 @@ const adapters: Record<ResolvedAiProtocol, ProtocolAdapter> = {
   'openai-responses': openAiResponsesAdapter,
   'anthropic-messages': anthropicAdapter,
   'gemini': geminiAdapter,
+  'nexus-intelligence': nexusAdapter,
 }
 
 export const protocolOptions: Array<{ value: AiProtocol, label: string, hint: string }> = [
@@ -21,6 +23,7 @@ export const protocolOptions: Array<{ value: AiProtocol, label: string, hint: st
   { value: 'openai-responses', label: 'OpenAI Responses', hint: 'POST /v1/responses，GPT-5 与 o 系列的新接口。' },
   { value: 'anthropic-messages', label: 'Anthropic', hint: 'POST /v1/messages，Claude 官方接口。' },
   { value: 'gemini', label: 'Google Gemini', hint: 'POST /v1beta/models/{model}:generateContent。' },
+  { value: 'nexus-intelligence', label: 'Tuff Nexus', hint: 'POST /api/v1/intelligence/invoke，Tuff Nexus 能力网关（需设备授权登录）。' },
 ]
 
 export function getProtocolAdapter(protocol: ResolvedAiProtocol) {

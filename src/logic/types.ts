@@ -39,6 +39,11 @@ export interface TranslationSettings {
   rateLimit: TranslationRateLimitSettings
 }
 
+export interface SubtitleSettings {
+  /** Native bilingual tracks remain free; this gates AI/traditional translation of one track. */
+  autoTranslate: boolean
+}
+
 export type { AiProtocol }
 
 export interface AiConnectionConfig {
@@ -102,6 +107,10 @@ export interface AiCallLog {
   completionTokens?: number
   totalTokens?: number
   tokenEstimate?: boolean
+  /** Nexus credits actually deducted for this call; omitted for token-billed providers. */
+  chargedCredits?: number
+  /** Nexus credits held but not yet settled. */
+  reservedCredits?: number
   durationMs: number
   pageUrl?: string
   createdAt: number
@@ -238,6 +247,10 @@ export interface SyncSettings {
   enabled: boolean
   /** API keys leave the device when this is on; the options page spells that out. */
   includeApiKeys: boolean
+  /** Version of the warning the user explicitly accepted; 0 means no current consent. */
+  apiKeySyncConsentVersion: number
+  /** Local-only notice for profiles migrated away from the historical default-on policy. */
+  apiKeySyncMigrationNotice: boolean
   lastSyncedAt: number
   lastPulledAt: number
   lastError: string
@@ -472,6 +485,7 @@ export interface LexiSettings {
   replacement: ReplacementSettings
   selection: SelectionSettings
   translation: TranslationSettings
+  subtitles: SubtitleSettings
   study: StudySettings
   history: HistorySettings
   ui: UiSettings

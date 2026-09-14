@@ -1,3 +1,4 @@
+import { getMutationHub } from './mutationHub'
 import { isExtensionContextInvalidated } from '~/contentScripts/extensionContext'
 
 export interface RouteWatcherOptions {
@@ -39,14 +40,14 @@ export function startRouteWatcher(options: RouteWatcherOptions): RouteWatcher {
   let routeInterval: number | undefined
   let mutationTimer: number | undefined
   let navigationTimer: number | undefined
-  let observer: MutationObserver | undefined
+  let unsubscribe: (() => void) | undefined
 
   const stop = () => {
     if (disposed)
       return
 
     disposed = true
-    observer?.disconnect()
+    unsubscribe?.()
     window.clearInterval(routeInterval)
     window.clearTimeout(mutationTimer)
     window.clearTimeout(navigationTimer)
@@ -88,14 +89,21 @@ export function startRouteWatcher(options: RouteWatcherOptions): RouteWatcher {
   routeInterval = window.setInterval(checkRoute, 1000)
   document.addEventListener('visibilitychange', onVisibilityChange)
 
-  observer = new MutationObserver(() => {
+  const onMutation = () => {
+    if (disposed)
+      return
+
     if (options.shouldRefreshMutation && !options.shouldRefreshMutation())
       return
 
     window.clearTimeout(mutationTimer)
     mutationTimer = window.setTimeout(() => run('mutation refresh'), mutationDelayMs)
-  })
-  observer.observe(document.body, { childList: true, subtree: true })
+  }
+
+  // All watchers on this document share one MutationObserver; each keeps its own gate and
+  // debounce timer above.
+  if (!disposed)
+    unsubscribe = getMutationHub(document).subscribe(onMutation)
 
   return {
     stop,

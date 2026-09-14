@@ -2,25 +2,26 @@ import browser from 'webextension-polyfill'
 
 import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
 import { applyAnchorTypography, ensurePageStyles } from './pageEnhancerStyles'
+import { createMediaToolsController } from './mediaTools'
+import { getMutationHub } from './ui/mutationHub'
 import { getPageContentRoot, getPageTranslationRegion } from '~/logic/pageTranslationRegions'
 import type { PageTranslationRegion } from '~/logic/pageTranslationRegions'
 import { blockIsTranslationTarget, pageLanguageIsTranslationTarget, pageTranslationLanguageSelectors, readPageLanguage, resolvePageTranslationTarget } from '~/logic/pageTranslationLanguage'
 import type { DetectedLanguage } from '~/logic/languageDetection'
 import type { PageLanguageReading, PageTranslationLanguageScope } from '~/logic/pageTranslationLanguage'
 import { resolveAutoPageTranslationSite } from '~/logic/pageTranslationSites'
-import { localTranslateSelection, requestLexiDialogAnswer, requestMediaAnalysis, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
+import { localTranslateSelection, requestLexiDialogAnswer, requestPageTranslationBatch, requestReplacementCandidates, requestSelectionDetail, requestSelectionTranslation } from '~/logic/aiClient'
 import { recordPageVisit } from '~/logic/analytics'
 import type { PageDocument, PageSegment } from '~/logic/contextRetrieval'
 import { defaultSettings } from '~/logic/defaults'
 import { getReplacementDisplayText } from '~/logic/replacementDisplay'
 import type { DialogSelectionContext } from '~/logic/dialogHarness'
 import { findAnchorSegmentId, getPageDocument, revealPageSegment } from '~/contentScripts/pageContent'
-import { elementToDataUrl } from '~/contentScripts/ui/canvas'
+import { renderAnimatedText } from '~/contentScripts/ui/animatedText'
 import { createCollapsible } from '~/contentScripts/ui/collapsible'
-import type { CollapsibleHandle } from '~/contentScripts/ui/collapsible'
 import { createListenerGroup, once, pointerEventName } from '~/contentScripts/ui/listenerGroup'
 import { renderMarkdown } from '~/contentScripts/ui/markdown'
-import { overlayRect, positionAgainstAnchor } from '~/contentScripts/ui/position'
+import { positionAgainstAnchor } from '~/contentScripts/ui/position'
 import { startVideoSpeedControl } from '~/contentScripts/ui/videoSpeed'
 import { getStoredState, primeStoredRecords } from '~/logic/settingsCache'
 import { createConcurrentTaskQueue, createSerializedTaskQueue } from '~/logic/asyncQueue'
@@ -256,31 +257,6 @@ function persistDialogHistory(history: DialogHistoryMessage[]) {
     sessionStorage.setItem(dialogHistorySessionStorageKey, JSON.stringify(snapshot))
   }
   catch {}
-}
-
-interface MediaTargetInfo {
-  element: HTMLImageElement | HTMLVideoElement | HTMLAudioElement | HTMLSourceElement
-  kind: 'image' | 'video' | 'audio' | 'media'
-  src: string
-  title?: string
-  alt?: string
-  mimeType?: string
-  currentTime?: number
-  duration?: number
-  width?: number
-  height?: number
-  poster?: string
-}
-
-interface MediaToolbarState extends MediaTargetInfo {
-  toolbar: HTMLElement
-  highlight: HTMLElement
-  answer?: HTMLElement
-  copy?: HTMLButtonElement
-  collapsible?: CollapsibleHandle
-  promptText?: string
-  frameDataUrl?: string
-  mediaDataUrl?: string
 }
 
 const discourseTitleSelectors = [
@@ -1478,43 +1454,6 @@ function animateSelectionBlockHeight(block: HTMLElement, mutate: () => void) {
   }, 210)
 }
 
-function renderAnimatedText(container: HTMLElement, text: string | undefined, previousText: string | undefined, revealChunk: boolean) {
-  const nextText = typeof text === 'string' ? text : ''
-  const stablePreviousText = typeof previousText === 'string' ? previousText : ''
-  if (!revealChunk || !stablePreviousText || !nextText.startsWith(stablePreviousText)) {
-    container.textContent = nextText
-    return
-  }
-
-  const nextChunk = nextText.slice(stablePreviousText.length)
-  if (!nextChunk)
-    return
-
-  const stableText = stablePreviousText.replace(/\s+$/, '')
-  const chunkPrefix = stablePreviousText.slice(stableText.length)
-  container.textContent = stablePreviousText
-  const chunk = document.createElement('span')
-  chunk.className = 'lexi-selection-translation__chunk'
-  chunk.dataset.lexiNew = 'true'
-  for (const [index, char] of Array.from(`${chunkPrefix}${nextChunk}`).entries()) {
-    const charElement = document.createElement('span')
-    charElement.className = 'lexi-selection-translation__char'
-    charElement.dataset.lexiNew = 'true'
-    charElement.textContent = char
-    charElement.style.animationDelay = `${Math.min(index * 14, 140)}ms`
-    chunk.append(charElement)
-  }
-  if (stableText.length !== stablePreviousText.length)
-    container.textContent = stableText
-  container.append(chunk)
-  window.setTimeout(() => {
-    delete chunk.dataset.lexiNew
-    chunk
-      .querySelectorAll<HTMLElement>('[data-lexi-new="true"]')
-      .forEach(element => delete element.dataset.lexiNew)
-  }, 220)
-}
-
 function createSelectionTranslationBlock(settings: LexiSettings, selected: string, requestKey: string, range?: Range) {
   ensurePageStyles(settings.ui.customCss)
 
@@ -2247,110 +2186,6 @@ function selectionModifierPressed(event: MouseEvent | PointerEvent | KeyboardEve
   return isMacPlatform() ? event.metaKey : event.ctrlKey
 }
 
-function getMediaElementFromEventTarget(target: EventTarget | null): MediaTargetInfo | undefined {
-  const element = target instanceof Element
-    ? target.closest<HTMLImageElement | HTMLVideoElement | HTMLAudioElement | HTMLSourceElement>('img, video, audio, source')
-    : undefined
-  if (!element)
-    return undefined
-
-  const owner = element instanceof HTMLSourceElement && element.parentElement instanceof HTMLMediaElement
-    ? element.parentElement
-    : element
-  const media = owner instanceof HTMLMediaElement ? owner : undefined
-  const src = element instanceof HTMLSourceElement
-    ? element.src
-    : owner instanceof HTMLImageElement
-      ? owner.currentSrc || owner.src
-      : media?.currentSrc || media?.src
-  if (!src)
-    return undefined
-
-  const kind = owner instanceof HTMLImageElement
-    ? 'image'
-    : owner instanceof HTMLVideoElement
-      ? 'video'
-      : owner instanceof HTMLAudioElement
-        ? 'audio'
-        : 'media'
-  const title = owner.getAttribute('title') || owner.getAttribute('aria-label') || undefined
-  const alt = owner instanceof HTMLImageElement ? owner.alt || undefined : undefined
-  const width = owner instanceof HTMLImageElement
-    ? owner.naturalWidth || owner.clientWidth
-    : owner instanceof HTMLVideoElement
-      ? owner.videoWidth || owner.clientWidth
-      : owner.clientWidth
-  const height = owner instanceof HTMLImageElement
-    ? owner.naturalHeight || owner.clientHeight
-    : owner instanceof HTMLVideoElement
-      ? owner.videoHeight || owner.clientHeight
-      : owner.clientHeight
-
-  return {
-    element: owner as MediaTargetInfo['element'],
-    kind,
-    src,
-    title,
-    alt,
-    mimeType: element instanceof HTMLSourceElement ? element.type || undefined : undefined,
-    currentTime: media?.currentTime,
-    duration: Number.isFinite(media?.duration) ? media?.duration : undefined,
-    width: width || undefined,
-    height: height || undefined,
-    poster: owner instanceof HTMLVideoElement ? owner.poster || undefined : undefined,
-  }
-}
-
-function getFileNameFromUrl(url: string, fallback: string) {
-  try {
-    const parsed = new URL(url, location.href)
-    const name = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() ?? '')
-    return name || fallback
-  }
-  catch {
-    return fallback
-  }
-}
-
-function getMediaRadius(anchor: Element) {
-  const style = getComputedStyle(anchor)
-  const radius = style.borderRadius
-  if (radius && radius !== '0px')
-    return radius
-
-  const parentRadius = anchor.parentElement ? getComputedStyle(anchor.parentElement).borderRadius : ''
-  return parentRadius && parentRadius !== '0px' ? parentRadius : '12px'
-}
-
-function positionMediaHighlight(highlight: HTMLElement, anchor: Element) {
-  overlayRect(highlight, anchor, getMediaRadius(anchor))
-}
-
-function positionMediaToolbar(toolbar: HTMLElement, anchor: Element) {
-  positionAgainstAnchor(toolbar, anchor.getBoundingClientRect(), {
-    fallbackWidth: Math.min(360, window.innerWidth - 24),
-    fallbackHeight: 160,
-  })
-}
-
-function positionMediaUi(state: MediaToolbarState) {
-  positionMediaHighlight(state.highlight, state.element)
-  positionMediaToolbar(state.toolbar, state.element)
-}
-
-function captureVideoFrame(element: HTMLVideoElement) {
-  return elementToDataUrl(element, element.videoWidth, element.videoHeight)
-}
-
-function imageToDataUrl(element: HTMLImageElement) {
-  return elementToDataUrl(element, element.naturalWidth, element.naturalHeight)
-}
-
-function getMediaPageContext(element: Element) {
-  const container = element.closest('figure, article, section, main, div')
-  return (container?.textContent || document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 900)
-}
-
 async function translateSelection(
   settings: LexiSettings,
   selected: string,
@@ -2371,15 +2206,18 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const mediaPlaybackOnly = window.top !== window
   const listeners = createListenerGroup()
   const stopVideoSpeedControl = startVideoSpeedControl()
+  const mediaTools = createMediaToolsController({
+    readSiteHints: detectSpecialSiteHints,
+    showToast: showLexiToast,
+  })
   let disposed = false
   let tooltip: HTMLElement | undefined
   let activeTooltipToken: HTMLElement | undefined
   let tooltipHideTimer: number | undefined
   let tooltipRepositionFrame: number | undefined
-  let dynamicObserver: MutationObserver | undefined
+  let stopDynamicMutation: (() => void) | undefined
   let dynamicTimer: number | undefined
   let selectionTimer: number | undefined
-  let mediaToolbarState: MediaToolbarState | undefined
   let lastTranslation: LastTranslationState | undefined
   let dialogShortcut = defaultSettings.ui.dialogShortcut
   let mediaModifierShortcut = defaultSettings.ui.mediaModifierShortcut
@@ -2399,8 +2237,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
   let pageTranslationOrigin: 'manual' | 'restored' | 'auto' | undefined
   // Set when the user pauses; blocks rule/auto restarts until the next page load.
   let pageTranslationSuppressed = false
+  let stopPageTranslationMutation: (() => void) | undefined
   let pageTranslationTimer: number | undefined
-  let pageTranslationObserver: MutationObserver | undefined
   let pageTranslationScanPending = false
   // Set when a failure will repeat until the reader changes something — a daily cap, an
   // out-of-hours schedule, a bad key. Scanning stops rather than retrying into the wall.
@@ -2826,23 +2664,19 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     if (isTerminalTranslationFailure(kind)) {
       pageTranslationHalted = true
-      pageTranslationObserver?.disconnect()
-      pageTranslationObserver = undefined
+      stopPageTranslationMutation?.()
+      stopPageTranslationMutation = undefined
       window.clearTimeout(pageTranslationTimer)
     }
   }
 
   function ensurePageTranslationWatcher(settings: LexiSettings) {
-    pageTranslationObserver?.disconnect()
-    pageTranslationObserver = new MutationObserver((mutations) => {
+    stopPageTranslationMutation?.()
+    stopPageTranslationMutation = getMutationHub(document).subscribe((mutations) => {
       if (!mutations.some(mutation => Array.from(mutation.addedNodes).some(node => node instanceof HTMLElement && !node.closest('[data-lexi-page-translation], [data-lexi-selection-translation], [data-lexi-dialog]'))))
         return
 
       schedulePageTranslationScan(settings, 900)
-    })
-    pageTranslationObserver.observe(document.body, {
-      childList: true,
-      subtree: true,
     })
     window.removeEventListener('scroll', onPageScroll)
     window.addEventListener('scroll', onPageScroll, { passive: true })
@@ -2932,7 +2766,8 @@ export function startPageEnhancer(events: EnhancerEvents) {
     pageTranslationScanPending = false
     pageTranslationInFlight.clear()
     window.clearTimeout(pageTranslationTimer)
-    pageTranslationObserver?.disconnect()
+    stopPageTranslationMutation?.()
+    stopPageTranslationMutation = undefined
     window.removeEventListener('scroll', onPageScroll)
     removePageTranslationElements()
     await pageTranslationCacheWritesSettled
@@ -3101,173 +2936,6 @@ export function startPageEnhancer(events: EnhancerEvents) {
 
     stats.records = records.length
     currentEvents.onStats(stats)
-  }
-
-  function closeMediaToolbar() {
-    mediaToolbarState?.collapsible?.destroy()
-    mediaToolbarState?.highlight.remove()
-    mediaToolbarState?.toolbar.remove()
-    mediaToolbarState = undefined
-  }
-
-  async function analyzeMediaToolbar() {
-    const state = mediaToolbarState
-    if (!state?.answer)
-      return
-
-    const { settings } = await getStoredState()
-    if (!isSceneEnabled(settings, 'omni', location.href, detectSpecialSiteHints()) || !settings.ai.omni.enabled) {
-      state.answer.textContent = 'AI Omni 多模态场景未启用。请在选项页启用并配置支持 vision 的模型。'
-      return
-    }
-
-    const updateAnswer = (text: string, revealChunk = true) => {
-      if (!state.answer)
-        return
-
-      state.promptText = text
-      if (state.copy)
-        state.copy.disabled = !text.trim() || text === '分析中...'
-      const previous = state.answer.textContent ?? ''
-      renderAnimatedText(state.answer, text, previous, revealChunk)
-    }
-    updateAnswer('分析中...', false)
-    if (state.kind === 'video' && state.element instanceof HTMLVideoElement)
-      state.frameDataUrl = captureVideoFrame(state.element)
-    else if (state.kind === 'image' && state.element instanceof HTMLImageElement)
-      state.mediaDataUrl = await imageToDataUrl(state.element)
-
-    try {
-      const text = await requestMediaAnalysis(settings, {
-        kind: state.kind,
-        src: state.src,
-        pageUrl: location.href,
-        pageTitle: document.title,
-        title: state.title,
-        alt: state.alt,
-        mimeType: state.mimeType,
-        currentTime: state.currentTime,
-        duration: state.duration,
-        width: state.width,
-        height: state.height,
-        poster: state.poster,
-        frameDataUrl: state.frameDataUrl,
-        mediaDataUrl: state.mediaDataUrl,
-        context: getMediaPageContext(state.element),
-      }, (value) => {
-        if (mediaToolbarState === state)
-          updateAnswer(value)
-      })
-      if (mediaToolbarState === state && text)
-        updateAnswer(text)
-    }
-    catch (error) {
-      if (mediaToolbarState === state)
-        updateAnswer(error instanceof Error ? error.message : '分析失败', false)
-    }
-  }
-
-  async function downloadMediaToolbar() {
-    const state = mediaToolbarState
-    if (!state)
-      return
-
-    const filename = `Lexi/${getFileNameFromUrl(state.src, `media-${Date.now()}`)}`
-    const response = await sendRuntimeMessage<{ ok?: boolean, error?: string }>('lexi-download-media', {
-      url: state.src,
-      filename,
-    })
-    const { settings } = await getStoredState()
-    showLexiToast(response.ok ? '已交给浏览器下载。' : response.error || '下载失败', settings.ui.customCss)
-  }
-
-  async function copyMediaPrompt() {
-    const state = mediaToolbarState
-    if (!state?.promptText?.trim())
-      return
-
-    const { settings } = await getStoredState()
-    await navigator.clipboard.writeText(state.promptText.trim())
-    showLexiToast('Prompt 已复制。', settings.ui.customCss)
-  }
-
-  function showMediaToolbar(info: MediaTargetInfo) {
-    closeMediaToolbar()
-
-    const existingStyle = document.getElementById('lexi-page-style')
-    if (!existingStyle)
-      ensurePageStyles(defaultSettings.ui.customCss)
-
-    const highlight = document.createElement('div')
-    const toolbar = document.createElement('section')
-    const head = document.createElement('div')
-    const title = document.createElement('div')
-    const close = document.createElement('button')
-    const meta = document.createElement('div')
-    const actions = document.createElement('div')
-    const download = document.createElement('button')
-    const analyze = document.createElement('button')
-    const copy = document.createElement('button')
-    const answer = document.createElement('div')
-
-    highlight.dataset.lexiMediaHighlight = 'true'
-    highlight.className = 'lexi-media-highlight'
-    toolbar.dataset.lexiMediaToolbar = 'true'
-    toolbar.className = 'lexi-media-toolbar'
-    head.className = 'lexi-media-toolbar__head'
-    title.className = 'lexi-media-toolbar__title'
-    close.className = 'lexi-media-toolbar__close'
-    meta.className = 'lexi-media-toolbar__meta'
-    actions.className = 'lexi-media-toolbar__actions'
-    download.className = 'lexi-media-toolbar__button'
-    analyze.className = 'lexi-media-toolbar__button'
-    copy.className = 'lexi-media-toolbar__button'
-    answer.className = 'lexi-media-toolbar__answer'
-
-    close.type = 'button'
-    download.type = 'button'
-    analyze.type = 'button'
-    copy.type = 'button'
-    title.textContent = `${info.kind === 'image' ? '图片' : info.kind === 'video' ? '视频' : info.kind === 'audio' ? '音频' : '媒体'}操作`
-    close.textContent = '×'
-    meta.textContent = [info.title || info.alt || getFileNameFromUrl(info.src, info.src), info.width && info.height ? `${info.width}×${info.height}` : ''].filter(Boolean).join(' · ')
-    download.textContent = '下载媒体'
-    analyze.textContent = '提取还原 Prompt'
-    copy.textContent = '复制 Prompt'
-    copy.disabled = true
-    answer.textContent = '点击“提取还原 Prompt”，会输出用于还原这张图的纯文本 prompt。'
-
-    close.addEventListener('click', closeMediaToolbar)
-    download.addEventListener('click', () => downloadMediaToolbar().catch((error) => {
-      answer.textContent = error instanceof Error ? error.message : '下载失败'
-    }))
-    analyze.addEventListener('click', () => analyzeMediaToolbar().catch((error) => {
-      answer.textContent = error instanceof Error ? error.message : '分析失败'
-    }))
-    copy.addEventListener('click', () => copyMediaPrompt().catch((error) => {
-      answer.textContent = error instanceof Error ? error.message : '复制失败'
-    }))
-
-    const collapsible = createCollapsible(toolbar, {
-      block: 'lexi-media-toolbar',
-      label: '媒体操作',
-      summary: info.title || info.alt || getFileNameFromUrl(info.src, info.src),
-      onToggle: () => {
-        const state = mediaToolbarState
-        if (state)
-          positionMediaUi(state)
-      },
-    })
-
-    head.append(title, collapsible.toggle, close)
-    actions.append(analyze, copy, download)
-    const body = document.createElement('div')
-    body.className = 'lexi-media-toolbar__body'
-    body.append(meta, actions, answer)
-    toolbar.append(collapsible.pill, head, body)
-    document.documentElement.append(highlight, toolbar)
-    mediaToolbarState = { ...info, toolbar, highlight, answer, copy, collapsible }
-    positionMediaUi(mediaToolbarState)
   }
 
   async function translateAndRecord(selected: string, context: string, range: Range | undefined, requestId: number, requestKey: string) {
@@ -3475,7 +3143,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     selectionChangingSince = performance.now()
     window.clearTimeout(selectionTimer)
 
-    if (shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut) && getMediaElementFromEventTarget(event.target)) {
+    if (shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut) && mediaTools.findTarget(event.target)) {
       event.preventDefault()
       event.stopPropagation()
       event.stopImmediatePropagation()
@@ -3486,7 +3154,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut))
       return false
 
-    const media = getMediaElementFromEventTarget(event.target)
+    const media = mediaTools.findTarget(event.target)
     if (!media)
       return false
 
@@ -3496,11 +3164,11 @@ export function startPageEnhancer(events: EnhancerEvents) {
     getStoredState()
       .then(({ settings }) => {
         ensurePageStyles(settings.ui.customCss)
-        showMediaToolbar(media)
+        mediaTools.open(media)
       })
       .catch((error) => {
         console.warn('[Lexi] media toolbar failed', error)
-        showMediaToolbar(media)
+        mediaTools.open(media)
       })
     return true
   }
@@ -3637,8 +3305,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     const currentDialog = document.querySelector<HTMLElement>('[data-lexi-dialog]')
     if (currentDialog)
       closeLexiDialog(currentDialog)
-    if (mediaToolbarState)
-      closeMediaToolbar()
+    mediaTools.close()
     hideTooltip()
   }
 
@@ -3720,8 +3387,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   function onPageScroll() {
     followTokenOnScroll()
 
-    if (mediaToolbarState)
-      positionMediaUi(mediaToolbarState)
+    mediaTools.reposition()
 
     if (!pageTranslationEnabled)
       return
@@ -3735,7 +3401,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     if (!shortcutModifiersMatch(event, mediaModifierShortcut || defaultSettings.ui.mediaModifierShortcut))
       return
 
-    const media = getMediaElementFromEventTarget(event.target)
+    const media = mediaTools.findTarget(event.target)
     if (!media)
       return
 
@@ -3868,11 +3534,10 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const stop = () => {
     disposed = true
     stopVideoSpeedControl()
-    dynamicObserver?.disconnect()
-    pageTranslationObserver?.disconnect()
-    pageTranslationEpoch.invalidate()
-    pageTranslationOperation = undefined
-    pageTranslationRunningId = undefined
+    stopDynamicMutation?.()
+    stopDynamicMutation = undefined
+    stopPageTranslationMutation?.()
+    stopPageTranslationMutation = undefined
     window.clearTimeout(dynamicTimer)
     window.clearTimeout(selectionTimer)
     window.clearTimeout(pageTranslationTimer)
@@ -3895,7 +3560,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
     browser.storage.onChanged.removeListener(onStorageChanged)
     tooltip?.remove()
     document.querySelector('[data-lexi-dialog]')?.remove()
-    closeMediaToolbar()
+    mediaTools.close()
   }
 
   function handleEnhancerError(error: unknown) {
@@ -3921,15 +3586,12 @@ export function startPageEnhancer(events: EnhancerEvents) {
       if (!getReplacementBudget(settings, detectSpecialSiteHints()).dynamicScan)
         return
 
-      dynamicObserver = new MutationObserver(() => {
+      stopDynamicMutation?.()
+      stopDynamicMutation = getMutationHub(document).subscribe(() => {
         window.clearTimeout(dynamicTimer)
         dynamicTimer = window.setTimeout(() => {
           run().catch(handleEnhancerError)
         }, 900)
-      })
-      dynamicObserver.observe(document.body, {
-        childList: true,
-        subtree: true,
       })
     }).catch(handleEnhancerError)
   }

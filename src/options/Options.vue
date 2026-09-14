@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { useMediaQuery } from '@vueuse/core'
 import { computed, ref, watchEffect } from 'vue'
-import { defaultSettings, featureLabels, maxEntityLimit, maxVocabularyLimit, minEntityLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
+import NexusAccountPanel from './components/NexusAccountPanel.vue'
+import { currentApiKeySyncConsentVersion, defaultSettings, featureLabels, maxEntityLimit, maxVocabularyLimit, minEntityLimit, minVocabularyLimit, promptDefaults } from '~/logic/defaults'
 import { entitySeedSurfaceCount } from '~/logic/entityBank'
 import { festivalThemeDetails, festivalThemeOptions, resolveFestivalTheme } from '~/logic/festivalTheme'
 import { fetchProviderModels, testAiProvider, testAiScene } from '~/logic/aiClient'
 import { runAiScene } from '~/logic/aiTransport'
 import { getProtocolLabel, protocolOptions } from '~/logic/providers'
+import { NEXUS_PROVIDER_ID, createNexusProviderConfig } from '~/logic/nexusClient'
 import { formatDomainList, normalizeSiteRuleDomain, parseDomainList } from '~/logic/siteRules'
 import { aiCallLogs, contentDigestCache, forumDigestCache, githubDigestCache, lexiSettings, pageVisitLogs, vocabularyRecords } from '~/logic/storage'
 import { summarizeByDay } from '~/logic/analytics'
@@ -210,6 +212,7 @@ const sceneTestResults = ref<Partial<Record<FeatureScene, string>>>({})
 const sceneTestDetails = ref<Partial<Record<FeatureScene, AiTestResult>>>({})
 const httpApprovalDialog = ref<HTMLDialogElement>()
 const resetSettingsDialog = ref<HTMLDialogElement>()
+const apiKeySyncConsentDialog = ref<HTMLDialogElement>()
 let pendingHttpConnection: { endpoint: string } | undefined
 let pendingHttpInput: HTMLInputElement | undefined
 const pendingHttpEndpoint = ref('')
@@ -262,7 +265,8 @@ const providerRangeLabel = computed(() => {
   const start = (providerPage.value - 1) * providerPageSize + 1
   return `${start}-${Math.min(total, start + providerPageSize - 1)} / ${total} 条`
 })
-const activeProtocolHint = computed(() => protocolOptions.find(option => option.value === providerDraft.value?.protocol)?.hint ?? '')
+const manualProtocolOptions = computed(() => protocolOptions.filter(option => option.value !== 'nexus-intelligence'))
+const activeProtocolHint = computed(() => manualProtocolOptions.value.find(option => option.value === providerDraft.value?.protocol)?.hint ?? '')
 const sceneProviderNames = computed(() => new Map(lexiSettings.value.ai.providers.map(provider => [provider.id, provider.label || provider.id])))
 
 // Deleting or filtering can leave the cursor past the last page.
@@ -362,6 +366,27 @@ function removeProvider(id: string) {
 function toggleProviderEnabled(id: string, enabled: boolean) {
   lexiSettings.value.ai.providers = lexiSettings.value.ai.providers.map(provider => (
     provider.id === id ? { ...provider, enabled, updatedAt: Date.now() } : provider
+  ))
+}
+
+function handleNexusConnected() {
+  const providers = lexiSettings.value.ai.providers
+  const existing = providers.find(provider => provider.id === NEXUS_PROVIDER_ID)
+  const nexusProvider = { ...createNexusProviderConfig(existing?.priority ?? providers.length + 1), enabled: true, updatedAt: Date.now() }
+  lexiSettings.value.ai.providers = existing
+    ? providers.map(provider => provider.id === NEXUS_PROVIDER_ID ? nexusProvider : provider)
+    : [...providers, nexusProvider]
+}
+
+function handleNexusLoggedOut() {
+  const providers = lexiSettings.value.ai.providers
+  const existing = providers.find(provider => provider.id === NEXUS_PROVIDER_ID)
+  if (!existing)
+    return
+
+  const nexusProvider = { ...createNexusProviderConfig(existing.priority), enabled: false, updatedAt: Date.now() }
+  lexiSettings.value.ai.providers = providers.map(provider => (
+    provider.id === NEXUS_PROVIDER_ID ? nexusProvider : provider
   ))
 }
 
@@ -780,6 +805,32 @@ watchEffect(() => {
     void refreshSyncQuota()
 })
 
+function updateApiKeySync(enabled: boolean) {
+  if (!enabled) {
+    lexiSettings.value.sync = {
+      ...lexiSettings.value.sync,
+      includeApiKeys: false,
+      apiKeySyncConsentVersion: 0,
+    }
+    return
+  }
+
+  apiKeySyncConsentDialog.value?.showModal()
+}
+
+function resolveApiKeySyncConsent(approved: boolean) {
+  if (approved) {
+    lexiSettings.value.sync = {
+      ...lexiSettings.value.sync,
+      includeApiKeys: true,
+      apiKeySyncConsentVersion: currentApiKeySyncConsentVersion,
+      apiKeySyncMigrationNotice: false,
+    }
+  }
+
+  apiKeySyncConsentDialog.value?.close()
+}
+
 async function syncNow() {
   syncBusy.value = true
   syncMessage.value = ''
@@ -903,6 +954,29 @@ async function searchVocabularyWithAi() {
     </dialog>
 
     <dialog
+      ref="apiKeySyncConsentDialog"
+      class="options-dialog"
+      aria-labelledby="api-key-sync-consent-title"
+      @cancel.prevent="resolveApiKeySyncConsent(false)"
+    >
+      <div class="options-dialog__body">
+        <h2 id="api-key-sync-consent-title">
+          确认同步 API Key
+        </h2>
+        <p>开启后，自备 Provider 的 API Key 会离开当前设备并上传到浏览器账号同步区。拥有同一浏览器同步账号的其他设备可以收到这些密钥。</p>
+        <p>Nexus 设备令牌始终不会同步。若继续，建议先在 Chrome 中启用同步密码短语。</p>
+        <div class="options-dialog__actions">
+          <BaseButton @click="resolveApiKeySyncConsent(false)">
+            保持仅本机
+          </BaseButton>
+          <BaseButton variant="warning" @click="resolveApiKeySyncConsent(true)">
+            理解风险并同步 Key
+          </BaseButton>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog
       ref="providerDialog"
       class="options-dialog options-dialog--wide"
       aria-labelledby="provider-editor-title"
@@ -920,7 +994,7 @@ async function searchVocabularyWithAi() {
           </FormField>
           <FormField label="协议" :hint="activeProtocolHint" compact>
             <BaseSelect v-model="providerDraft.protocol" size="sm">
-              <option v-for="option in protocolOptions" :key="option.value" :value="option.value">
+              <option v-for="option in manualProtocolOptions" :key="option.value" :value="option.value">
                 {{ option.label }}
               </option>
             </BaseSelect>
@@ -1344,6 +1418,11 @@ async function searchVocabularyWithAi() {
                   </option>
                 </BaseSelect>
               </FormField>
+              <SettingToggle
+                v-model="lexiSettings.subtitles.autoTranslate"
+                label="单语字幕自动补成双语"
+                hint="默认关闭。仅翻译播放位置附近的字幕；已有官方双语轨时不调用翻译服务。"
+              />
             </div>
           </section>
 
@@ -1473,11 +1552,22 @@ async function searchVocabularyWithAi() {
             </header>
 
             <div class="settings-stack">
+              <div v-if="lexiSettings.sync.apiKeySyncMigrationNotice" class="settings-callout" role="status">
+                <span class="i-lucide-shield-alert" aria-hidden="true" />
+                <div>
+                  <p>旧版本曾默认允许同步 API Key。Lexi 已关闭该选项，并会从浏览器同步快照中移除已有 Key；其他设备需要重新填写。</p>
+                  <BaseButton variant="ghost" size="sm" @click="lexiSettings.sync.apiKeySyncMigrationNotice = false">
+                    知道了
+                  </BaseButton>
+                </div>
+              </div>
+
               <SettingToggle
-                v-model="lexiSettings.sync.includeApiKeys"
+                :model-value="lexiSettings.sync.includeApiKeys"
                 label="同步中包含 API Key"
-                hint="开启后 Key 会随浏览器同步上传到 Google 服务器；建议在 Chrome 设置中启用同步密码短语。关闭时其他设备需要重新填写 Key。"
+                hint="默认关闭。开启前会再次确认；关闭时其他设备需要重新填写 Key。"
                 :disabled="!lexiSettings.sync.enabled"
+                @update:model-value="updateApiKeySync"
               />
 
               <div class="settings-callout">
@@ -1987,6 +2077,7 @@ async function searchVocabularyWithAi() {
           </div>
         </section>
         <section v-if="activeTab === 'ai' && activeAiSection === 'providers'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
+          <NexusAccountPanel class="mb-5" @connected="handleNexusConnected" @logged-out="handleNexusLoggedOut" />
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="text-16px font-600">
@@ -2052,13 +2143,13 @@ async function searchVocabularyWithAi() {
                     </span>
                   </td>
                   <td class="py-2 pr-3 text-neutral-500">
-                    {{ getProtocolLabel(provider.protocol) }}
+                    {{ provider.id === NEXUS_PROVIDER_ID ? '账号授权' : getProtocolLabel(provider.protocol) }}
                   </td>
                   <td class="max-w-64 break-all py-2 pr-3 text-neutral-500">
-                    {{ provider.endpoint || '未填写' }}
+                    {{ provider.id === NEXUS_PROVIDER_ID ? '自动路由' : (provider.endpoint || '未填写') }}
                   </td>
                   <td class="max-w-48 break-all py-2 pr-3 text-neutral-500">
-                    {{ provider.model || '未填写' }}
+                    {{ provider.id === NEXUS_PROVIDER_ID ? '自动选择' : (provider.model || '未填写') }}
                   </td>
                   <td class="py-2 pr-3 text-neutral-500">
                     {{ provider.priority }} · {{ provider.delayMs }}ms
@@ -2079,12 +2170,14 @@ async function searchVocabularyWithAi() {
                       <BaseButton size="sm" :loading="providerRowTests[provider.id]?.loading" loading-label="正在测试" @click="testProviderRow(provider)">
                         测试
                       </BaseButton>
-                      <BaseButton size="sm" @click="openProviderEditor(provider)">
-                        编辑
-                      </BaseButton>
-                      <BaseButton variant="danger" size="sm" @click="removeProvider(provider.id)">
-                        删除
-                      </BaseButton>
+                      <template v-if="provider.id !== NEXUS_PROVIDER_ID">
+                        <BaseButton size="sm" @click="openProviderEditor(provider)">
+                          编辑
+                        </BaseButton>
+                        <BaseButton variant="danger" size="sm" @click="removeProvider(provider.id)">
+                          删除
+                        </BaseButton>
+                      </template>
                     </div>
                   </td>
                 </tr>

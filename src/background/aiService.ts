@@ -77,7 +77,13 @@ async function execute(port: Runtime.Port, command: AiCommand, signal: AbortSign
   }
 
   const result = await runAiChat(
-    { scene: command.scene, messages: command.messages, system: command.system, translation: command.translation },
+    {
+      scene: command.scene,
+      messages: command.messages,
+      system: command.system,
+      translation: command.translation,
+      directTranslation: command.directTranslation,
+    },
     text => post(port, { type: 'delta', text }),
     signal,
   )

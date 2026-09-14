@@ -5,6 +5,15 @@ export type LexiRuntimeMessageType =
   | 'lexi-context-translate'
   | 'lexi-download-media'
   | 'lexi-fetch-subtitle-resource'
+  | 'lexi-fetch-youtube-caption-track'
+  | 'lexi-read-subtitle-cache'
+  | 'lexi-write-subtitle-cache'
+  | 'lexi-nexus-auth-status'
+  | 'lexi-nexus-credits'
+  | 'lexi-nexus-device-poll'
+  | 'lexi-nexus-device-start'
+  | 'lexi-nexus-logout'
+  | 'lexi-resolve-bilibili-subtitles'
   | 'lexi-page-entities'
   | 'lexi-page-stats'
   | 'lexi-page-translate-start'
@@ -34,14 +43,15 @@ function createRuntimeMessage<T>(type: LexiRuntimeMessageType, data: T): LexiRun
 }
 
 function isLexiRuntimeMessage(message: unknown): message is LexiRuntimeMessage {
+  // Chrome's structured clone drops object properties whose value is `undefined`.
+  // Payload-less commands therefore arrive without an own `data` field.
   return Boolean(
     message
     && typeof message === 'object'
     && 'channel' in message
     && message.channel === 'lexi'
     && 'type' in message
-    && typeof message.type === 'string'
-    && 'data' in message,
+    && typeof message.type === 'string',
   )
 }
 

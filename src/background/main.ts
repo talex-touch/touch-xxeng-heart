@@ -2,7 +2,11 @@ import browser from 'webextension-polyfill'
 import { onMessage } from 'webext-bridge/background'
 import { startAiService } from './aiService'
 import { isAnalyticsLogPayload, persistAnalyticsLog } from './analyticsStore'
+import { resolveBilibiliSubtitles } from './bilibiliSubtitles'
+import { startNexusAuthService } from './nexusAuth'
 import { startSettingsSync } from './settingsSync'
+import { fetchYoutubeCaptionTrack } from './youtubeCaptions'
+import { mergeSubtitleCacheSnapshot, readSubtitleCacheSnapshot } from './subtitleCache'
 import { fetchSubtitleResource } from './subtitleResources'
 import { setAnalyticsSink } from '~/logic/analytics'
 import { listenRuntimeMessage, sendTabRuntimeMessage } from '~/logic/runtimeMessaging'
@@ -38,6 +42,10 @@ startSettingsSync()
 // worker request is exempt from the CORS check that blocks content scripts.
 setAnalyticsSink(persistAnalyticsLog)
 startAiService()
+
+// Nexus device flow and token custody: the tokens never leave the session area, so the
+// device flow, the account status and the credit reads all have to be answered here.
+startNexusAuthService()
 
 function isTranslationDirection(value: unknown): value is TranslationDirection {
   return value === 'auto' || value === 'zh-to-en' || value === 'en-to-zh'
@@ -156,6 +164,19 @@ listenRuntimeMessage<{ url?: unknown, maxBytes?: unknown }>('lexi-fetch-subtitle
     return { ok: false, error: '缺少字幕资源 URL' }
 
   return fetchSubtitleResource(url, { maxBytes: Number.isFinite(maxBytes) ? maxBytes : undefined })
+})
+
+listenRuntimeMessage<{ url?: unknown }>('lexi-fetch-youtube-caption-track', (payload) => {
+  const url = typeof payload?.url === 'string' ? payload.url : ''
+  return fetchYoutubeCaptionTrack(url)
+})
+
+listenRuntimeMessage('lexi-read-subtitle-cache', () => readSubtitleCacheSnapshot())
+listenRuntimeMessage<unknown>('lexi-write-subtitle-cache', payload => mergeSubtitleCacheSnapshot(payload))
+
+listenRuntimeMessage<{ pageUrl?: unknown }>('lexi-resolve-bilibili-subtitles', (payload) => {
+  const pageUrl = typeof payload?.pageUrl === 'string' ? payload.pageUrl : ''
+  return resolveBilibiliSubtitles(pageUrl)
 })
 
 type DigestCache = Record<string, { sourceHash: string, updatedAt: number }>

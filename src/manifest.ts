@@ -3,7 +3,12 @@ import type { Manifest } from 'webextension-polyfill'
 import type PkgType from '../package.json'
 import { isBeta, isDev, isFirefox, r } from '../scripts/utils'
 
-type ChromiumManifest = Manifest.WebExtensionManifest & {
+type ChromiumContentScript = NonNullable<Manifest.WebExtensionManifest['content_scripts']>[number] & {
+  world?: 'ISOLATED' | 'MAIN'
+}
+
+type ChromiumManifest = Omit<Manifest.WebExtensionManifest, 'content_scripts'> & {
+  content_scripts?: ChromiumContentScript[]
   side_panel?: {
     default_path: string
   }
@@ -58,6 +63,17 @@ export async function getManifest() {
     ],
     host_permissions: ['http://*/*', 'https://*/*'],
     content_scripts: [
+      ...(!isFirefox
+        ? [{
+            matches: [
+              'https://youtube.com/*',
+              'https://*.youtube.com/*',
+            ],
+            run_at: 'document_start' as const,
+            world: 'MAIN' as const,
+            js: ['dist/contentScripts/youtube-main.global.js'],
+          }]
+        : []),
       {
         matches: [
           'http://*/*',

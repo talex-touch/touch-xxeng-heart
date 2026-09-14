@@ -42,7 +42,7 @@ function decodeBody(chunks: Uint8Array[], total: number) {
  * Bounded body read. `Content-Length` is checked first, but it is advisory — a chunked
  * or lying response must still be cut off mid-stream rather than buffered whole.
  */
-async function readBoundedText(response: Response, maxBytes: number): Promise<{ text: string } | { error: string }> {
+export async function readBoundedText(response: Response, maxBytes: number): Promise<{ text: string } | { error: string }> {
   const reader = response.body?.getReader?.()
   if (!reader) {
     const text = await response.text()

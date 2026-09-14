@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill'
 import type { Runtime } from 'webextension-polyfill'
 import { aiPortName } from './aiPort'
-import type { AiCommand, AiEvent } from './aiPort'
+import type { AiCommand, AiEvent, DirectTranslationDescriptor } from './aiPort'
 import type { AiChatMessage, ChatMessageContent, ProviderModel } from './providers'
 import type { AiProviderConfig, AiTestResult, FeatureScene } from './types'
 
@@ -106,7 +106,7 @@ function sendAiCommand<T>(
  * streaming answer without tracking deltas itself.
  */
 export function runAiScene(
-  request: { scene: FeatureScene, messages: AiChatMessage[], system?: string, translation?: boolean },
+  request: { scene: FeatureScene, messages: AiChatMessage[], system?: string, translation?: boolean, directTranslation?: DirectTranslationDescriptor },
   onText?: (text: string) => void,
   signal?: AbortSignal,
 ): Promise<AiRunOutcome | undefined> {

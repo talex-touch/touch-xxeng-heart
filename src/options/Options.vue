@@ -369,6 +369,23 @@ function toggleProviderEnabled(id: string, enabled: boolean) {
   ))
 }
 
+/**
+ * Whether a signed-in Nexus could actually take a turn.
+ *
+ * A scene with an explicit `providerIds` list only ever calls those providers, so an account
+ * can be connected and still never be reached. The panel says so rather than promising routing.
+ */
+const nexusRoutable = computed(() => {
+  const provider = lexiSettings.value.ai.providers.find(item => item.id === NEXUS_PROVIDER_ID)
+  if (!provider?.enabled)
+    return false
+
+  return aiScenes.some((scene) => {
+    const config = lexiSettings.value.ai[scene]
+    return config.enabled && (!config.providerIds?.length || config.providerIds.includes(NEXUS_PROVIDER_ID))
+  })
+})
+
 function handleNexusConnected() {
   const providers = lexiSettings.value.ai.providers
   const existing = providers.find(provider => provider.id === NEXUS_PROVIDER_ID)
@@ -2077,7 +2094,7 @@ async function searchVocabularyWithAi() {
           </div>
         </section>
         <section v-if="activeTab === 'ai' && activeAiSection === 'providers'" id="options-panel-ai" role="tabpanel" aria-labelledby="options-tab-ai" class="options-panel rounded-2 border border-neutral-200 bg-white p-5 shadow-sm">
-          <NexusAccountPanel class="mb-5" @connected="handleNexusConnected" @logged-out="handleNexusLoggedOut" />
+          <NexusAccountPanel class="mb-5" :routable="nexusRoutable" @connected="handleNexusConnected" @logged-out="handleNexusLoggedOut" />
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="text-16px font-600">

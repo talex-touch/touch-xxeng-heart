@@ -7,6 +7,9 @@ import NexusAccountPanel from '../NexusAccountPanel.vue'
  * Only two boundaries are faked: the token-free Nexus client (so the panel's auth
  * transitions can be driven) and `browser.tabs.create` (the popup it opens). Everything
  * asserted below is what a user can see or what a real consumer relies on.
+ *
+ * `routable` is a required prop, so suites that do not exercise routing bind the reachable
+ * case rather than mounting with an unbound prop.
  */
 const mocks = vi.hoisted(() => ({
   getNexusAuthStatus: vi.fn(),
@@ -71,7 +74,7 @@ afterEach(() => {
 
 describe('nexusAccountPanel — signed-out state', () => {
   it('offers sign-in and no account data when the session is signed out', async () => {
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
 
     expect(wrapper.get('[data-nexus-status]').attributes('data-nexus-status')).toBe('signed-out')
@@ -88,7 +91,7 @@ describe('nexusAccountPanel — device authorization start', () => {
     mocks.startNexusDeviceAuth.mockResolvedValue(start)
     mocks.pollNexusDeviceAuth.mockResolvedValue({ status: 'pending' })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     await wrapper.get('[data-nexus-action="start"]').trigger('click')
     await flushPromises()
@@ -116,7 +119,7 @@ describe('nexusAccountPanel — device authorization start', () => {
     mocks.openTab.mockRejectedValue(new Error('tab blocked'))
     mocks.pollNexusDeviceAuth.mockResolvedValue({ status: 'pending' })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     await wrapper.get('[data-nexus-action="start"]').trigger('click')
     await flushPromises()
@@ -138,7 +141,7 @@ describe('nexusAccountPanel — approval', () => {
       .mockResolvedValueOnce({ status: 'approved' })
     mocks.getNexusCredits.mockResolvedValue({ month: '2026-09', user: { quota: 100, used: 40 }, team: null })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     await wrapper.get('[data-nexus-action="start"]').trigger('click')
     await flushPromises()
@@ -156,6 +159,65 @@ describe('nexusAccountPanel — approval', () => {
   })
 })
 
+describe('nexusAccountPanel — routability disclosure', () => {
+  const FEEDBACK = '.nexus-account-panel__feedback'
+  const UNROUTED_NOTICE = '[data-nexus-unrouted]'
+
+  /**
+   * Drives the real device-authorization flow to an approved poll, so the asserted feedback is
+   * exactly the message the panel shows the moment Nexus authorizes the device.
+   */
+  async function authorizeDevice(props: { routable: boolean }) {
+    mocks.getNexusAuthStatus
+      .mockResolvedValueOnce({ signedIn: false })
+      .mockResolvedValueOnce({ signedIn: true, accessTokenExpiresAt: START_TIME + 86_400_000 })
+    mocks.startNexusDeviceAuth.mockResolvedValue(deviceStart())
+    mocks.pollNexusDeviceAuth.mockResolvedValue({ status: 'approved' })
+    mocks.getNexusCredits.mockResolvedValue({ month: '2026-09', user: { quota: 10, used: 1 }, team: null })
+
+    const wrapper = mount(NexusAccountPanel, { props })
+    await flushPromises()
+    await wrapper.get('[data-nexus-action="start"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    await flushPromises()
+
+    // Without this, an absence assertion below would pass merely because the connected block never rendered.
+    expect(wrapper.get('[data-nexus-status]').attributes('data-nexus-status')).toBe('connected')
+    return wrapper
+  }
+
+  const routabilityCases = [
+    {
+      name: 'routable false',
+      props: { routable: false },
+      showsNotice: true,
+      messageStates: '不会被调用',
+      messageContradicts: '已可用于自动路由',
+    },
+    {
+      name: 'routable true',
+      props: { routable: true },
+      showsNotice: false,
+      messageStates: '已可用于自动路由',
+      messageContradicts: '不会被调用',
+    },
+  ]
+
+  it.each(routabilityCases)('reports the real dispatch outcome once authorized: $name', async ({ props, showsNotice, messageStates, messageContradicts }) => {
+    const wrapper = await authorizeDevice(props)
+
+    const notice = wrapper.find(UNROUTED_NOTICE)
+    expect(notice.exists()).toBe(showsNotice)
+    if (showsNotice)
+      expect(notice.text()).toContain('不会被调用')
+
+    const feedback = wrapper.get(FEEDBACK).text()
+    expect(feedback).toContain(messageStates)
+    expect(feedback).not.toContain(messageContradicts)
+  })
+})
+
 describe('nexusAccountPanel — terminal poll statuses', () => {
   const terminalStatuses = ['expired', 'cancelled', 'browser_closed', 'rejected'] as const
 
@@ -167,7 +229,7 @@ describe('nexusAccountPanel — terminal poll statuses', () => {
       mocks.startNexusDeviceAuth.mockResolvedValue(deviceStart())
       mocks.pollNexusDeviceAuth.mockResolvedValue({ status })
 
-      const wrapper = mount(NexusAccountPanel)
+      const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
       await flushPromises()
       await wrapper.get('[data-nexus-action="start"]').trigger('click')
       await flushPromises()
@@ -198,7 +260,7 @@ describe('nexusAccountPanel — terminal poll statuses', () => {
     mocks.startNexusDeviceAuth.mockResolvedValue(deviceStart())
     mocks.pollNexusDeviceAuth.mockResolvedValue({ status: 'rejected', message: '设备授权已被拒绝' })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     await wrapper.get('[data-nexus-action="start"]').trigger('click')
     await flushPromises()
@@ -215,7 +277,7 @@ describe('nexusAccountPanel — polling lifecycle', () => {
     mocks.startNexusDeviceAuth.mockResolvedValue(deviceStart())
     mocks.pollNexusDeviceAuth.mockResolvedValue({ status: 'pending' })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     await wrapper.get('[data-nexus-action="start"]').trigger('click')
     await flushPromises()
@@ -239,7 +301,7 @@ describe('nexusAccountPanel — polling lifecycle', () => {
       .mockReturnValueOnce(stalePoll.promise)
       .mockResolvedValue({ status: 'pending' })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     await wrapper.get('[data-nexus-action="start"]').trigger('click')
     await flushPromises()
@@ -273,7 +335,7 @@ describe('nexusAccountPanel — credits', () => {
     mocks.getNexusAuthStatus.mockResolvedValue({ signedIn: true, accessTokenExpiresAt: START_TIME + 3_600_000 })
     mocks.getNexusCredits.mockResolvedValue({ month: '2026-09', user: { quota, used }, team: null })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
 
     const remaining = wrapper.get('[data-nexus-remaining]').text()
@@ -286,7 +348,7 @@ describe('nexusAccountPanel — credits', () => {
     mocks.getNexusAuthStatus.mockResolvedValue({ signedIn: true, accessTokenExpiresAt: START_TIME + 3_600_000 })
     mocks.getNexusCredits.mockResolvedValue({ month: '2026-09', user: null, team: { quota: 50, used: 10 } })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
 
     expect(wrapper.find('[data-nexus-team-remaining]').exists()).toBe(true)
@@ -307,7 +369,7 @@ describe('nexusAccountPanel — credits', () => {
       accessToken: 'SECRET-ACCESS-TOKEN',
     })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
 
     const html = wrapper.html()
@@ -321,7 +383,7 @@ describe('nexusAccountPanel — logout', () => {
     mocks.getNexusAuthStatus.mockResolvedValue({ signedIn: true, accessTokenExpiresAt: START_TIME + 3_600_000 })
     mocks.getNexusCredits.mockResolvedValue({ month: '2026-09', user: { quota: 10, used: 1 }, team: null })
 
-    const wrapper = mount(NexusAccountPanel)
+    const wrapper = mount(NexusAccountPanel, { props: { routable: true } })
     await flushPromises()
     expect(wrapper.get('[data-nexus-status]').attributes('data-nexus-status')).toBe('connected')
 

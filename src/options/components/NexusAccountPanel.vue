@@ -17,10 +17,25 @@ type NexusCredits = Awaited<ReturnType<typeof getNexusCredits>>
 type NexusDeviceStart = Awaited<ReturnType<typeof startNexusDeviceAuth>>
 type NexusDevicePoll = Awaited<ReturnType<typeof pollNexusDeviceAuth>>
 
+const props = defineProps<{
+  /**
+   * Whether a signed-in Nexus could actually serve a turn. Scenes that pin other providers
+   * make Nexus unreachable, so the panel must not promise routing it cannot deliver.
+   *
+   * Required: Vue casts an absent boolean prop to `false`, so an optional one would quietly
+   * warn about unreachable routing on any mount that forgot to bind it.
+   */
+  routable: boolean
+}>()
+
 const emit = defineEmits<{
   connected: []
   loggedOut: []
 }>()
+
+const defaultConnectedMessage = computed(() => props.routable
+  ? '授权成功，Nexus 已可用于自动路由。'
+  : '授权成功。当前功能场景都绑定了其他 Provider，Nexus 暂不会被调用。')
 
 const phase = ref<PanelPhase>('loading')
 const authStatus = ref<NexusAuthStatus>()
@@ -286,7 +301,7 @@ async function pollAuthorization(currentAttempt: number) {
         schedulePoll(currentAttempt, authorization.intervalSeconds)
         return
       case 'approved':
-        await completeAuthorization(currentAttempt, pollMessage(result, '授权成功，Nexus 已可用于自动路由。'))
+        await completeAuthorization(currentAttempt, pollMessage(result, defaultConnectedMessage.value))
         return
       case 'expired':
         finishExpired(currentAttempt, pollMessage(result, '授权码已过期，请重新登录。'))
@@ -487,6 +502,10 @@ onBeforeUnmount(() => beginAttempt())
         <strong>当前浏览器会话已登录</strong>
         <span>访问凭据有效至 {{ accessExpiryLabel }}</span>
       </div>
+
+      <p v-if="!routable" class="nexus-account-panel__credits-message" data-nexus-unrouted>
+        当前功能场景都绑定了其他 Provider，Nexus 已登录但不会被调用。
+      </p>
 
       <div class="nexus-account-panel__credits" aria-label="Nexus 额度">
         <div class="nexus-account-panel__credits-heading">

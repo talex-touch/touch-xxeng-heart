@@ -129,6 +129,14 @@ export interface PageVisitLog {
 
 export type PageTranslationScope = 'url' | 'site' | 'regex'
 
+export type PageTranslationHighlightStyle = 'outline' | 'background'
+
+export interface PageTranslationHighlightSettings {
+  enabled: boolean
+  style: PageTranslationHighlightStyle
+  color: string
+}
+
 export interface PageTranslationSettings {
   scope: PageTranslationScope
   regex: string
@@ -139,6 +147,7 @@ export interface PageTranslationSettings {
   cacheDays: number
   direction: PageTranslationDirection
   autoSites: PageTranslationAutoSites
+  highlight?: PageTranslationHighlightSettings
 }
 
 export interface PageTranslationActivation {
@@ -154,6 +163,7 @@ export interface PageTranslationBlock {
   id: string
   source: string
   translation: string
+  sentences?: string[]
   priority?: 'viewport' | 'near' | 'prefetch'
   updatedAt?: number
 }

@@ -1,4 +1,5 @@
 import { findCandidateByText, programmerVocabulary } from './vocabularyBank'
+import { splitSentences } from './sentenceSegmentation'
 import { entityDomains } from './entityDomains'
 import { parseEntityDetectionResponse } from './entityDetection'
 import { getDifficultyWindow } from './replacementLevels'
@@ -40,6 +41,7 @@ interface AiPageTranslationBatchResponse {
   items?: Array<{
     id?: string
     translation?: string
+    sentences?: string[]
   }>
 }
 
@@ -346,7 +348,14 @@ export async function requestPageTranslationBatch(
     const { translateWithConfiguredEngines } = await import('./translationClient')
     return Promise.all(items.map(async (item) => {
       const result = await translateWithConfiguredEngines(item.text, direction)
-      return { id: item.id, translation: result.text }
+      const sourceSentences = splitSentences(item.text)
+      let sentences: string[] | undefined
+      if (sourceSentences.length > 1) {
+        const translatedSentences = splitSentences(result.text)
+        if (translatedSentences.length === sourceSentences.length)
+          sentences = translatedSentences
+      }
+      return { id: item.id, translation: result.text, sentences }
     }))
   }
 
@@ -359,7 +368,8 @@ export async function requestPageTranslationBatch(
       'Translate every item independently for page auto-translation.',
       'Keep ids exactly unchanged. Preserve code, URLs, product names and Markdown-like tokens.',
       'Use context only to disambiguate; do not translate context itself.',
-      'Return compact JSON only: {"items":[{"id":"same-id","translation":"translated text"}]}',
+      'If an item contains multiple sentences, provide 1:1 sentence translations in "sentences".',
+      'Return compact JSON only: {"items":[{"id":"same-id","translation":"translated text","sentences":["sentence 1","sentence 2"]}]}',
     ].join(' '),
   }, [
     'You are Lexi page auto-translator. Return only compact JSON matching the requested schema.',
@@ -370,11 +380,34 @@ export async function requestPageTranslationBatch(
     output: 'items-json',
   })
 
+  const itemsById = new Map(items.map(item => [item.id, item.text]))
+
   return data?.items
     ?.filter(item => item.id && item.translation)
-    .map(item => ({ id: item.id!, translation: item.translation!.trim() })) ?? []
-}
+    .map((item) => {
+      const translation = item.translation!.trim()
+      const sourceText = itemsById.get(item.id!) ?? ''
+      const sourceSentences = splitSentences(sourceText)
 
+      let sentences: string[] | undefined
+      if (sourceSentences.length > 1) {
+        if (Array.isArray(item.sentences) && item.sentences.length === sourceSentences.length) {
+          sentences = item.sentences.map(s => String(s).trim())
+        }
+        else {
+          const translatedSentences = splitSentences(translation)
+          if (translatedSentences.length === sourceSentences.length)
+            sentences = translatedSentences
+        }
+      }
+
+      return {
+        id: item.id!,
+        translation,
+        sentences,
+      }
+    }) ?? []
+}
 export async function requestSelectionDetail(
   settings: LexiSettings,
   text: string,

@@ -187,7 +187,7 @@ eslint       12 个改动文件 exit 0
 | 4 | Nexus 设备授权真人验收 | 待验收 | 本地实机已拿到设备码并进入轮询，**未用真实账号完成批准**，因此不是已登录生产验收 |
 | 5 | `text.translate` 生产定价证明 | 待验收 | 源码已落地 ≠ 已发布。需用已认证 `credits/pricing` + 一次真实结算回包证明 |
 | 6 | Bilibili / 登录态 Discourse 频道回归 | 待验收 | 需真实登录态浏览器抽检 |
-| 7 | 逐句对齐 + 双语 hover 高亮 | P2 | 见 INTEGRATION-PLAN §3，需先稳定句级合同 |
+| 7 | ~~逐句对齐 + 双语 hover 高亮~~ | **已完成** | 本地分句（拉丁与 CJK）、1:1 句子契约、DOM 可逆包裹/拆除与双向 hover 联动已全部落地并单测通过 |
 | 8 | Nexus 服务端翻译缓存 | P2 | 键 `(capability, targetLanguage, model, normalizedSourceHash)`；字幕与跨页复用需要它才能归零 |
 | 9 | `tabCapture` + Nexus ASR | P3 | billable，明确暂不做 |
 | 10 | Tuff 宿主 loopback / native messaging | P3 | 有明确宿主场景再开 |

@@ -97,6 +97,12 @@ function createDefaultProvider(): AiProviderConfig {
   }
 }
 
+const defaultPageTranslationHighlightSettings = {
+  enabled: true,
+  style: 'outline' as const,
+  color: '#3b82f6',
+}
+
 const defaultPageTranslationSettings: PageTranslationSettings = {
   scope: 'url',
   regex: '',
@@ -111,6 +117,7 @@ const defaultPageTranslationSettings: PageTranslationSettings = {
     'github-readme': false,
     'reddit': false,
   },
+  highlight: defaultPageTranslationHighlightSettings,
 }
 
 const defaultTranslationRateLimitSettings = {
@@ -497,6 +504,15 @@ export function mergeSettings(value?: Partial<LexiSettings>): LexiSettings {
           'discourse': value?.selection?.pageTranslation?.autoSites?.discourse === true,
           'github-readme': value?.selection?.pageTranslation?.autoSites?.['github-readme'] === true,
           'reddit': value?.selection?.pageTranslation?.autoSites?.reddit === true,
+        },
+        highlight: {
+          ...defaultPageTranslationHighlightSettings,
+          ...value?.selection?.pageTranslation?.highlight,
+          enabled: value?.selection?.pageTranslation?.highlight?.enabled !== false,
+          style: value?.selection?.pageTranslation?.highlight?.style === 'background' ? 'background' : 'outline',
+          color: typeof value?.selection?.pageTranslation?.highlight?.color === 'string' && value.selection.pageTranslation.highlight.color.trim()
+            ? value.selection.pageTranslation.highlight.color.trim()
+            : defaultPageTranslationHighlightSettings.color,
         },
       },
     },

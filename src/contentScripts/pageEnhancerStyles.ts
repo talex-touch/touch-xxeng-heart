@@ -674,6 +674,43 @@ function getPageStyleContent(customCss = '') {
       }
     }
 
+    /* Bilingual sentence alignment highlighting.
+       Source and translation sentences share data-lexi-sentence="i".
+       When hovered, data-lexi-sentence-active="true" is set on both sides. */
+    [data-lexi-sentence] {
+      transition: background-color 140ms ease, outline-color 140ms ease;
+      border-radius: 3px;
+    }
+
+    /* Preset 1: Outline (default) */
+    [data-lexi-sentence-active="true"] {
+      outline: 2px solid var(--lexi-highlight-color, rgba(25, 118, 255, 0.65));
+      outline-offset: 2px;
+      border-radius: 3px;
+    }
+
+    /* Preset 2: Background */
+    [data-lexi-highlight-style="background"] [data-lexi-sentence-active="true"],
+    [data-lexi-sentence-active="true"][data-lexi-highlight-style="background"] {
+      outline: none;
+      background-color: var(--lexi-highlight-bg, color-mix(in srgb, var(--lexi-highlight-color, #1976ff) 18%, transparent));
+    }
+
+    [data-lexi-theme="dark"] [data-lexi-sentence-active="true"] {
+      outline-color: var(--lexi-highlight-color, rgba(111, 168, 255, 0.75));
+    }
+
+    [data-lexi-theme="dark"] [data-lexi-highlight-style="background"] [data-lexi-sentence-active="true"],
+    [data-lexi-theme="dark"] [data-lexi-sentence-active="true"][data-lexi-highlight-style="background"] {
+      background-color: var(--lexi-highlight-bg, color-mix(in srgb, var(--lexi-highlight-color, #6fa8ff) 26%, transparent));
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      [data-lexi-sentence] {
+        transition: none;
+      }
+    }
+
     /* Live chat translations sit under the message they belong to: a quiet tinted
        footnote that inherits the chat's own type. No card, no shadow, no motion —
        chat streams messages continuously and every animation there is noise. */

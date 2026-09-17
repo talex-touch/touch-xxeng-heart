@@ -1,9 +1,11 @@
 import browser from 'webextension-polyfill'
 
+import { applyHighlightStyle, renderTranslationSentences, setupSentenceHoverListeners, unwrapSourceSentences, wrapSourceSentences } from './sentenceHighlighter'
 import { isAttachmentElement, isPageTranslationAttachment } from './pageTranslationAttachments'
 import { applyAnchorTypography, ensurePageStyles } from './pageEnhancerStyles'
 import { createMediaToolsController } from './mediaTools'
 import { getMutationHub } from './ui/mutationHub'
+import { splitSentences } from '~/logic/sentenceSegmentation'
 import { getPageContentRoot, getPageTranslationRegion } from '~/logic/pageTranslationRegions'
 import type { PageTranslationRegion } from '~/logic/pageTranslationRegions'
 import { blockIsTranslationTarget, pageLanguageIsTranslationTarget, pageTranslationLanguageSelectors, readPageLanguage, resolvePageTranslationTarget } from '~/logic/pageTranslationLanguage'
@@ -1059,6 +1061,22 @@ interface PageTranslationElementOptions {
   settings?: LexiSettings
 }
 
+function renderPageTranslationBlockContent(
+  element: HTMLElement,
+  block: PageTranslationBlock,
+  settings?: LexiSettings,
+) {
+  const highlightSettings = settings?.selection.pageTranslation.highlight
+  const highlightEnabled = highlightSettings?.enabled !== false
+  if (highlightEnabled && Array.isArray(block.sentences) && block.sentences.length > 1) {
+    renderTranslationSentences(element, block.sentences, settings, renderPageLearningText)
+    applyHighlightStyle(element, highlightSettings?.style, highlightSettings?.color)
+  }
+  else {
+    renderPageLearningText(element, block.translation, settings)
+  }
+}
+
 function createPageTranslationElement(
   block: PageTranslationBlock,
   options: PageTranslationElementOptions = {},
@@ -1070,16 +1088,31 @@ function createPageTranslationElement(
   if (options.loading)
     element.dataset.lexiLoading = 'true'
   element.className = 'lexi-page-translation'
-  renderPageLearningText(element, block.translation, options.settings)
+  renderPageTranslationBlockContent(element, block, options.settings)
   return element
 }
 
-function updatePageTranslationElement(element: HTMLElement, block: PageTranslationBlock, settings?: LexiSettings) {
+function updatePageTranslationElement(
+  element: HTMLElement,
+  block: PageTranslationBlock,
+  settings?: LexiSettings,
+  target?: HTMLElement,
+) {
   const from = element.getBoundingClientRect()
   element.dataset.lexiPriority = block.priority ?? element.dataset.lexiPriority ?? 'prefetch'
   delete element.dataset.lexiLoading
   element.removeAttribute('aria-busy')
-  renderPageLearningText(element, block.translation, settings)
+  renderPageTranslationBlockContent(element, block, settings)
+
+  const highlightSettings = settings?.selection.pageTranslation.highlight
+  if (target && highlightSettings?.enabled !== false && Array.isArray(block.sentences) && block.sentences.length > 1) {
+    const sourceSentences = splitSentences(block.source)
+    if (sourceSentences.length === block.sentences.length) {
+      wrapSourceSentences(target, sourceSentences)
+      applyHighlightStyle(target, highlightSettings?.style, highlightSettings?.color)
+      applyHighlightStyle(element, highlightSettings?.style, highlightSettings?.color)
+    }
+  }
 
   if (prefersReducedMotion())
     return
@@ -1151,8 +1184,20 @@ function insertPageTranslationElement(
 
   const element = createPageTranslationElement(block, options)
   applyAnchorTypography(element, target)
-  if (options.loading)
+  if (options.loading) {
     element.setAttribute('aria-busy', 'true')
+  }
+  else {
+    const highlightSettings = options.settings?.selection.pageTranslation.highlight
+    if (highlightSettings?.enabled !== false && Array.isArray(block.sentences) && block.sentences.length > 1) {
+      const sourceSentences = splitSentences(block.source)
+      if (sourceSentences.length === block.sentences.length) {
+        wrapSourceSentences(target, sourceSentences)
+        applyHighlightStyle(target, highlightSettings?.style, highlightSettings?.color)
+        applyHighlightStyle(element, highlightSettings?.style, highlightSettings?.color)
+      }
+    }
+  }
   target.insertAdjacentElement('afterend', element)
   return element
 }
@@ -1161,6 +1206,9 @@ function removePageTranslationElements() {
   document
     .querySelectorAll<HTMLElement>('[data-lexi-page-translation]')
     .forEach(element => element.remove())
+  document
+    .querySelectorAll<HTMLElement>('[data-lexi-sentence-wrapped="true"]')
+    .forEach(element => unwrapSourceSentences(element))
 }
 
 function getPageTranslationPriority(element: HTMLElement, contentRoot?: HTMLElement): Pick<PageTranslationTarget, 'region' | 'priority' | 'distance' | 'score'> {
@@ -2206,6 +2254,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const mediaPlaybackOnly = window.top !== window
   const listeners = createListenerGroup()
   const stopVideoSpeedControl = startVideoSpeedControl()
+  const stopSentenceHover = setupSentenceHoverListeners()
   const mediaTools = createMediaToolsController({
     readSiteHints: detectSpecialSiteHints,
     showToast: showLexiToast,
@@ -2471,26 +2520,27 @@ export function startPageEnhancer(events: EnhancerEvents) {
         getPageTranslationContext(uniqueTargets),
         operation.signal,
       )
-      const byId = new Map(results.map(item => [item.id, item.translation]))
+      const byId = new Map(results.map(item => [item.id, item]))
 
       for (const target of uniqueTargets) {
         if (!pageTranslationEnabled || disposed || !operation.isCurrent())
           break
 
-        const translatedText = byId.get(target.id)
-        if (!translatedText)
+        const resultItem = byId.get(target.id)
+        if (!resultItem)
           continue
 
         const block: PageTranslationBlock = {
           id: target.id,
           source: target.text,
-          translation: translatedText,
+          translation: resultItem.translation,
+          sentences: resultItem.sentences,
           priority: target.priority,
           updatedAt: Date.now(),
         }
         const element = getPageTranslationElementAfter(target.element, target.id)
           ?? insertPageTranslationElement(target.element, block, { priority: target.priority, settings })
-        updatePageTranslationElement(element, block, settings)
+        updatePageTranslationElement(element, block, settings, target.element)
         pageTranslationSources.set(block.id, block)
         memory[target.memoryKey] = {
           ...block,
@@ -3534,7 +3584,7 @@ export function startPageEnhancer(events: EnhancerEvents) {
   const stop = () => {
     disposed = true
     stopVideoSpeedControl()
-    stopDynamicMutation?.()
+    stopSentenceHover()
     stopDynamicMutation = undefined
     stopPageTranslationMutation?.()
     stopPageTranslationMutation = undefined

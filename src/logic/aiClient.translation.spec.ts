@@ -117,4 +117,48 @@ describe('page translation batch caller', () => {
     expect(await requestPageTranslationBatch(settings, [], 'context')).toEqual([])
     expect(mocks.runAiScene).not.toHaveBeenCalled()
   })
+  it('aligns multi-sentence translations when sentences array is provided or splits 1:1', async () => {
+    const settings = mergeSettings()
+    answerWith(JSON.stringify({
+      items: [
+        {
+          id: 'multi-explicit',
+          translation: '第一句。第二句。',
+          sentences: ['第一句。', '第二句。'],
+        },
+        {
+          id: 'multi-inferred',
+          translation: '第三句。第四句！',
+        },
+        {
+          id: 'mismatched',
+          translation: '单句合并翻译',
+        },
+      ],
+    }))
+
+    const result = await requestPageTranslationBatch(settings, [
+      { id: 'multi-explicit', text: 'Sentence one. Sentence two.' },
+      { id: 'multi-inferred', text: 'Sentence three. Sentence four!' },
+      { id: 'mismatched', text: 'Sentence five. Sentence six.' },
+    ], 'context')
+
+    expect(result).toEqual([
+      {
+        id: 'multi-explicit',
+        translation: '第一句。第二句。',
+        sentences: ['第一句。', '第二句。'],
+      },
+      {
+        id: 'multi-inferred',
+        translation: '第三句。第四句！',
+        sentences: ['第三句。', '第四句！'],
+      },
+      {
+        id: 'mismatched',
+        translation: '单句合并翻译',
+        sentences: undefined,
+      },
+    ])
+  })
 })

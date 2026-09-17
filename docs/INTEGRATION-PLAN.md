@@ -225,7 +225,7 @@ Lexi 侧：manifest 没有 `nativeMessaging`、`externally_connectable`、`onMes
 - [x] `pageEnhancer` media/animated-text 拆分
 - [x] HTML5、Bilibili、YouTube 字幕 provider 与统一预取窗口
 - [x] 字幕 hash 缓存与 per-document MutationObserver hub
-- [ ] **P2** 逐句对齐 + 双语 hover 高亮
+- [x] **P2** 逐句对齐 + 双语 hover 高亮（本地分句、1:1 句子合同、DOM 无损包裹与双侧 hover 联动）
 - [ ] **P2** Nexus 服务端翻译缓存；再评估 `1k_source_chars`
 - [ ] **P3** `tabCapture` + Nexus ASR（billable，明确暂不做）
 - [ ] **P3** Tuff 宿主 loopback/native messaging 窄合同

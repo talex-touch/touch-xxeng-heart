@@ -90,11 +90,13 @@ function ensureStyles() {
     .lexi-content-digest__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 12px 9px; border-bottom: 1px solid var(--lexi-content-border); }
     .lexi-content-digest__eyebrow { display: block; margin: 0 0 2px; color: #067647; font-size: 11px; font-weight: 700; }
     .lexi-content-digest__title { display: block; max-width: 290px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 1.35; }
-    .lexi-content-digest__tools { display: flex; flex: 0 0 auto; gap: 4px; }
-    .lexi-content-digest button { border: 1px solid var(--lexi-content-border); border-radius: 6px; background: var(--lexi-content-surface); color: inherit; cursor: pointer; font: 600 12px/1.2 ui-sans-serif, system-ui, sans-serif; }
+    .lexi-content-digest__tools { display: flex; flex: 0 0 auto; gap: 4px; align-items: center; }
+    .lexi-content-digest button { border: 1px solid var(--lexi-content-border); border-radius: 6px; background: var(--lexi-content-surface); color: inherit; cursor: pointer; font: 600 12px/1.2 ui-sans-serif, system-ui, sans-serif; transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease; }
     .lexi-content-digest button:hover { background: var(--lexi-content-soft); }
     .lexi-content-digest button:focus-visible { outline: 2px solid #067647; outline-offset: 2px; }
-    .lexi-content-digest__icon { width: 28px; height: 28px; padding: 0; font-size: 17px !important; }
+    .lexi-content-digest__icon { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; padding: 0; border: 0 !important; border-radius: 6px !important; background: transparent !important; color: var(--lexi-content-muted); opacity: 0.8; }
+    .lexi-content-digest__icon:hover { background: var(--lexi-content-soft) !important; color: inherit; opacity: 1; }
+    .lexi-content-digest__icon svg { display: block; width: 14px; height: 14px; stroke-width: 2; }
     .lexi-content-digest__body { padding: 12px; }
     .lexi-content-digest__one-line { margin: 0; font-size: 13px; font-weight: 650; line-height: 1.55; }
     .lexi-content-digest__section { margin-top: 12px; }
@@ -180,8 +182,8 @@ function renderCard() {
     <header class="lexi-content-digest__head">
       <div><span class="lexi-content-digest__eyebrow">Lexi 速读 · ${escapeHtml(state.platformLabel)}</span><strong class="lexi-content-digest__title" title="${escapeHtml(title)}">${escapeHtml(title)}</strong></div>
       <div class="lexi-content-digest__tools">
-        <button class="lexi-content-digest__icon" type="button" data-lexi-content-action="${state.collapsed ? 'expand' : 'collapse'}" aria-label="${state.collapsed ? '展开' : '收起'}" title="${state.collapsed ? '展开' : '收起'}">${state.collapsed ? '+' : '−'}</button>
-        <button class="lexi-content-digest__icon" type="button" data-lexi-content-action="close" aria-label="关闭" title="关闭">×</button>
+        <button class="lexi-content-digest__icon" type="button" data-lexi-content-action="${state.collapsed ? 'expand' : 'collapse'}" aria-label="${state.collapsed ? '展开' : '收起'}" title="${state.collapsed ? '展开' : '收起'}">${state.collapsed ? '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>' : '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"></line></svg>'}</button>
+        <button class="lexi-content-digest__icon" type="button" data-lexi-content-action="close" aria-label="关闭" title="关闭"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
       </div>
     </header>
     <div class="lexi-content-digest__body">${renderBody(state)}</div>

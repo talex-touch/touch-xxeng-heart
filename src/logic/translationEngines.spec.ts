@@ -144,6 +144,88 @@ describe('traditional translation engines', () => {
       'translate.googleapis.com',
     ])
   })
+  it('translates via Bing Web by obtaining auth params and posting ttranslatev3 payload', async () => {
+    const requests: Array<{ url: URL, init?: RequestInit }> = []
+    const fetchImpl = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const req = requestUrl(url)
+      requests.push({ url: req, init })
+      if (req.pathname === '/translator') {
+        return new Response('<html>var params_AbusePreventionHelper = [123456,"fake-bing-token"]; IG:"FAKEIG123" data-iid="translator.5028"</html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+      }
+      if (req.pathname === '/ttranslatev3') {
+        return new Response(JSON.stringify([{
+          translations: [{ text: '必应翻译测试结果' }],
+        }]), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`Unexpected request: ${req.href}`)
+    }
+
+    const result = await translateWithEngines([
+      engine({
+        id: 'bing-web',
+        label: 'Bing 网页翻译',
+        kind: 'bing-web',
+        apiKey: '',
+        acceptedRisk: true,
+      }),
+    ], { text: 'Bing translate test', direction: 'en-to-zh' }, fetchImpl)
+
+    expect(result).toEqual({
+      text: '必应翻译测试结果',
+      engineId: 'bing-web',
+      engineLabel: 'Bing 网页翻译',
+    })
+    expect(requests).toHaveLength(2)
+    expect(requests[0].url.pathname).toBe('/translator')
+    expect(requests[1].url.pathname).toBe('/ttranslatev3')
+    expect(requests[1].url.searchParams.get('IG')).toBe('FAKEIG123')
+    const bodyParams = new URLSearchParams(requests[1].init?.body as string)
+    expect(bodyParams.get('text')).toBe('Bing translate test')
+    expect(bodyParams.get('to')).toBe('zh-Hans')
+    expect(bodyParams.get('token')).toBe('fake-bing-token')
+    expect(bodyParams.get('key')).toBe('123456')
+  })
+
+  it('translates via Chrome Built-in AI when window.translation.createTranslator is available', async () => {
+    const mockTranslator = {
+      translate: async (text: string) => `Chrome AI: ${text}`,
+      destroy: () => {},
+    }
+    interface GlobalWithTranslation {
+      translation?: unknown
+    }
+    const targetGlobal = globalThis as GlobalWithTranslation
+    const originalTranslation = targetGlobal.translation
+    targetGlobal.translation = {
+      canTranslate: async () => 'readily',
+      createTranslator: async () => mockTranslator,
+    }
+
+    try {
+      const result = await translateWithEngines([
+        engine({
+          id: 'chrome-ai',
+          label: 'Chrome 内置 AI',
+          kind: 'chrome-ai',
+        }),
+      ], { text: 'Hello Chrome', direction: 'en-to-zh' })
+
+      expect(result).toEqual({
+        text: 'Chrome AI: Hello Chrome',
+        engineId: 'chrome-ai',
+        engineLabel: 'Chrome 内置 AI',
+      })
+    }
+    finally {
+      targetGlobal.translation = originalTranslation
+    }
+  })
 
   it('reports the observable unavailable-engine error when nothing is enabled', async () => {
     await expect(translateWithEngines([], { text: 'hello', direction: 'en-to-zh' }))
@@ -153,6 +235,8 @@ describe('traditional translation engines', () => {
   it('uses engine-specific Chinese target tags', () => {
     expect(getTranslationTarget('en-to-zh', 'microsoft', 'hello')).toBe('zh-Hans')
     expect(getTranslationTarget('en-to-zh', 'google-web', 'hello')).toBe('zh-CN')
+    expect(getTranslationTarget('en-to-zh', 'bing-web', 'hello')).toBe('zh-Hans')
+    expect(getTranslationTarget('en-to-zh', 'chrome-ai', 'hello')).toBe('zh')
   })
 
   it('sends Japanese and Korean to Chinese rather than to English', () => {

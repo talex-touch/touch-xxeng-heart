@@ -271,7 +271,9 @@ export async function requestSelectionTranslation(
   context: string,
   onTranslation?: (translation: SelectionTranslation) => void,
 ): Promise<SelectionTranslation | undefined> {
-  const hasEngine = settings.translation.engines.some(engine => engine.enabled && (engine.kind !== 'google-web' || engine.acceptedRisk))
+  const hasEngine = settings.translation.engines.some(engine => engine.enabled && (
+    (engine.kind !== 'google-web' && engine.kind !== 'bing-web') || engine.acceptedRisk
+  ))
   if (hasEngine) {
     const { translateWithConfiguredEngines } = await import('./translationClient')
     const result = await translateWithConfiguredEngines(text, settings.selection.translationDirection)
@@ -340,7 +342,9 @@ export async function requestPageTranslationBatch(
   if (!items.length)
     return []
 
-  const hasEngine = settings.translation.engines.some(engine => engine.enabled && (engine.kind !== 'google-web' || engine.acceptedRisk))
+  const hasEngine = settings.translation.engines.some(engine => engine.enabled && (
+    (engine.kind !== 'google-web' && engine.kind !== 'bing-web') || engine.acceptedRisk
+  ))
   if (hasEngine) {
     if (signal?.aborted)
       throw new DOMException('Translation request aborted', 'AbortError')

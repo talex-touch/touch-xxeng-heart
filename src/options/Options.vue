@@ -407,17 +407,30 @@ function handleNexusLoggedOut() {
   ))
 }
 
-function createTranslationEngine(kind: TranslationEngineKind = 'microsoft'): TranslationEngineConfig {
-  const google = kind === 'google-web'
+function defaultTranslationEngineLabel(kind: TranslationEngineKind): string {
+  switch (kind) {
+    case 'microsoft':
+      return 'Microsoft Translator'
+    case 'google-web':
+      return 'Google Translate Web'
+    case 'bing-web':
+      return 'Bing 网页翻译（免 Key）'
+    case 'chrome-ai':
+      return 'Chrome 内置 AI 翻译'
+  }
+}
+
+function createTranslationEngine(kind: TranslationEngineKind = 'bing-web'): TranslationEngineConfig {
+  const needsRiskAck = kind === 'google-web' || kind === 'bing-web'
   return {
     id: `translation-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    label: google ? 'Google Translate Web' : 'Microsoft Translator',
+    label: defaultTranslationEngineLabel(kind),
     kind,
     enabled: false,
     priority: lexiSettings.value.translation.engines.length + 1,
     apiKey: '',
     region: '',
-    acceptedRisk: !google,
+    acceptedRisk: !needsRiskAck,
     updatedAt: Date.now(),
   }
 }
@@ -439,13 +452,14 @@ function saveTranslationEngineDraft() {
   if (!draft)
     return
 
+  const needsRiskAck = draft.kind === 'google-web' || draft.kind === 'bing-web'
   const engine: TranslationEngineConfig = {
     ...draft,
-    label: draft.label.trim() || (draft.kind === 'microsoft' ? 'Microsoft Translator' : 'Google Translate Web'),
+    label: draft.label.trim() || defaultTranslationEngineLabel(draft.kind),
     priority: Math.max(1, Number(draft.priority) || 1),
     apiKey: draft.apiKey.trim(),
     region: draft.region.trim(),
-    acceptedRisk: draft.kind === 'google-web' ? draft.acceptedRisk : true,
+    acceptedRisk: needsRiskAck ? draft.acceptedRisk : true,
     updatedAt: Date.now(),
   }
   const index = lexiSettings.value.translation.engines.findIndex(item => item.id === engine.id)
@@ -1096,11 +1110,17 @@ async function searchVocabularyWithAi() {
           </FormField>
           <FormField label="类型" compact>
             <BaseSelect v-model="translationEngineDraft.kind" size="sm">
-              <option value="microsoft">
-                Microsoft Translator F0
+              <option value="bing-web">
+                Bing 网页翻译（免 Key，免费开箱即用）
+              </option>
+              <option value="chrome-ai">
+                Chrome 内置 AI（设备端 Nano，完全免费）
               </option>
               <option value="google-web">
                 Google Translate Web（非官方）
+              </option>
+              <option value="microsoft">
+                Microsoft Translator F0
               </option>
             </BaseSelect>
           </FormField>
@@ -1117,9 +1137,12 @@ async function searchVocabularyWithAi() {
             <BaseInput v-model.number="translationEngineDraft.dailyLimit" type="number" size="sm" :min="0" />
           </FormField>
         </div>
-        <div v-if="translationEngineDraft.kind === 'google-web'" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3 text-12px leading-5 text-amber-900">
-          Google Translate Web 不是官方 API，接口可能随时变化，也可能受服务条款或网络环境限制。确认后才允许启用和调度。
-          <BaseCheckbox v-model="translationEngineDraft.acceptedRisk" class="mt-3" label="我理解并接受非官方接口风险" />
+        <div v-if="translationEngineDraft.kind === 'google-web' || translationEngineDraft.kind === 'bing-web'" class="mt-4 rounded-2 border border-amber-200 bg-amber-50 p-3 text-12px leading-5 text-amber-900">
+          {{ translationEngineDraft.kind === 'bing-web' ? 'Bing 网页翻译模拟网页端请求，无需配置 API Key，适合开箱即用。受网络环境与上游风控限制。' : 'Google Translate Web 不是官方 API，接口可能随时变化，也可能受服务条款或网络环境限制。' }}
+          <BaseCheckbox v-model="translationEngineDraft.acceptedRisk" class="mt-3" label="我理解并接受非官方网页接口风险" />
+        </div>
+        <div v-if="translationEngineDraft.kind === 'chrome-ai'" class="mt-4 rounded-2 border border-blue-200 bg-blue-50 p-3 text-12px leading-5 text-blue-900">
+          基于 Chrome 内置 Gemini Nano 的 Translation API，在设备端直接离线翻译，速度极快且 0 成本。需 Chrome 131+ 并已下载内置翻译模型。
         </div>
         <div class="mt-4">
           <BaseCheckbox v-model="translationEngineDraft.enabled" label="启用此翻译引擎" />
@@ -2058,10 +2081,10 @@ async function searchVocabularyWithAi() {
                     <span v-if="translationEngineRowTests[engine.id]?.message" class="mt-1 block text-11px font-400" :class="translationEngineRowTests[engine.id]?.ok ? 'text-emerald-600' : 'text-red-600'">{{ translationEngineRowTests[engine.id]?.message }}</span>
                   </td>
                   <td class="py-3 pr-3 text-neutral-500">
-                    {{ engine.kind === 'microsoft' ? 'Microsoft Translator F0' : 'Google Translate Web（非官方）' }}
+                    {{ engine.kind === 'microsoft' ? 'Microsoft Translator F0' : engine.kind === 'bing-web' ? 'Bing 网页翻译' : engine.kind === 'chrome-ai' ? 'Chrome 内置 AI' : 'Google Translate Web' }}
                   </td>
                   <td class="py-3 pr-3 text-neutral-500">
-                    {{ engine.kind === 'microsoft' ? (engine.apiKey && engine.region ? 'Key + Region 已配置' : '缺少 Key 或 Region') : (engine.acceptedRisk ? '已确认风险' : '未确认风险') }}
+                    {{ engine.kind === 'microsoft' ? (engine.apiKey && engine.region ? 'Key + Region 已配置' : '缺少 Key 或 Region') : engine.kind === 'chrome-ai' ? '端侧本地模型' : (engine.acceptedRisk ? '已确认免 Key 风险' : '未确认风险') }}
                   </td>
                   <td class="py-3 pr-3 text-neutral-500">
                     {{ engine.dailyLimit ? `每日 ${engine.dailyLimit} 次` : '未设渠道上限' }}

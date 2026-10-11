@@ -5,7 +5,7 @@ export type TranslationDirection = 'auto' | 'zh-to-en' | 'en-to-zh'
 export type PageTranslationDirection = Exclude<TranslationDirection, 'auto'>
 export type PageTranslationAutoSite = 'discourse' | 'github-readme' | 'reddit'
 export type PageTranslationAutoSites = Record<PageTranslationAutoSite, boolean>
-export type TranslationEngineKind = 'microsoft' | 'google-web'
+export type TranslationEngineKind = 'microsoft' | 'google-web' | 'bing-web' | 'chrome-ai'
 
 export interface TranslationEngineConfig {
   id: string

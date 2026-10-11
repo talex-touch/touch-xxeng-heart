@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.3.4 - 2026-10-11
+
+Changes since v0.3.3.
+
+### Features
+- add free Bing Web and Chrome AI translation engines, polish digest card tools UI (4325d48)
+- add bilingual sentence alignment and dual-sided hover highlighting (4345c76)
+- add Nexus channel, native subtitle sources and explicit key-sync consent (68c9472)
+- translate live chat safely (06d847a)
+- add Apple Events bilingual tracks (8b46749)
+
+### Fixes
+- say when a connected account cannot actually be called (ff0702e)
+- authorize YouTube caption reads and bind the worker fetch (29f2a7c)
+
+### Refactors
+- extract enhancer styles (6ca3667)
+
+### Tests
+- cover bilingual subtitles, live chat and key-sync migration (614b8a1)
+
+### Docs
+- record the Nexus and subtitle integration progress (fe66483)
+- record the Nexus channel, subtitle sources and key-sync change (6206c35)
+
+### Maintenance
+- clarify Chrome Web Store post-publish state (6805e7e)
+
 ## Unreleased
 
 ### Features
@@ -248,6 +276,7 @@ Changes since v0.1.4.
 ### Changes
 - Merge branch 'pr-1' (32ea6a3)
 - change the color of window and change the size of window (abb065e)
+
 
 
 
